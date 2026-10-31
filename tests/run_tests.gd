@@ -149,6 +149,7 @@ func test_recorder_schema() -> void:
 	var ok: bool = rec.log_record({
 		"type": "throw", "ts": "test", "throw_index": 1, "hand": "R",
 		"hold": "flip", "zone": "toe", "slide_offset_m": 0.0,
+		"origin_release_pos": [0.0, 0.0, 0.0],
 		"samples": ThrowRecorder.sample_arr(samples),
 		"release_pos": [0.0, 1.2, 0.0], "release_quat": [0.0, 0.0, 0.0, 1.0],
 		"release_velocity": [0.0, 2.0, -3.0], "release_angular_velocity": [0.0, 0.0, 0.0],
@@ -169,6 +170,7 @@ func test_recorder_schema() -> void:
 		if parsed is Dictionary:
 			var recd: Dictionary = parsed
 			var required: Array[String] = ["type", "hand", "hold", "zone", "samples",
+				"origin_release_pos",
 				"release_velocity", "release_angular_velocity", "first_contact_pos",
 				"settle_pos", "landing_distance_in", "ringer", "flip_rotations", "turn_rotations"]
 			for key: String in required:
@@ -179,38 +181,77 @@ func test_recorder_schema() -> void:
 				var s0: Dictionary = smp[0]
 				check(s0.has("t") and s0.has("p") and s0.has("q"),
 					"sample entries carry t/p/q")
+				check(s0.has("o"), "sample entries carry the origin position 'o' (pass 2)")
 	DirAccess.remove_absolute(abs_path)
 
 
 func test_grab_state() -> void:
-	# Order A: hand in zone first, then squeeze.
+	# Order A: hand in zone first, then squeeze. (5th arg = trigger.)
 	var a := GrabState.new()
-	check(a.update("R", "toe", 0.0, 0.0) == "", "order A: no latch without grip")
-	check(a.update("R", "toe", 0.9, 0.0) == "latch", "order A: squeeze in zone latches")
-	check(a.update("R", "toe", 0.95, 0.2) == "", "order A: latch fires exactly once")
+	check(a.update("R", "toe", 0.0, 0.0, 0.0) == "", "order A: no latch without grip")
+	check(a.update("R", "toe", 0.9, 0.0, 0.0) == "latch", "order A: squeeze in zone latches")
+	check(a.update("R", "toe", 0.95, 0.2, 0.0) == "", "order A: latch fires exactly once")
 	check(a.latched and a.zone == "toe", "order A: latched on the toe zone")
-	# Hysteresis: mid grip keeps the latch (slide band while still).
-	var ev: String = a.update("R", "toe", 0.5, 0.0)
-	check(a.latched, "hysteresis: mid grip does not drop the latch")
-	check(ev == "slide_start", "mid grip while still enters the slide band")
-	check(a.update("R", "toe", 0.9, 0.0) == "slide_end", "full grip again ends the slide (lock)")
-	# Slide must NOT trigger mid-swing: mid grip at speed stays locked.
-	check(a.update("R", "toe", 0.5, 2.5) == "" and not a.sliding,
-		"mid grip at swing speed does not enter slide")
-	check(a.update("R", "toe", 0.1, 2.5) == "release", "open hand releases")
+	# Hysteresis: mid grip keeps the latch (and, pass 2, nothing more).
+	check(a.update("R", "toe", 0.5, 0.0, 0.0) == "" and a.latched,
+		"hysteresis: mid grip does not drop the latch")
+	# NEGATIVE CONTROL: the pass-1 entry - loosening into the mid
+	# grip band while still - must NOT enter slide mode anymore.
+	var nc_events: String = ""
+	for i: int in 4:
+		nc_events += a.update("R", "toe", 0.5, 0.0, 0.0)
+	check(nc_events == "" and not a.slide_mode and not a.sliding,
+		"NEGATIVE CONTROL: pass-1 mid-band loosening no longer enters slide")
+	# A trigger press while the grip is only mid-band is not a slide
+	# either: slide entry demands the grip fully held.
+	check(a.update("R", "toe", 0.5, 0.0, 0.9) == "" and not a.slide_mode,
+		"trigger press at mid grip does not enter slide")
+	check(a.update("R", "toe", 0.5, 0.0, 0.0) == "", "trigger released again, still plain hold")
+	# Chris's model: grip fully held + FRESH trigger press = slide.
+	check(a.update("R", "toe", 0.95, 0.0, 0.0) == "", "back to full grip, no event")
+	check(a.update("R", "toe", 0.95, 0.0, 0.85) == "slide_start",
+		"grip + fresh trigger press enters slide mode")
+	check(a.slide_mode and a.sliding, "slide mode at rest means the shoe is frozen (sliding)")
+	check(a.update("R", "toe", 0.95, 0.0, 0.9) == "", "slide_start fires exactly once")
+	# Swing-speed safety: trigger still down but the hand is swinging -
+	# the freeze must NOT apply, so no anchor shift under a throw.
+	check(a.update("R", "toe", 0.95, 2.5, 0.9) == "" and not a.sliding and a.slide_mode,
+		"at swing speed the shoe is NOT frozen even in slide mode")
+	check(a.update("R", "toe", 0.95, 0.0, 0.9) == "" and a.sliding,
+		"hand still again: the freeze applies")
+	# Exit: let go of the trigger, grip still held - the hold locks.
+	check(a.update("R", "toe", 0.95, 0.0, 0.1) == "slide_end",
+		"trigger released while gripping ends the slide (lock)")
+	check(not a.slide_mode and not a.sliding and a.latched, "after slide_end the plain hold remains")
+	# Grip release is always the throw/drop path.
+	check(a.update("R", "toe", 0.1, 0.0, 0.0) == "release", "open hand releases")
 	check(not a.latched, "released state is clean")
 
 	# Order B: squeeze held first, hand enters the zone after.
 	var b := GrabState.new()
-	check(b.update("R", "", 0.95, 0.0) == "", "order B: squeeze with no zone does not latch")
+	check(b.update("R", "", 0.95, 0.0, 0.0) == "", "order B: squeeze with no zone does not latch")
 	check(not b.latched, "order B: still unlatched outside the zone")
-	check(b.update("R", "shank_right", 0.95, 0.0) == "latch",
+	check(b.update("R", "shank_right", 0.95, 0.0, 0.0) == "latch",
 		"order B: held squeeze latches the frame the hand enters the zone")
-	check(b.update("R", "shank_right", 0.95, 0.0) == "", "order B: latch fires exactly once")
+	check(b.update("R", "shank_right", 0.95, 0.0, 0.0) == "", "order B: latch fires exactly once")
+
+	# Trigger FIRST, then grip: that grab must not become a slide.
+	# The pre-held trigger is consumed by the latch; only a fresh
+	# press while already holding can start one.
+	var d := GrabState.new()
+	check(d.update("R", "", 0.0, 0.0, 0.95) == "", "trigger alone does nothing")
+	check(d.update("R", "toe", 0.95, 0.0, 0.95) == "latch",
+		"trigger-first then grip still latches the grab")
+	check(d.update("R", "toe", 0.95, 0.0, 0.95) == "" and not d.slide_mode,
+		"the pre-held trigger does NOT start a slide after the grab")
+	check(d.update("R", "toe", 0.95, 0.0, 0.0) == "", "trigger let go while holding: no event")
+	check(d.update("R", "toe", 0.95, 0.0, 0.9) == "slide_start",
+		"a FRESH trigger press while holding starts the slide")
+	check(d.update("R", "toe", 0.95, 0.0, 0.0) == "slide_end", "and releasing it locks again")
 
 	# Mid grip alone never latches (hysteresis low side).
 	var c := GrabState.new()
-	check(c.update("L", "toe", 0.5, 0.0) == "" and not c.latched,
+	check(c.update("L", "toe", 0.5, 0.0, 0.0) == "" and not c.latched,
 		"mid grip in a zone does not latch")
 
 
@@ -242,6 +283,135 @@ func test_zone_audit(shoe_node: Shoe) -> void:
 	check(open_dir_turn_l.x > 0.99, "turn hold (L): shoe open end points to hand +X (right)")
 
 
+func test_locomotion_math() -> void:
+	var ident := Basis.IDENTITY
+	# Full forward push (stick away reads y=-1) walks down -Z at 2 m/s.
+	var d1: Vector3 = Locomotion.walk_displacement(Vector2(0.0, -1.0), ident, 1.0)
+	check(d1.distance_to(Vector3(0.0, 0.0, -2.0)) < 0.01,
+		"walk: full forward push = 2 m/s toward head -Z (got %s)" % str(d1))
+	var d2: Vector3 = Locomotion.walk_displacement(Vector2(1.0, 0.0), ident, 1.0)
+	check(d2.distance_to(Vector3(2.0, 0.0, 0.0)) < 0.01,
+		"walk: full right push strafes +X at 2 m/s (got %s)" % str(d2))
+	var d3: Vector3 = Locomotion.walk_displacement(Vector2(0.0, 1.0), ident, 1.0)
+	check(d3.distance_to(Vector3(0.0, 0.0, 2.0)) < 0.01,
+		"walk: full back pull walks backward (got %s)" % str(d3))
+	# Radial deadzone swallows small inputs entirely.
+	check(Locomotion.walk_displacement(Vector2(0.0, -0.10), ident, 1.0) == Vector3.ZERO,
+		"walk: input inside the 0.15 deadzone does not move")
+	check(Locomotion.walk_displacement(Vector2(0.14, 0.0), ident, 1.0) == Vector3.ZERO,
+		"walk: 0.14 deflection still inside the deadzone")
+	# Half push is proportional (rescaled): clearly walking, not full pace.
+	var dh: Vector3 = Locomotion.walk_displacement(Vector2(0.0, -0.5), ident, 1.0)
+	check(dh.length() > 0.65 and dh.length() < 1.0 and dh.z < -0.65,
+		"walk: half push is proportional (~0.82 m/s, got %.3f)" % dh.length())
+	# Over-long diagonal clamps to unit: no faster than straight.
+	var dd: Vector3 = Locomotion.walk_displacement(Vector2(1.0, -1.0), ident, 1.0)
+	check(dd.length() <= 2.001, "walk: diagonal is not faster than straight (%.3f m/s)" % dd.length())
+	# Head-relative: with the head yawed +90 deg, forward push goes -X.
+	var yawed := Basis(Vector3.UP, deg_to_rad(90.0))
+	var d4: Vector3 = Locomotion.walk_displacement(Vector2(0.0, -1.0), yawed, 1.0)
+	check(d4.distance_to(Vector3(-2.0, 0.0, 0.0)) < 0.01,
+		"walk: displacement follows the HEAD, not the world (got %s)" % str(d4))
+	# Play-area clamp: radial pull-in to 25 m of court centre, y kept.
+	var clamped: Vector3 = Locomotion.clamp_origin(Vector3(40.0, 1.7, -6.096))
+	check(absf(clamped.x - 25.0) < 0.01 and absf(clamped.y - 1.7) < 0.001,
+		"clamp: origin 40 m out is pulled to the 25 m disc (got %s)" % str(clamped))
+	var inside := Vector3(1.0, 0.0, -6.0)
+	check(Locomotion.clamp_origin(inside) == inside, "clamp: a position inside the disc is untouched")
+
+
+func test_snap_turn() -> void:
+	var loco := Locomotion.new()
+	check(loco.snap_turn_update(0.0) == 0.0, "snap: centred stick does nothing")
+	check(loco.snap_turn_update(0.5) == 0.0, "snap: 0.5 deflection is below the 0.7 fire line")
+	check(loco.snap_turn_update(0.85) == -30.0, "snap: push right fires ONE -30 deg (right) turn")
+	check(loco.snap_turn_update(0.9) == 0.0, "snap: held stick does not machine-gun")
+	check(loco.snap_turn_update(0.5) == 0.0, "snap: still latched above the 0.3 re-arm line")
+	check(loco.snap_turn_update(0.1) == 0.0, "snap: dropping below 0.3 re-arms (no turn)")
+	check(loco.snap_turn_update(-0.85) == 30.0, "snap: push left fires ONE +30 deg (left) turn")
+	check(loco.snap_turn_update(-0.9) == 0.0, "snap: held left does not machine-gun either")
+
+
+func test_rotate_about() -> void:
+	# Camera sits offset from the origin (the normal recentered case).
+	var pivot := Vector3(0.35, 1.6, 0.25)
+	var origin_tf := Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.0))
+	var cam_local := Transform3D(Basis.IDENTITY, pivot)
+	var ang: float = deg_to_rad(-30.0)
+	var out: Transform3D = Locomotion.rotate_about(origin_tf, pivot, ang)
+	var cam_after: Vector3 = out * cam_local.origin
+	check(cam_after.distance_to(pivot) < 0.0001,
+		"rotate-about: the camera's world position is invariant (moved %.5f m)" % cam_after.distance_to(pivot))
+	var head_after: Vector3 = out.basis * Vector3(0.0, 0.0, -1.0)
+	var head_expect: Vector3 = Basis(Vector3.UP, ang) * Vector3(0.0, 0.0, -1.0)
+	check(head_after.distance_to(head_expect) < 0.0001,
+		"rotate-about: heading rotates by exactly the snap angle")
+	# A point fixed in origin space (the shoe stand) rides a circle
+	# around the camera's XZ: its distance to the pivot XZ is kept.
+	var p_local := Vector3(0.52, 0.785, 0.32)
+	var before: Vector3 = origin_tf * p_local
+	var after: Vector3 = out * p_local
+	var d_before: float = Vector2(before.x - pivot.x, before.z - pivot.z).length()
+	var d_after: float = Vector2(after.x - pivot.x, after.z - pivot.z).length()
+	check(absf(d_after - d_before) < 0.0001,
+		"rotate-about: origin-space points keep their distance from the camera XZ (no drift)")
+
+
+## Samples where the ORIGIN slides forward at 1.5 m/s (-Z) while the
+## hand rides it: hand world pos = origin pos + local(t). With
+## local(t) constant the arm is perfectly still in origin space.
+func origin_slide_samples(local_v0: Vector3, local_accel: Vector3, dur: float, hz: float = 90.0) -> Array:
+	var out: Array = []
+	var o0 := Vector3(0.0, 0.0, 2.0)
+	var ov := Vector3(0.0, 0.0, -1.5)
+	var h0 := Vector3(0.25, 1.15, 0.30)
+	var steps: int = int(dur * hz)
+	for i: int in steps + 1:
+		var t: float = float(i) / hz
+		var opos: Vector3 = o0 + ov * t
+		var local: Vector3 = h0 + local_v0 * t + 0.5 * local_accel * t * t
+		out.append(ThrowMath.make_sample(t, opos + local, Quaternion.IDENTITY, opos))
+	return out
+
+
+func test_origin_relative_velocity() -> void:
+	var dur: float = 0.30
+	# NEGATIVE CONTROL pair: arm still, origin sliding at 1.5 m/s.
+	var still: Array = origin_slide_samples(Vector3.ZERO, Vector3.ZERO, dur)
+	var bogus: Vector3 = ThrowMath.estimate_velocity_windowed(still)
+	check(bogus.length() > 1.2,
+		"NEGATIVE CONTROL: WITHOUT the correction a still arm on a sliding origin reads %.2f m/s" % bogus.length())
+	var fixed: Vector3 = ThrowMath.estimate_velocity_origin_relative(still, Basis.IDENTITY)
+	check(fixed.length() < 0.05,
+		"origin-relative: the same data WITH the correction reads ~zero (%.3f m/s)" % fixed.length())
+	# Arm swinging in origin space while the origin slides: the
+	# correction must recover the ARM's velocity, not zero it out.
+	var v0 := Vector3(0.1, 0.6, -0.5)
+	var accel := Vector3(1.0, 5.0, -11.0)
+	var swing: Array = origin_slide_samples(v0, accel, dur)
+	var v_true: Vector3 = v0 + accel * dur
+	var v_corr: Vector3 = ThrowMath.estimate_velocity_origin_relative(swing, Basis.IDENTITY)
+	check(v_corr.distance_to(v_true) < 0.15,
+		"origin-relative: recovers the arm's true velocity under origin slide (err %.3f)" % v_corr.distance_to(v_true))
+	var v_raw: Vector3 = ThrowMath.estimate_velocity_windowed(swing)
+	check(v_raw.distance_to(v_corr) > 1.0,
+		"origin-relative: uncorrected estimate differs by the origin's ~1.5 m/s (diff %.3f)" % v_raw.distance_to(v_corr))
+	# Standing still (origin walked somewhere earlier, now constant):
+	# the corrected estimate equals the pass-1 estimate.
+	var stand: Array = arc_samples(v0, dur)
+	for raw: Variant in stand:
+		var s: Dictionary = raw
+		s["opos"] = Vector3(5.0, 0.0, -3.0)
+	var v_plain: Vector3 = ThrowMath.estimate_velocity_windowed(stand)
+	var v_rel: Vector3 = ThrowMath.estimate_velocity_origin_relative(stand, Basis.IDENTITY)
+	check(v_rel.distance_to(v_plain) < 0.001,
+		"origin-relative: standing still it IS the pass-1 estimate (diff %.5f)" % v_rel.distance_to(v_plain))
+	var v_rel_yaw: Vector3 = ThrowMath.estimate_velocity_origin_relative(
+		stand, Basis(Vector3.UP, deg_to_rad(40.0)))
+	check(v_rel_yaw.distance_to(v_plain) < 0.01,
+		"origin-relative: a rotated release frame still returns the world velocity (diff %.4f)" % v_rel_yaw.distance_to(v_plain))
+
+
 func test_api_guard() -> void:
 	# Every XR call the build makes, probed on the receiver's ACTUAL
 	# class (static import catches none of these - dynamic dispatch).
@@ -252,6 +422,7 @@ func test_api_guard() -> void:
 		["XRInterface", "is_initialized"],
 		["XRController3D", "get_input"], ["XRController3D", "trigger_haptic_pulse"],
 		["XRController3D", "get_is_active"],
+		["XRController3D", "get_vector2"],
 	]
 	for p: Array in pairs:
 		check(ClassDB.class_has_method(String(p[0]), String(p[1])),
@@ -264,6 +435,10 @@ func _run() -> void:
 	test_ringer_geometry()
 	test_recorder_schema()
 	test_grab_state()
+	test_locomotion_math()
+	test_snap_turn()
+	test_rotate_about()
+	test_origin_relative_velocity()
 	test_api_guard()
 	var shoe_node := Shoe.new()
 	root.add_child(shoe_node)

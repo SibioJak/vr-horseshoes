@@ -50,6 +50,11 @@ func set_grip(tracker_name: StringName, value: float) -> void:
 	t.set_input(&"grip", value)
 
 
+func set_stick(tracker_name: StringName, value: Vector2) -> void:
+	var t: XRPositionalTracker = XRServer.get_tracker(tracker_name) as XRPositionalTracker
+	t.set_input(&"primary", value)
+
+
 func settle(phys: int = 6) -> void:
 	for i: int in phys:
 		await physics_frame
@@ -137,6 +142,26 @@ func _run() -> void:
 	await settle(4)
 	await snap(cam_b, "res://proofs/held_shoe.png")
 	cam_b.queue_free()
+
+	# --- Proof C: locomotion through the REAL tracker stick inputs ---
+	# (the same "primary" action the headset's thumbsticks feed).
+	set_stick(&"left_hand", Vector2(0.0, -1.0))
+	await create_timer(1.0).timeout
+	set_stick(&"left_hand", Vector2.ZERO)
+	var walked: Vector3 = main.origin.global_position
+	check(walked.z < -1.2 and walked.z > -2.8 and absf(walked.x) < 0.4,
+		"tracker left stick walks the origin forward (~2 m in 1 s, got %s)" % str(walked))
+	var head_before: Vector3 = main.cam.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+	set_stick(&"right_hand", Vector2(1.0, 0.0))
+	await settle(6)
+	set_stick(&"right_hand", Vector2.ZERO)
+	var head_after: Vector3 = main.cam.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+	var turn_ang: float = rad_to_deg(Vector2(head_before.x, head_before.z).angle_to(
+		Vector2(head_after.x, head_after.z)))
+	check(absf(absf(turn_ang) - 30.0) < 2.0,
+		"tracker right stick snaps the heading by 30 deg (got %.1f)" % turn_ang)
+	check(main.origin.global_position.distance_to(walked) < 0.02,
+		"tracker snap turn does not translate the origin (moved %.3f m)" % main.origin.global_position.distance_to(walked))
 
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))
 	print("---")

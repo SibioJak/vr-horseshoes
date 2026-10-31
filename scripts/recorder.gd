@@ -46,9 +46,11 @@ static func sample_arr(samples: Array) -> Array:
 		var s: Dictionary = raw
 		var p: Vector3 = s["pos"]
 		var q: Quaternion = s["quat"]
+		var o: Vector3 = s.get("opos", Vector3.ZERO)
 		out.append({
 			"t": float(s["t"]) - t0,
 			"p": vec3_arr(p),
 			"q": quat_arr(q),
+			"o": vec3_arr(o),
 		})
 	return out

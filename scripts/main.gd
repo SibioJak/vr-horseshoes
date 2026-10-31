@@ -67,9 +67,13 @@ var _fly_time: float = 0.0
 var _still_time: float = 0.0
 var _wait_time: float = 0.0
 
+var locomotion := Locomotion.new()
+
 # Test hooks (used by the headless suites / render proofs only).
 var test_hand_tf: Dictionary = {}
 var test_grip: Dictionary = {}
+var test_trigger: Dictionary = {}
+var test_stick: Dictionary = {}
 var debug_show_zones: bool = false
 
 
@@ -262,8 +266,14 @@ func _head_tracking_ok() -> bool:
 
 func _build_board() -> void:
 	board_root = Node3D.new()
-	board_root.position = Vector3(-1.12, 0.0, -0.30)
-	board_root.rotation_degrees = Vector3(0.0, -28.0, 0.0)
+	# Duel placement pattern (Fix Pass 2): front-LEFT of the pitching
+	# spot, ~35 deg off the throw lane, ~2.1 m out, face turned back
+	# at the foul line. Pass 1 put it at z=-0.30 with the yaw sign
+	# flipped, so its face pointed AWAY from the player - Chris had
+	# to walk around behind it to read it. Never again: the smoke
+	# suite asserts forward hemisphere + facing from now on.
+	board_root.position = Vector3(-1.20, 0.0, -1.70)
+	board_root.rotation_degrees = Vector3(0.0, 35.0, 0.0)
 	add_child(board_root)
 	var wood := _mat(Color(0.30, 0.21, 0.12))
 	_box(board_root, Vector3(-0.62, 0.95, -0.03), Vector3(0.07, 1.90, 0.07), wood)
@@ -285,18 +295,18 @@ func _build_board() -> void:
 	status_label.outline_size = 8
 	status_label.outline_modulate = Color(0.1, 0.07, 0.03)
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	status_label.position = Vector3(0.0, 1.47, 0.01)
+	status_label.position = Vector3(0.0, 1.55, 0.01)
 	board_root.add_child(status_label)
 	controls_label = Label3D.new()
-	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: loosen halfway, stay still, slide\nhand along shoe, squeeze full to lock\nTHROW: swing, open hand (shoe returns)\nDROP: open hand while still\nRECENTER: menu long-press - seated/standing ok"
+	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing, open hand (shoe returns)\nDROP: open hand while still\nLeft stick: walk\nRight stick: turn\nRECENTER: menu long-press - seated/standing ok"
 	controls_label.font_size = 38
-	controls_label.pixel_size = 0.0013
-	controls_label.line_spacing = 4.0
+	controls_label.pixel_size = 0.00115
+	controls_label.line_spacing = 2.0
 	controls_label.modulate = Color(0.88, 0.90, 0.82)
 	controls_label.outline_size = 6
 	controls_label.outline_modulate = Color(0.1, 0.07, 0.03)
 	controls_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	controls_label.position = Vector3(0.0, 0.93, 0.01)
+	controls_label.position = Vector3(0.0, 0.95, 0.01)
 	board_root.add_child(controls_label)
 
 
@@ -341,6 +351,24 @@ func _grip_value(hand: String) -> float:
 	return float(v)
 
 
+func _trigger_value(hand: String) -> float:
+	if test_trigger.has(hand):
+		return float(test_trigger[hand])
+	var c: XRController3D = hand_ctrl[hand]
+	var v: Variant = c.get_input(&"trigger")
+	if v == null:
+		return 0.0
+	return float(v)
+
+
+func _stick_value(hand: String) -> Vector2:
+	if test_stick.has(hand):
+		var tv: Vector2 = test_stick[hand]
+		return tv
+	var c: XRController3D = hand_ctrl[hand]
+	return c.get_vector2(&"primary")
+
+
 func _track_hand_speed(hand: String) -> void:
 	var now: float = float(Time.get_ticks_msec()) / 1000.0
 	var pos: Vector3 = _hand_tf(hand).origin
@@ -365,7 +393,7 @@ func _add_sample() -> void:
 		if now - float(last["t"]) < 0.004:
 			return
 	var tf: Transform3D = _hand_tf(held_hand)
-	samples.append(ThrowMath.make_sample(now, tf.origin, tf.basis.get_rotation_quaternion()))
+	samples.append(ThrowMath.make_sample(now, tf.origin, tf.basis.get_rotation_quaternion(), origin.global_position))
 	while samples.size() > 2:
 		var first: Dictionary = samples[0]
 		if now - float(first["t"]) <= SAMPLE_KEEP_SEC:
@@ -391,7 +419,26 @@ func _find_candidate() -> void:
 				candidate_zone = zone
 
 
+## Thumbstick locomotion (Fix Pass 2). Runs BEFORE sampling/grab so
+## every hand transform this frame already includes the new origin.
+## Walk is head-relative and direct; snap turn rotates the origin
+## about the camera so turning never translates the player.
+func _process_locomotion(delta: float) -> void:
+	if delta <= 0.0:
+		return
+	var ls: Vector2 = _stick_value("L")
+	var disp: Vector3 = Locomotion.walk_displacement(ls, cam.global_transform.basis, delta)
+	if disp != Vector3.ZERO:
+		origin.global_position = Locomotion.clamp_origin(origin.global_position + disp)
+	var rs: Vector2 = _stick_value("R")
+	var ang: float = locomotion.snap_turn_update(rs.x)
+	if not is_zero_approx(ang):
+		origin.global_transform = Locomotion.rotate_about(
+			origin.global_transform, cam.global_position, deg_to_rad(ang))
+
+
 func _process(_delta: float) -> void:
+	_process_locomotion(_delta)
 	_track_hand_speed("L")
 	_track_hand_speed("R")
 	if state == "HELD":
@@ -421,17 +468,20 @@ func _process_grab() -> void:
 	var in_zone: String = ""
 	var in_grip: float = 0.0
 	var in_speed: float = 0.0
+	var in_trigger: float = 0.0
 	if grab_state.latched:
 		in_hand = held_hand
 		in_zone = held_zone
 		in_grip = _grip_value(held_hand)
 		in_speed = float(hand_speed[held_hand])
+		in_trigger = _trigger_value(held_hand)
 	elif candidate_hand != "":
 		in_hand = candidate_hand
 		in_zone = candidate_zone
 		in_grip = _grip_value(candidate_hand)
 		in_speed = float(hand_speed[candidate_hand])
-	var ev: String = grab_state.update(in_hand, in_zone, in_grip, in_speed)
+		in_trigger = _trigger_value(candidate_hand)
+	var ev: String = grab_state.update(in_hand, in_zone, in_grip, in_speed, in_trigger)
 	match ev:
 		"latch":
 			_do_latch(in_hand, in_zone)
@@ -491,7 +541,12 @@ func _do_release() -> void:
 ## velocity/angular velocity come from the windowed fit over the
 ## sample buffer - never a single-frame delta, never recomputed later.
 func _release_shoe(release_samples: Array) -> void:
-	var vel: Vector3 = ThrowMath.estimate_velocity_windowed(release_samples)
+	# Origin-relative (Fix Pass 2): if the player is walking while he
+	# releases, the origin's share of the hand's world motion is
+	# removed first - the shoe gets the ARM's velocity, not the
+	# thumbstick's. Standing still this is the pass-1 estimate.
+	var vel: Vector3 = ThrowMath.estimate_velocity_origin_relative(
+		release_samples, origin.global_transform.basis)
 	var ang: Vector3 = ThrowMath.estimate_angular_velocity_windowed(release_samples)
 	var speed: float = vel.length()
 	var release_tf: Transform3D = shoe.global_transform
@@ -506,6 +561,7 @@ func _release_shoe(release_samples: Array) -> void:
 		release_cache = {
 			"hand": hand_was, "zone": zone_was, "hold": hold_was,
 			"slide_offset_m": slide_was,
+			"origin_pos": origin.global_position,
 			"samples": release_samples.duplicate(true),
 			"release_pos": release_tf.origin,
 			"release_quat": release_tf.basis.get_rotation_quaternion(),
@@ -594,6 +650,7 @@ func _settle_throw() -> void:
 	_update_board()
 	var vel: Vector3 = release_cache["velocity"]
 	var ang: Vector3 = release_cache["angular_velocity"]
+	var origin_at_release: Vector3 = release_cache["origin_pos"]
 	var rp: Vector3 = release_cache["release_pos"]
 	var rq: Quaternion = release_cache["release_quat"]
 	var samples_copy: Array = release_cache["samples"]
@@ -605,6 +662,7 @@ func _settle_throw() -> void:
 		"hold": String(release_cache["hold"]),
 		"zone": String(release_cache["zone"]),
 		"slide_offset_m": float(release_cache["slide_offset_m"]),
+		"origin_release_pos": ThrowRecorder.vec3_arr(origin_at_release),
 		"samples": ThrowRecorder.sample_arr(samples_copy),
 		"release_pos": ThrowRecorder.vec3_arr(rp),
 		"release_quat": ThrowRecorder.quat_arr(rq),

@@ -6,13 +6,17 @@ extends RefCounted
 ## fed in, so the logic suites exercise exactly what the headset runs.
 ##
 ## A sample is a Dictionary: { "t": float seconds, "pos": Vector3,
-## "quat": Quaternion } in world space, timestamps honest/mono.
+## "quat": Quaternion, "opos": Vector3 } in world space, timestamps
+## honest/mono. "opos" is the XR origin's world position at the same
+## instant (Fix Pass 2): with thumbstick locomotion the origin moves,
+## and its motion must never leak into a release velocity - see
+## estimate_velocity_origin_relative().
 
 const METERS_TO_INCHES: float = 39.3701
 
 
-static func make_sample(t: float, pos: Vector3, quat: Quaternion) -> Dictionary:
-	return {"t": t, "pos": pos, "quat": quat}
+static func make_sample(t: float, pos: Vector3, quat: Quaternion, opos: Vector3 = Vector3.ZERO) -> Dictionary:
+	return {"t": t, "pos": pos, "quat": quat, "opos": opos}
 
 
 ## Per-sample speeds by central difference (endpoints one-sided).
@@ -148,6 +152,30 @@ static func _solve3(m: Array, v: Array) -> Array:
 			acc -= float(a[r3][c3]) * out[c3]
 		out[r3] = acc / float(a[r3][r3])
 	return [out[0], out[1], out[2]]
+
+
+## Release velocity with the locomoting origin removed (Fix Pass 2).
+## Each sample's hand position is first expressed relative to the
+## origin position recorded WITH that sample, in the frame of the
+## origin's orientation at the release moment (release_basis); the
+## windowed fit runs there and the result is rotated back to world.
+## A player standing still (constant opos, however far he walked
+## before the throw) gets exactly the pass-1 estimate - the relative
+## positions differ from the world ones by a constant offset, which
+## the fit cannot see. A player sliding forward with a still arm
+## gets ~zero: his hand never moves relative to the origin.
+static func estimate_velocity_origin_relative(samples: Array, release_basis: Basis) -> Vector3:
+	if samples.is_empty():
+		return Vector3.ZERO
+	var inv: Basis = release_basis.inverse()
+	var rel: Array = []
+	for raw: Variant in samples:
+		var s: Dictionary = raw
+		var p: Vector3 = s["pos"]
+		var o: Vector3 = s.get("opos", Vector3.ZERO)
+		rel.append(make_sample(float(s["t"]), inv * (p - o), s["quat"]))
+	var v_frame: Vector3 = estimate_velocity_windowed(rel)
+	return release_basis * v_frame
 
 
 ## The naive last-two-frames estimate. Exists ONLY as the negative

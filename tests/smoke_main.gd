@@ -68,7 +68,54 @@ func _run() -> void:
 	check(main.controls_label.text.contains("GRAB") and main.controls_label.text.contains("THROW")
 		and main.controls_label.text.contains("SLIDE") and main.controls_label.text.contains("RECENTER"),
 		"board lists every control (grab/slide/throw/recenter)")
+	check(main.controls_label.text.contains("Left stick: walk")
+		and main.controls_label.text.contains("Right stick: turn"),
+		"board lists the pass-2 stick controls")
 	check(main.status_label.text.contains("THROWS: 0"), "board starts at zero throws")
+
+	# --- Board placement (pass-2 regression guard) ---
+	# The pass-1 board faced AWAY from the player; he had to walk
+	# around behind it. Assert: forward hemisphere, off the lane,
+	# 1.8-2.6 m from the pitching spot, face turned back at the spot.
+	var bp: Vector3 = main.board_root.position
+	check(bp.z < 0.0, "board sits in the FORWARD hemisphere (z %.2f)" % bp.z)
+	var board_dist: float = Vector2(bp.x, bp.z).length()
+	check(board_dist > 1.8 and board_dist < 2.6,
+		"board is 1.8-2.6 m from the pitching spot (%.2f m)" % board_dist)
+	check(absf(bp.x) > 0.8, "board is clear of the throw lane (|x| %.2f)" % absf(bp.x))
+	var face_dir: Vector3 = main.board_root.global_transform.basis.z
+	face_dir.y = 0.0
+	face_dir = face_dir.normalized()
+	var to_spot: Vector3 = Vector3(0.0, 0.0, 0.0) - bp
+	to_spot.y = 0.0
+	to_spot = to_spot.normalized()
+	check(face_dir.dot(to_spot) > 0.9,
+		"board FACE points back at the pitching spot (dot %.3f)" % face_dir.dot(to_spot))
+
+	# --- Shoe stand within arm's reach of the pitching spot ---
+	var stand_xz := Vector2(main.stand_tf.origin.x, main.stand_tf.origin.z)
+	check(stand_xz.length() < 0.75,
+		"shoe stand is within arm's reach of the pitching spot (%.2f m)" % stand_xz.length())
+	check(absf(main.stand_tf.origin.x) > 0.4, "shoe stand sits out of the throw lane")
+
+	# --- Locomotion through the production path (test stick hooks) ---
+	main.test_stick["L"] = Vector2(0.0, -1.0)
+	await create_timer(2.0).timeout
+	main.test_stick["L"] = Vector2.ZERO
+	var walked: Vector3 = main.origin.global_position
+	check(walked.z < -3.2 and walked.z > -4.8 and absf(walked.x) < 0.3,
+		"left stick walks the origin ~4 m in the facing direction in 2 s (got %s)" % str(walked))
+	main.test_stick["R"] = Vector2(1.0, 0.0)
+	await frames(4)
+	main.test_stick["R"] = Vector2.ZERO
+	var heading: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+	var turn_deg: float = rad_to_deg(Vector2(heading.x, heading.z).angle_to(Vector2(0.0, -1.0)))
+	check(absf(absf(turn_deg) - 30.0) < 1.5,
+		"right stick snaps the heading by 30 deg (got %.1f)" % turn_deg)
+	check(main.origin.global_position.distance_to(walked) < 0.01,
+		"snap turn does not translate the player (moved %.3f m)" % main.origin.global_position.distance_to(walked))
+	await frames(2)
+	main.origin.global_transform = Transform3D.IDENTITY
 
 	# --- Grab via production path (test hand at the toe zone) ---
 	var toe_c: Vector3 = main.shoe.zone_world_center("toe")
@@ -79,12 +126,26 @@ func _run() -> void:
 	check(main.state == "HELD", "shoe is HELD after latch")
 	check(main.held_zone == "toe" and main.held_hold == "flip", "toe grab gives the FLIP hold")
 
-	# --- Sticky slide: loosen to the band, creep the hand, re-lock ---
-	await frames(3)
+	# --- Sticky slide, pass-2 model: grip + trigger (Chris's spec) ---
+	# Let the tracked hand speed settle first (the test hand teleports
+	# to the zone; its speed estimate spikes for a few frames).
+	for i: int in 40:
+		if float(main.hand_speed["R"]) < 0.3:
+			break
+		await process_frame
 	var shoe_pos_before: Vector3 = main.shoe.global_position
+	# The pass-1 way in must be gone: loosen to the mid grip band.
 	main.test_grip["R"] = 0.5
 	await frames(4)
-	check(main.grab_state.sliding, "mid grip while still enters slide")
+	check(not main.grab_state.sliding and not main.grab_state.slide_mode,
+		"mid grip band no longer enters slide (pass-2 removal)")
+	main.test_grip["R"] = 1.0
+	await frames(2)
+	# Chris's way in: trigger pressed while the grip stays held.
+	main.test_trigger["R"] = 1.0
+	await frames(4)
+	check(main.grab_state.sliding and main.grab_state.slide_mode,
+		"grip + trigger enters slide mode")
 	for i: int in 6:
 		var tf: Transform3D = main.test_hand_tf["R"]
 		tf.origin += Vector3(0.0, 0.0, 0.004)
@@ -92,9 +153,10 @@ func _run() -> void:
 		await frames(2)
 	check(main.shoe.global_position.distance_to(shoe_pos_before) < 0.02,
 		"shoe stays put in the world while sliding (moved %.3f m)" % main.shoe.global_position.distance_to(shoe_pos_before))
-	main.test_grip["R"] = 0.95
+	main.test_trigger["R"] = 0.0
 	await frames(4)
-	check(not main.grab_state.sliding and main.grab_state.latched, "full grip re-locks after slide")
+	check(not main.grab_state.sliding and not main.grab_state.slide_mode
+		and main.grab_state.latched, "trigger release locks the new grip, hold kept")
 	check(main.state == "HELD", "still held after slide lock")
 
 	# --- Drop: open the hand with a still hand ---
@@ -157,7 +219,7 @@ func _run() -> void:
 				var td: Dictionary = parsed
 				for key: String in ["hand", "hold", "zone", "samples", "release_velocity",
 						"release_angular_velocity", "settle_pos", "landing_distance_in",
-						"ringer", "flip_rotations", "turn_rotations"]:
+						"ringer", "flip_rotations", "turn_rotations", "origin_release_pos"]:
 					check(td.has(key), "smoke throw record carries '%s'" % key)
 				check(String(td["hold"]) == "turn", "smoke throw record hold is turn")
 	check(found_throw, "smoke recorder holds a throw record")
