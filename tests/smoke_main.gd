@@ -219,9 +219,15 @@ func _run() -> void:
 				var td: Dictionary = parsed
 				for key: String in ["hand", "hold", "zone", "samples", "release_velocity",
 						"release_angular_velocity", "settle_pos", "landing_distance_in",
-						"ringer", "flip_rotations", "turn_rotations", "origin_release_pos"]:
+						"ringer", "flip_rotations", "turn_rotations", "origin_release_pos",
+						"head_yaw_deg", "origin_yaw_deg"]:
 					check(td.has(key), "smoke throw record carries '%s'" % key)
 				check(String(td["hold"]) == "turn", "smoke throw record hold is turn")
+				if td.has("head_yaw_deg") and td.has("origin_yaw_deg"):
+					check(absf(float(td["head_yaw_deg"])) < 0.5
+						and absf(float(td["origin_yaw_deg"])) < 0.5,
+						"head/origin yaw logged at release (~0 facing the stake here: %.2f / %.2f)"
+						% [float(td["head_yaw_deg"]), float(td["origin_yaw_deg"])])
 	check(found_throw, "smoke recorder holds a throw record")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))
 

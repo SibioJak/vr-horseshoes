@@ -412,6 +412,27 @@ func test_origin_relative_velocity() -> void:
 		"origin-relative: a rotated release frame still returns the world velocity (diff %.4f)" % v_rel_yaw.distance_to(v_plain))
 
 
+func test_yaw_deg() -> void:
+	# The recorder's stance fields (pass 2, third addition): head and
+	# origin yaw on the azimuth convention - 0 facing the stake down
+	# -Z, NEGATIVE to the left of the line.
+	var ahead: Vector3 = Basis.IDENTITY * Vector3(0.0, 0.0, -1.0)
+	check(absf(ThrowMath.yaw_deg(ahead)) < 0.01, "yaw: facing -Z down the court reads 0")
+	var left10: Vector3 = Basis(Vector3.UP, deg_to_rad(10.0)) * Vector3(0.0, 0.0, -1.0)
+	check(absf(ThrowMath.yaw_deg(left10) + 10.0) < 0.01,
+		"yaw: facing 10 deg LEFT reads -10 (got %.2f)" % ThrowMath.yaw_deg(left10))
+	var right25: Vector3 = Basis(Vector3.UP, deg_to_rad(-25.0)) * Vector3(0.0, 0.0, -1.0)
+	check(absf(ThrowMath.yaw_deg(right25) - 25.0) < 0.01,
+		"yaw: facing 25 deg RIGHT reads +25 (got %.2f)" % ThrowMath.yaw_deg(right25))
+	# Only the XZ projection is read (a pitched gaze keeps its heading
+	# as long as the horizon projection is the same direction).
+	var pitched: Vector3 = Vector3(left10.x, 0.55, left10.z)
+	check(absf(ThrowMath.yaw_deg(pitched) + 10.0) < 0.01,
+		"yaw: pitch (y component) is ignored, projection only")
+	check(ThrowMath.yaw_deg(Vector3(0.0, 1.0, 0.0)) == 0.0,
+		"yaw: straight up/down has no heading and reads 0, no NaN")
+
+
 func test_api_guard() -> void:
 	# Every XR call the build makes, probed on the receiver's ACTUAL
 	# class (static import catches none of these - dynamic dispatch).
@@ -439,6 +460,7 @@ func _run() -> void:
 	test_snap_turn()
 	test_rotate_about()
 	test_origin_relative_velocity()
+	test_yaw_deg()
 	test_api_guard()
 	var shoe_node := Shoe.new()
 	root.add_child(shoe_node)

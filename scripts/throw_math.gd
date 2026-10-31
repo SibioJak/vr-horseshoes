@@ -19,6 +19,19 @@ static func make_sample(t: float, pos: Vector3, quat: Quaternion, opos: Vector3 
 	return {"t": t, "pos": pos, "quat": quat, "opos": opos}
 
 
+## Heading of a world forward vector, projected onto the XZ plane,
+## in degrees from the court's -Z axis (the stake line). Negative =
+## facing LEFT of the line, positive = right - the same sign as a
+## velocity azimuth, so a throw record's head_yaw_deg /
+## origin_yaw_deg can be compared directly against its release
+## azimuth when the "stance or arm" question gets asked. Only x/z
+## are read; pitch cannot leak in.
+static func yaw_deg(fwd: Vector3) -> float:
+	if Vector2(fwd.x, fwd.z).length() < 0.0001:
+		return 0.0
+	return rad_to_deg(atan2(fwd.x, -fwd.z))
+
+
 ## Per-sample speeds by central difference (endpoints one-sided).
 static func sample_speeds(samples: Array) -> PackedFloat32Array:
 	var speeds := PackedFloat32Array()

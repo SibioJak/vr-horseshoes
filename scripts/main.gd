@@ -562,6 +562,12 @@ func _release_shoe(release_samples: Array) -> void:
 			"hand": hand_was, "zone": zone_was, "hold": hold_was,
 			"slide_offset_m": slide_was,
 			"origin_pos": origin.global_position,
+			# Stance evidence, captured at the release moment: where
+			# the HEAD faced vs how the whole RIG was yawed (snap-turn
+			# or a crooked recenter). Their difference separates
+			# "he turned his head" from "the rig was rotated".
+			"head_yaw_deg": ThrowMath.yaw_deg(-cam.global_transform.basis.z),
+			"origin_yaw_deg": ThrowMath.yaw_deg(-origin.global_transform.basis.z),
 			"samples": release_samples.duplicate(true),
 			"release_pos": release_tf.origin,
 			"release_quat": release_tf.basis.get_rotation_quaternion(),
@@ -663,6 +669,8 @@ func _settle_throw() -> void:
 		"zone": String(release_cache["zone"]),
 		"slide_offset_m": float(release_cache["slide_offset_m"]),
 		"origin_release_pos": ThrowRecorder.vec3_arr(origin_at_release),
+		"head_yaw_deg": float(release_cache["head_yaw_deg"]),
+		"origin_yaw_deg": float(release_cache["origin_yaw_deg"]),
 		"samples": ThrowRecorder.sample_arr(samples_copy),
 		"release_pos": ThrowRecorder.vec3_arr(rp),
 		"release_quat": ThrowRecorder.quat_arr(rq),
