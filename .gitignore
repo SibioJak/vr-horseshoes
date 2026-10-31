@@ -1,0 +1,21 @@
+# Godot 4
+.godot/
+*.uid
+/android/
+
+# Per-machine import sidecars for test/proof images (PNGs stay tracked)
+proofs/*.png.import
+tests/*.png.import
+
+# Build/export output
+/build/
+/exports/
+*.pck
+*.exe
+*.x86_64
+*.apk
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
