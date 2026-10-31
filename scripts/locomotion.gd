@@ -10,11 +10,13 @@ extends RefCounted
 ## Pure math + one bit of snap-turn state, no scene access, so the
 ## logic suites exercise exactly what the headset runs.
 ##
-## Walk: left stick, head-relative on the flat, direct (no accel lag,
-## no head-bob), ~2 m/s at full deflection past a radial deadzone.
-## Turn: right stick X, 30-degree snap steps about the CAMERA's XZ
+## Walk: RIGHT stick (moved from the left in Fix Pass 4, Chris's
+## field order - his rig, his layout), head-relative on the flat,
+## direct (no accel lag, no head-bob), ~2 m/s at full deflection
+## past a radial deadzone.
+## Turn: LEFT stick X, 30-degree snap steps about the CAMERA's XZ
 ## position, edge-armed so a held stick fires exactly once per push.
-## Right stick Y is deliberately unused.
+## Left stick Y is deliberately unused.
 
 const WALK_SPEED: float = 2.0
 const DEADZONE: float = 0.15
@@ -27,10 +29,16 @@ const PLAY_RADIUS: float = 25.0
 var _snap_armed: bool = true
 
 
-## World-space displacement for one frame of left-stick input.
+## World-space displacement for one frame of walk-stick input.
 ## head_basis is the camera's global basis; only its flat forward /
-## right matter. Stick convention (Godot/OpenXR "primary"): pushing
-## the stick forward/away reads y = -1, so forward input is -stick.y.
+## right matter. Stick Y convention, FIELD-CORRECTED (Fix Pass 4,
+## 2026-10-31): Fix Pass 2 assumed the paper Godot/OpenXR convention
+## (forward push reads y = -1). On Chris's actual Quest 3 / Virtual
+## Desktop rig his forward push reads y = +1 through the "primary"
+## action, so the pass-2 build walked him BACKWARD when he pushed
+## forward. Forward input is therefore +stick.y here. Do NOT "fix"
+## this back from spec memory - the field report on the target rig
+## outranks the paper convention.
 ## Magnitude past the deadzone is rescaled so full deflection is full
 ## speed and a gentle push is a gentle walk; an over-long diagonal is
 ## clamped to unit length first so diagonals are not faster.
@@ -51,7 +59,7 @@ static func walk_displacement(stick: Vector2, head_basis: Basis, delta: float) -
 		return Vector3.ZERO
 	fwd = fwd.normalized()
 	right = right.normalized()
-	var dir: Vector3 = right * dir2.x + fwd * (-dir2.y)
+	var dir: Vector3 = right * dir2.x + fwd * dir2.y
 	if dir.length() < 0.001:
 		return Vector3.ZERO
 	return dir.normalized() * (scaled * WALK_SPEED * delta)
@@ -79,7 +87,7 @@ static func rotate_about(tf: Transform3D, pivot_world: Vector3, angle_rad: float
 	return Transform3D(r * tf.basis, new_origin)
 
 
-## Snap-turn edge logic. Feed the right stick's X every frame;
+## Snap-turn edge logic. Feed the left stick's X every frame;
 ## returns the degrees to rotate THIS frame (0, +30, or -30).
 ## Positive X (push right) turns right, which is a negative Godot
 ## yaw. One turn per push past SNAP_ON; re-arms below SNAP_OFF.

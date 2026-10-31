@@ -358,7 +358,7 @@ func _build_board() -> void:
 	status_label.position = Vector3(0.0, 1.55, 0.01)
 	board_root.add_child(status_label)
 	controls_label = Label3D.new()
-	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing, open hand (shoe returns)\nDROP: open hand while still\nLeft stick: walk\nRight stick: turn\n30 FT LINE: up the court - learning distance\nRECENTER: menu long-press - seated/standing ok"
+	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing, open hand (shoe returns)\nDROP: open hand while still\nRight stick: walk\nLeft stick: turn\n30 FT LINE: up the court - learning distance\nRECENTER: menu long-press - seated/standing ok"
 	controls_label.font_size = 38
 	controls_label.pixel_size = 0.00105
 	controls_label.line_spacing = 2.0
@@ -479,19 +479,21 @@ func _find_candidate() -> void:
 				candidate_zone = zone
 
 
-## Thumbstick locomotion (Fix Pass 2). Runs BEFORE sampling/grab so
-## every hand transform this frame already includes the new origin.
-## Walk is head-relative and direct; snap turn rotates the origin
-## about the camera so turning never translates the player.
+## Thumbstick locomotion (Fix Pass 2; sticks SWAPPED in Fix Pass 4
+## at Chris's field order: the RIGHT stick walks, the LEFT stick
+## turns). Runs BEFORE sampling/grab so every hand transform this
+## frame already includes the new origin. Walk is head-relative and
+## direct; snap turn rotates the origin about the camera so turning
+## never translates the player.
 func _process_locomotion(delta: float) -> void:
 	if delta <= 0.0:
 		return
-	var ls: Vector2 = _stick_value("L")
-	var disp: Vector3 = Locomotion.walk_displacement(ls, cam.global_transform.basis, delta)
+	var rs: Vector2 = _stick_value("R")
+	var disp: Vector3 = Locomotion.walk_displacement(rs, cam.global_transform.basis, delta)
 	if disp != Vector3.ZERO:
 		origin.global_position = Locomotion.clamp_origin(origin.global_position + disp)
-	var rs: Vector2 = _stick_value("R")
-	var ang: float = locomotion.snap_turn_update(rs.x)
+	var ls: Vector2 = _stick_value("L")
+	var ang: float = locomotion.snap_turn_update(ls.x)
 	if not is_zero_approx(ang):
 		origin.global_transform = Locomotion.rotate_about(
 			origin.global_transform, cam.global_position, deg_to_rad(ang))

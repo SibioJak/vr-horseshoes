@@ -89,9 +89,9 @@ func _run() -> void:
 	check(main.controls_label.text.contains("GRAB") and main.controls_label.text.contains("THROW")
 		and main.controls_label.text.contains("SLIDE") and main.controls_label.text.contains("RECENTER"),
 		"board lists every control (grab/slide/throw/recenter)")
-	check(main.controls_label.text.contains("Left stick: walk")
-		and main.controls_label.text.contains("Right stick: turn"),
-		"board lists the pass-2 stick controls")
+	check(main.controls_label.text.contains("Right stick: walk")
+		and main.controls_label.text.contains("Left stick: turn"),
+		"board lists the pass-4 stick controls (swapped: right walks, left turns)")
 	check(main.controls_label.text.contains("30 FT LINE"),
 		"board notes the 30 ft short line (pass 3)")
 	check(main.status_label.text.contains("THROWS: 0"), "board starts at zero throws")
@@ -141,21 +141,46 @@ func _run() -> void:
 	check(main.active_stand_line_ft == 40, "the shoe starts homed to the 40 ft pedestal")
 
 	# --- Locomotion through the production path (test stick hooks) ---
-	main.test_stick["L"] = Vector2(0.0, -1.0)
+	# Pass-4 mapping (Chris's field order): the RIGHT stick walks,
+	# with the field-corrected Y (his forward push reads y=+1 on
+	# this rig), and the LEFT stick X snaps the turn.
+	main.test_stick["R"] = Vector2(0.0, 1.0)
 	await create_timer(2.0).timeout
-	main.test_stick["L"] = Vector2.ZERO
+	main.test_stick["R"] = Vector2.ZERO
 	var walked: Vector3 = main.origin.global_position
 	check(walked.z < -3.2 and walked.z > -4.8 and absf(walked.x) < 0.3,
-		"left stick walks the origin ~4 m in the facing direction in 2 s (got %s)" % str(walked))
+		"right stick forward push walks the origin ~4 m in the facing direction in 2 s (got %s)" % str(walked))
+	# Regression: the OLD mapping is dead - the left stick no longer
+	# walks (a full 0.5 s forward push must not move the player).
+	main.test_stick["L"] = Vector2(0.0, 1.0)
+	await create_timer(0.5).timeout
+	main.test_stick["L"] = Vector2.ZERO
+	check(main.origin.global_position.distance_to(walked) < 0.01,
+		"left stick no longer walks (pass-4 regression, moved %.3f m)" % main.origin.global_position.distance_to(walked))
+	# Right stick X strafes with the unchanged sign and no longer
+	# turns (heading must hold while the origin slides +X).
+	var heading_rx: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
 	main.test_stick["R"] = Vector2(1.0, 0.0)
-	await frames(4)
+	await create_timer(0.5).timeout
 	main.test_stick["R"] = Vector2.ZERO
+	var heading_rx2: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+	var rx_turn: float = rad_to_deg(Vector2(heading_rx.x, heading_rx.z).angle_to(
+		Vector2(heading_rx2.x, heading_rx2.z)))
+	check(absf(rx_turn) < 1.5,
+		"right stick no longer turns (pass-4 regression, turned %.1f deg)" % rx_turn)
+	check(main.origin.global_position.x > walked.x + 0.3,
+		"right stick X strafes +X with the unchanged sign (x %.2f -> %.2f)" % [walked.x, main.origin.global_position.x])
+	# Left stick X fires ONE 30 deg snap about the camera, in place.
+	var pre_snap: Vector3 = main.origin.global_position
+	main.test_stick["L"] = Vector2(1.0, 0.0)
+	await frames(4)
+	main.test_stick["L"] = Vector2.ZERO
 	var heading: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
 	var turn_deg: float = rad_to_deg(Vector2(heading.x, heading.z).angle_to(Vector2(0.0, -1.0)))
 	check(absf(absf(turn_deg) - 30.0) < 1.5,
-		"right stick snaps the heading by 30 deg (got %.1f)" % turn_deg)
-	check(main.origin.global_position.distance_to(walked) < 0.01,
-		"snap turn does not translate the player (moved %.3f m)" % main.origin.global_position.distance_to(walked))
+		"left stick snaps the heading by 30 deg (got %.1f)" % turn_deg)
+	check(main.origin.global_position.distance_to(pre_snap) < 0.01,
+		"snap turn does not translate the player (moved %.3f m)" % main.origin.global_position.distance_to(pre_snap))
 	await frames(2)
 	main.origin.global_transform = Transform3D.IDENTITY
 

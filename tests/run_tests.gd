@@ -302,31 +302,33 @@ func test_zone_audit(shoe_node: Shoe) -> void:
 
 func test_locomotion_math() -> void:
 	var ident := Basis.IDENTITY
-	# Full forward push (stick away reads y=-1) walks down -Z at 2 m/s.
-	var d1: Vector3 = Locomotion.walk_displacement(Vector2(0.0, -1.0), ident, 1.0)
+	# Full forward push walks down -Z at 2 m/s. On Chris's rig the
+	# forward push reads y=+1 (Fix Pass 4 field correction - the
+	# pass-2 paper convention, y=-1, walked him backward).
+	var d1: Vector3 = Locomotion.walk_displacement(Vector2(0.0, 1.0), ident, 1.0)
 	check(d1.distance_to(Vector3(0.0, 0.0, -2.0)) < 0.01,
-		"walk: full forward push = 2 m/s toward head -Z (got %s)" % str(d1))
+		"walk: full forward push (y=+1 on the target rig) = 2 m/s toward head -Z (got %s)" % str(d1))
 	var d2: Vector3 = Locomotion.walk_displacement(Vector2(1.0, 0.0), ident, 1.0)
 	check(d2.distance_to(Vector3(2.0, 0.0, 0.0)) < 0.01,
 		"walk: full right push strafes +X at 2 m/s (got %s)" % str(d2))
-	var d3: Vector3 = Locomotion.walk_displacement(Vector2(0.0, 1.0), ident, 1.0)
+	var d3: Vector3 = Locomotion.walk_displacement(Vector2(0.0, -1.0), ident, 1.0)
 	check(d3.distance_to(Vector3(0.0, 0.0, 2.0)) < 0.01,
-		"walk: full back pull walks backward (got %s)" % str(d3))
+		"walk: full back pull (y=-1) walks backward (got %s)" % str(d3))
 	# Radial deadzone swallows small inputs entirely.
-	check(Locomotion.walk_displacement(Vector2(0.0, -0.10), ident, 1.0) == Vector3.ZERO,
+	check(Locomotion.walk_displacement(Vector2(0.0, 0.10), ident, 1.0) == Vector3.ZERO,
 		"walk: input inside the 0.15 deadzone does not move")
 	check(Locomotion.walk_displacement(Vector2(0.14, 0.0), ident, 1.0) == Vector3.ZERO,
 		"walk: 0.14 deflection still inside the deadzone")
 	# Half push is proportional (rescaled): clearly walking, not full pace.
-	var dh: Vector3 = Locomotion.walk_displacement(Vector2(0.0, -0.5), ident, 1.0)
+	var dh: Vector3 = Locomotion.walk_displacement(Vector2(0.0, 0.5), ident, 1.0)
 	check(dh.length() > 0.65 and dh.length() < 1.0 and dh.z < -0.65,
 		"walk: half push is proportional (~0.82 m/s, got %.3f)" % dh.length())
 	# Over-long diagonal clamps to unit: no faster than straight.
-	var dd: Vector3 = Locomotion.walk_displacement(Vector2(1.0, -1.0), ident, 1.0)
-	check(dd.length() <= 2.001, "walk: diagonal is not faster than straight (%.3f m/s)" % dd.length())
+	var dd: Vector3 = Locomotion.walk_displacement(Vector2(1.0, 1.0), ident, 1.0)
+	check(dd.length() <= 2.001 and dd.x > 0.0 and dd.z < 0.0, "walk: diagonal is not faster than straight (%.3f m/s) and runs forward-right" % dd.length())
 	# Head-relative: with the head yawed +90 deg, forward push goes -X.
 	var yawed := Basis(Vector3.UP, deg_to_rad(90.0))
-	var d4: Vector3 = Locomotion.walk_displacement(Vector2(0.0, -1.0), yawed, 1.0)
+	var d4: Vector3 = Locomotion.walk_displacement(Vector2(0.0, 1.0), yawed, 1.0)
 	check(d4.distance_to(Vector3(-2.0, 0.0, 0.0)) < 0.01,
 		"walk: displacement follows the HEAD, not the world (got %s)" % str(d4))
 	# Play-area clamp: radial pull-in to 25 m of court centre, y kept.
