@@ -15,10 +15,19 @@ extends Node3D
 
 const STAKE_POS := Vector3(0.0, 0.05, -12.192) # pit surface point, 40 ft from the foul line (z=0)
 const PIT_SIZE := Vector3(0.914, 0.05, 1.829) # 36 in x 72 in
-const FOUL_Z: float = 0.0
+const FOUL_40_Z: float = 0.0
+const FOUL_30_Z: float = -3.048 # 30 ft line: 9.144 m from the stake
+const FOUL_Z: float = FOUL_40_Z
+const STANCE_HALF_WIDTH: float = 0.85
+const STANCE_HALF_DEPTH: float = 0.40
+const STAND_SIDE_X: float = 0.75
+const STAND_BEHIND_M: float = 0.50
+const STAND_SHOE_Y: float = 0.785
 const CANDIDATE_RADIUS: float = 0.14
 const THROW_MIN_SPEED: float = 0.9
 const SAMPLE_KEEP_SEC: float = 0.40
+const SETTLE_STILL_SEC: float = 0.25
+const RETURN_WAIT_SEC: float = 0.20
 
 var origin: XROrigin3D
 var cam: XRCamera3D
@@ -28,9 +37,9 @@ var xr_ok: bool = false
 var head_tracking_ok: bool = false
 
 var shoe: Shoe
-var stand_tf := Transform3D(
-	Basis.from_euler(Vector3(deg_to_rad(-14.0), deg_to_rad(-30.0), 0.0)),
-	Vector3(0.52, 0.785, 0.32))
+var stand_tfs: Dictionary = {} # line_ft (30/40) -> pedestal shoe transform
+var stand_tf: Transform3D # the pedestal the shoe currently belongs to
+var active_stand_line_ft: int = 40
 var board_root: Node3D
 var status_label: Label3D
 var controls_label: Label3D
@@ -79,6 +88,7 @@ var debug_show_zones: bool = false
 
 func _ready() -> void:
 	recorder = ThrowRecorder.new(recorder_path)
+	_init_stands()
 	_build_world()
 	_build_rig()
 	_build_board()
@@ -127,6 +137,52 @@ func _static_box(pos: Vector3, size: Vector3, mat: Material, phys: PhysicsMateri
 	body.position = pos
 	add_child(body)
 	return body
+
+
+static func line_z_for_ft(line_ft: int) -> float:
+	return FOUL_30_Z if line_ft == 30 else FOUL_40_Z
+
+
+static func make_stand_tf(line_ft: int) -> Transform3D:
+	# Pedestal rule (Fix Pass 3): behind the line and to the side,
+	# NEVER inside the stance box (|x| <= 0.85, line z +/- 0.40) -
+	# the pass-1/2 pedestal sat where the pitcher's feet go.
+	return Transform3D(
+		Basis.from_euler(Vector3(deg_to_rad(-14.0), deg_to_rad(-30.0), 0.0)),
+		Vector3(STAND_SIDE_X, STAND_SHOE_Y, line_z_for_ft(line_ft) + STAND_BEHIND_M))
+
+
+func _init_stands() -> void:
+	stand_tfs = {
+		40: make_stand_tf(40),
+		30: make_stand_tf(30),
+	}
+	active_stand_line_ft = 40
+	stand_tf = stand_tfs[active_stand_line_ft]
+
+
+func _set_active_stand(line_ft: int) -> void:
+	active_stand_line_ft = line_ft
+	stand_tf = stand_tfs[line_ft]
+
+
+func _nearest_stand_line() -> int:
+	var best_line: int = active_stand_line_ft
+	var best_dist: float = INF
+	for line_ft: int in [40, 30]:
+		var tf: Transform3D = stand_tfs[line_ft]
+		var d: float = shoe.global_position.distance_to(tf.origin)
+		if d < best_dist:
+			best_dist = d
+			best_line = line_ft
+	return best_line
+
+
+func _build_pedestal(tf: Transform3D) -> void:
+	var p: Vector3 = tf.origin
+	_box(self, Vector3(p.x, 0.37, p.z), Vector3(0.07, 0.74, 0.07), _mat(Color(0.40, 0.29, 0.17)))
+	var plate := _box(self, Vector3(p.x, 0.755, p.z), Vector3(0.34, 0.03, 0.34), _mat(Color(0.48, 0.35, 0.21)))
+	plate.rotation_degrees = Vector3(-14.0, -30.0, 0.0)
 
 
 func _build_world() -> void:
@@ -187,13 +243,17 @@ func _build_world() -> void:
 	scs.position = Vector3(0.0, 0.058, 0.0)
 	stake_body.add_child(scs)
 
-	# Foul line the pitcher stands behind.
-	_box(self, Vector3(0.0, 0.006, FOUL_Z), Vector3(1.6, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
+	# Foul lines the pitcher stands behind: the 40 ft standard and
+	# the 30 ft short line (NHPA learning distance, Fix Pass 3).
+	for line_ft: int in [40, 30]:
+		_box(self, Vector3(0.0, 0.006, line_z_for_ft(line_ft)),
+			Vector3(1.6, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
 
-	# Shoe stand beside the pitching position.
-	_box(self, Vector3(0.52, 0.37, 0.32), Vector3(0.07, 0.74, 0.07), _mat(Color(0.40, 0.29, 0.17)))
-	var plate := _box(self, Vector3(0.52, 0.755, 0.32), Vector3(0.34, 0.03, 0.34), _mat(Color(0.48, 0.35, 0.21)))
-	plate.rotation_degrees = Vector3(-14.0, -30.0, 0.0)
+	# One shoe pedestal per line, both placed by the same rule:
+	# behind the line, to the side, clear of the stance box.
+	for stand_line: int in [40, 30]:
+		var tf: Transform3D = stand_tfs[stand_line]
+		_build_pedestal(tf)
 
 
 func _build_rig() -> void:
@@ -298,15 +358,15 @@ func _build_board() -> void:
 	status_label.position = Vector3(0.0, 1.55, 0.01)
 	board_root.add_child(status_label)
 	controls_label = Label3D.new()
-	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing, open hand (shoe returns)\nDROP: open hand while still\nLeft stick: walk\nRight stick: turn\nRECENTER: menu long-press - seated/standing ok"
+	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing, open hand (shoe returns)\nDROP: open hand while still\nLeft stick: walk\nRight stick: turn\n30 FT LINE: up the court - learning distance\nRECENTER: menu long-press - seated/standing ok"
 	controls_label.font_size = 38
-	controls_label.pixel_size = 0.00115
+	controls_label.pixel_size = 0.00105
 	controls_label.line_spacing = 2.0
 	controls_label.modulate = Color(0.88, 0.90, 0.82)
 	controls_label.outline_size = 6
 	controls_label.outline_modulate = Color(0.1, 0.07, 0.03)
 	controls_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	controls_label.position = Vector3(0.0, 0.95, 0.01)
+	controls_label.position = Vector3(0.0, 0.99, 0.01)
 	board_root.add_child(controls_label)
 
 
@@ -494,6 +554,9 @@ func _process_grab() -> void:
 
 
 func _do_latch(hand: String, zone: String) -> void:
+	# The shoe belongs to the pedestal it was just grabbed from;
+	# after the throw (or a drop) it returns to THAT pedestal.
+	_set_active_stand(_nearest_stand_line())
 	held_hand = hand
 	held_zone = zone
 	var z: Dictionary = Shoe.zones()[zone]
@@ -561,6 +624,7 @@ func _release_shoe(release_samples: Array) -> void:
 		release_cache = {
 			"hand": hand_was, "zone": zone_was, "hold": hold_was,
 			"slide_offset_m": slide_was,
+			"line_ft": ThrowMath.line_ft_for_release(release_tf.origin, STAKE_POS),
 			"origin_pos": origin.global_position,
 			# Stance evidence, captured at the release moment: where
 			# the HEAD faced vs how the whole RIG was yawed (snap-turn
@@ -622,7 +686,7 @@ func _physics_process(delta: float) -> void:
 					_still_time += delta
 				else:
 					_still_time = 0.0
-				if _still_time > 0.8:
+				if _still_time > SETTLE_STILL_SEC:
 					_settle_throw()
 			if shoe.global_position.length() > 40.0 or shoe.global_position.y < -2.0:
 				_settle_throw()
@@ -631,12 +695,12 @@ func _physics_process(delta: float) -> void:
 				_still_time += delta
 			else:
 				_still_time = 0.0
-			if _still_time > 0.5:
+			if _still_time > SETTLE_STILL_SEC:
 				state = "RETURNING"
 				_wait_time = 0.0
 		"RETURNING":
 			_wait_time += delta
-			if _wait_time > 1.6:
+			if _wait_time > RETURN_WAIT_SEC:
 				_return_to_stand()
 
 
@@ -668,6 +732,7 @@ func _settle_throw() -> void:
 		"hold": String(release_cache["hold"]),
 		"zone": String(release_cache["zone"]),
 		"slide_offset_m": float(release_cache["slide_offset_m"]),
+		"line_ft": int(release_cache["line_ft"]),
 		"origin_release_pos": ThrowRecorder.vec3_arr(origin_at_release),
 		"head_yaw_deg": float(release_cache["head_yaw_deg"]),
 		"origin_yaw_deg": float(release_cache["origin_yaw_deg"]),
@@ -685,7 +750,7 @@ func _settle_throw() -> void:
 		"turn_rotations": turn_rot,
 	})
 	state = "RETURNING"
-	_wait_time = -0.6 # thrown shoes linger a touch longer than drops
+	_wait_time = 0.0 # no linger: rhythm matters (Fix Pass 3)
 
 
 func _return_to_stand() -> void:

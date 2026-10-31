@@ -35,6 +35,27 @@ func frames(n: int) -> void:
 		await process_frame
 
 
+## Time from the thrown shoe first satisfying the settle detector's
+## own rest condition (same thresholds main.gd uses, after the same
+## minimum flight time) until it is back on its pedestal in STAND.
+## Returns -1 if either milestone never happens in the timeout.
+func wait_rest_to_stand(timeout_sec: float) -> float:
+	var start_msec: int = Time.get_ticks_msec()
+	var rest_msec: int = -1
+	while float(Time.get_ticks_msec() - start_msec) / 1000.0 < timeout_sec:
+		if rest_msec < 0 and String(main.state) == "FLYING" \
+				and float(main._fly_time) > 0.6 \
+				and main.shoe.linear_velocity.length() < 0.10 \
+				and main.shoe.angular_velocity.length() < 0.30:
+			rest_msec = Time.get_ticks_msec()
+		if String(main.state) == "STAND":
+			if rest_msec >= 0:
+				return float(Time.get_ticks_msec() - rest_msec) / 1000.0
+			return -1.0
+		await physics_frame
+	return -1.0
+
+
 func _init() -> void:
 	_run()
 
@@ -71,6 +92,8 @@ func _run() -> void:
 	check(main.controls_label.text.contains("Left stick: walk")
 		and main.controls_label.text.contains("Right stick: turn"),
 		"board lists the pass-2 stick controls")
+	check(main.controls_label.text.contains("30 FT LINE"),
+		"board notes the 30 ft short line (pass 3)")
 	check(main.status_label.text.contains("THROWS: 0"), "board starts at zero throws")
 
 	# --- Board placement (pass-2 regression guard) ---
@@ -92,11 +115,30 @@ func _run() -> void:
 	check(face_dir.dot(to_spot) > 0.9,
 		"board FACE points back at the pitching spot (dot %.3f)" % face_dir.dot(to_spot))
 
-	# --- Shoe stand within arm's reach of the pitching spot ---
-	var stand_xz := Vector2(main.stand_tf.origin.x, main.stand_tf.origin.z)
-	check(stand_xz.length() < 0.75,
-		"shoe stand is within arm's reach of the pitching spot (%.2f m)" % stand_xz.length())
-	check(absf(main.stand_tf.origin.x) > 0.4, "shoe stand sits out of the throw lane")
+	# --- Pedestals clear of the stance boxes (pass-3 replacement) ---
+	# FP2 measured the stand from the SPAWN point (0.61 m) and called
+	# it fine; Chris's photo showed it sitting on the foul line where
+	# his stance goes. The permanent assertion now measures against
+	# the STANCE BOX at each line: |x| <= 0.85, line z +/- 0.40.
+	# A pedestal must sit outside that box, behind its line, and
+	# within ~0.9 m reach of a player standing at the line.
+	check(main.stand_tfs.size() == 2, "two pedestals exist, one per foul line (%d)" % main.stand_tfs.size())
+	for line_ft: int in [40, 30]:
+		var ptf: Transform3D = main.stand_tfs[line_ft]
+		var pp: Vector3 = ptf.origin
+		var line_z: float = main.line_z_for_ft(line_ft)
+		var in_stance: bool = absf(pp.x) <= main.STANCE_HALF_WIDTH \
+			and absf(pp.z - line_z) <= main.STANCE_HALF_DEPTH
+		check(not in_stance,
+			"%d ft pedestal is OUTSIDE the stance box (at %s, line z %.3f)" % [line_ft, str(pp), line_z])
+		check(pp.z - line_z > 0.40 and pp.z - line_z < 0.60,
+			"%d ft pedestal sits ~0.5 m BEHIND its line (%.2f m)" % [line_ft, pp.z - line_z])
+		check(pp.x > 0.60 and pp.x < 0.90,
+			"%d ft pedestal sits ~0.75 m to the side (x %.2f)" % [line_ft, pp.x])
+		var reach: float = Vector2(pp.x, pp.z).distance_to(Vector2(0.0, line_z))
+		check(reach <= 0.92,
+			"%d ft pedestal is within reach of the line (%.2f m from line centre)" % [line_ft, reach])
+	check(main.active_stand_line_ft == 40, "the shoe starts homed to the 40 ft pedestal")
 
 	# --- Locomotion through the production path (test stick hooks) ---
 	main.test_stick["L"] = Vector2(0.0, -1.0)
@@ -202,7 +244,10 @@ func _run() -> void:
 	var got_vel: Vector3 = main.shoe.linear_velocity
 	check(got_vel.distance_to(expected_vel) < 0.6,
 		"rigid body carries the windowed release velocity (err %.3f)" % got_vel.distance_to(expected_vel))
-	check(await wait_state("STAND", 14.0), "thrown shoe settles and returns to the stand")
+	var cycle_sec: float = await wait_rest_to_stand(14.0)
+	check(cycle_sec >= 0.0, "thrown shoe settles and returns to the stand")
+	check(cycle_sec >= 0.0 and cycle_sec <= 1.2,
+		"quick turnaround: rest -> shoe grabbable on its pedestal in %.2f s (target ~1 s)" % cycle_sec)
 	check(main.throw_count == 1, "board counted exactly one throw (%d)" % main.throw_count)
 	check(main.status_label.text.contains("THROWS: 1"), "board shows THROWS: 1")
 	check(main.status_label.text.contains("TURN"), "board shows the TURN hold")
@@ -220,15 +265,83 @@ func _run() -> void:
 				for key: String in ["hand", "hold", "zone", "samples", "release_velocity",
 						"release_angular_velocity", "settle_pos", "landing_distance_in",
 						"ringer", "flip_rotations", "turn_rotations", "origin_release_pos",
-						"head_yaw_deg", "origin_yaw_deg"]:
+						"head_yaw_deg", "origin_yaw_deg", "line_ft"]:
 					check(td.has(key), "smoke throw record carries '%s'" % key)
 				check(String(td["hold"]) == "turn", "smoke throw record hold is turn")
+				if td.has("line_ft"):
+					check(int(td["line_ft"]) == 40,
+						"smoke throw from the standard end records line_ft 40 (got %d)" % int(td["line_ft"]))
 				if td.has("head_yaw_deg") and td.has("origin_yaw_deg"):
 					check(absf(float(td["head_yaw_deg"])) < 0.5
 						and absf(float(td["origin_yaw_deg"])) < 0.5,
 						"head/origin yaw logged at release (~0 facing the stake here: %.2f / %.2f)"
 						% [float(td["head_yaw_deg"]), float(td["origin_yaw_deg"])])
 	check(found_throw, "smoke recorder holds a throw record")
+
+	# --- The shoe returns to the pedestal it was grabbed from ---
+	# Place it on the 30 ft pedestal (as a return would leave it),
+	# grab it there, drop it still: it must come back to the SHORT
+	# pedestal, not the standard one.
+	main.shoe.global_transform = main.stand_tfs[30]
+	await frames(2)
+	var toe30: Vector3 = main.shoe.zone_world_center("toe")
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, toe30)
+	main.test_grip["R"] = 1.0
+	await frames(5)
+	check(main.grab_state.latched and main.active_stand_line_ft == 30,
+		"grabbing from the short pedestal homes the shoe to it (line %d)" % main.active_stand_line_ft)
+	for i: int in 40:
+		if float(main.hand_speed["R"]) < 0.3:
+			break
+		await process_frame
+	main.test_grip["R"] = 0.0
+	await frames(4)
+	check(main.state == "DROPPED", "still-hand release at the short line drops (state %s)" % main.state)
+	check(await wait_state("STAND", 3.0), "dropped shoe returns under the quick timing")
+	var back_tf: Transform3D = main.stand_tfs[30]
+	check(main.shoe.global_position.distance_to(back_tf.origin) < 0.01,
+		"shoe returned to the 30 ft pedestal it was grabbed from (at %s)" % str(main.shoe.global_position))
+
+	# --- Settle honesty regression (pass 3) ---
+	# A shoe placed at a known TRUE REST transform (frozen, zero
+	# velocity) and settled under the new quick timing must record
+	# the same landing distance the old timing's measurement gives
+	# on that rest transform - faster detection, same measurement.
+	var rest_tf := Transform3D(Basis.IDENTITY, Vector3(0.25, 0.065, -11.0))
+	var stake_at_rest := Vector3(0.0, rest_tf.origin.y, -12.192)
+	var expected_dist: float = ThrowMath.nearest_distance_inches(
+		rest_tf, stake_at_rest, Shoe.WIDTH * 0.5, Shoe.LENGTH * 0.5)
+	main.release_cache = {
+		"hand": "R", "zone": "toe", "hold": "flip", "slide_offset_m": 0.0,
+		"line_ft": 40, "origin_pos": Vector3.ZERO,
+		"head_yaw_deg": 0.0, "origin_yaw_deg": 0.0,
+		"samples": [], "release_pos": rest_tf.origin,
+		"release_quat": Quaternion.IDENTITY,
+		"velocity": Vector3.ZERO, "angular_velocity": Vector3.ZERO,
+	}
+	main.shoe.freeze = true
+	main.shoe.global_transform = rest_tf
+	main.has_contact = true
+	main.first_contact_pos = rest_tf.origin
+	main.state = "FLYING"
+	main._fly_time = 1.0
+	main._still_time = 0.0
+	check(await wait_state("STAND", 3.0), "controlled rest settles and returns under the quick timing")
+	var f2: FileAccess = FileAccess.open(rec_path, FileAccess.READ)
+	var last_throw: Dictionary = {}
+	if f2 != null:
+		for line2: String in f2.get_as_text().split("\n", false):
+			var p2: Variant = JSON.parse_string(line2)
+			if p2 is Dictionary and String(p2.get("type", "")) == "throw":
+				last_throw = p2
+	check(not last_throw.is_empty()
+		and absf(float(last_throw.get("landing_distance_in", -1.0)) - expected_dist) < 0.1,
+		"quick settle records the true-rest distance (%.2f in vs expected %.2f in)"
+		% [float(last_throw.get("landing_distance_in", -1.0)), expected_dist])
+	var settle_arr: Array = last_throw.get("settle_pos", [])
+	check(settle_arr.size() == 3
+		and Vector3(float(settle_arr[0]), float(settle_arr[1]), float(settle_arr[2])).distance_to(rest_tf.origin) < 0.002,
+		"quick settle records the rest position itself, not an earlier guess")
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))
 
 	print("---")

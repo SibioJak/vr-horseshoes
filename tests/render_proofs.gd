@@ -10,7 +10,10 @@ extends SceneTree
 ## ("left_hand"/"right_hand", "default" pose - the Duel's settled
 ## binding) and saves:
 ##   proofs/court_view.png - from the pitcher's head: pit + stake at
-##     40 ft centre, shoe stand right, board legible left.
+##     40 ft centre, both foul lines, both pedestals clear of the
+##     stance boxes, board legible left.
+##   proofs/board_closeup.png - the board face-on: every line of the
+##     status + controls text on the slab and legible.
 ##   proofs/held_shoe.png  - the shoe latched in the right hand via a
 ##     real tracker grip input, grab-zone markers visible.
 ## These prove the rendered path + input path work together; they do
@@ -114,6 +117,21 @@ func _run() -> void:
 	await settle(6)
 	await snap(cam_a, "res://proofs/court_view.png")
 	cam_a.queue_free()
+
+	# --- Proof A2: board close-up (all text on the slab, legible) ---
+	var face_dir: Vector3 = main.board_root.global_transform.basis.z
+	face_dir.y = 0.0
+	face_dir = face_dir.normalized()
+	var board_center: Vector3 = main.board_root.global_position + Vector3(0.0, 1.28, 0.0)
+	var cam_close := Camera3D.new()
+	cam_close.fov = 55.0
+	cam_close.position = board_center + face_dir * 1.35
+	main.add_child(cam_close)
+	cam_close.look_at(board_center, Vector3.UP)
+	cam_close.current = true
+	await settle(4)
+	await snap(cam_close, "res://proofs/board_closeup.png")
+	cam_close.queue_free()
 
 	# --- Proof B: grab the shoe through the tracker grip input ---
 	var toe_c: Vector3 = main.shoe.zone_world_center("toe")

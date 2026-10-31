@@ -139,6 +139,23 @@ func test_ringer_geometry() -> void:
 	check(d2 < 6.0, "shoe at 0.12 m offset lands inside the 6 in zone (%.2f in)" % d2)
 
 
+func test_line_classification() -> void:
+	# Fix Pass 3: every throw record carries the foul line it was
+	# pitched from, classified by the release point's horizontal
+	# distance to the stake (nearer 9.144 m = 30, nearer 12.192 = 40).
+	var stake := Vector3(0.0, 0.05, -12.192)
+	check(ThrowMath.line_ft_for_release(Vector3(0.0, 1.4, -3.048), stake) == 30,
+		"line: a release on the 30 ft line classifies as 30")
+	check(ThrowMath.line_ft_for_release(Vector3(0.0, 1.4, 0.0), stake) == 40,
+		"line: a release on the 40 ft line classifies as 40")
+	check(ThrowMath.line_ft_for_release(Vector3(0.0, 1.4, -6.0), stake) == 30,
+		"line: a mid-court release nearer the short line classifies as 30")
+	check(ThrowMath.line_ft_for_release(Vector3(0.0, 1.4, -1.0), stake) == 40,
+		"line: a between-lines release nearer the standard distance classifies as 40")
+	check(ThrowMath.line_ft_for_release(Vector3(0.30, 1.5, -3.10), stake) == 30,
+		"line: release height and a small lateral offset do not change the class")
+
+
 func test_recorder_schema() -> void:
 	var test_path: String = "user://test_throws.jsonl"
 	var abs_path: String = ProjectSettings.globalize_path(test_path)
@@ -148,7 +165,7 @@ func test_recorder_schema() -> void:
 	var samples: Array = arc_samples(Vector3(0.0, 2.0, -3.0), 0.2)
 	var ok: bool = rec.log_record({
 		"type": "throw", "ts": "test", "throw_index": 1, "hand": "R",
-		"hold": "flip", "zone": "toe", "slide_offset_m": 0.0,
+		"hold": "flip", "zone": "toe", "slide_offset_m": 0.0, "line_ft": 40,
 		"origin_release_pos": [0.0, 0.0, 0.0],
 		"samples": ThrowRecorder.sample_arr(samples),
 		"release_pos": [0.0, 1.2, 0.0], "release_quat": [0.0, 0.0, 0.0, 1.0],
@@ -170,7 +187,7 @@ func test_recorder_schema() -> void:
 		if parsed is Dictionary:
 			var recd: Dictionary = parsed
 			var required: Array[String] = ["type", "hand", "hold", "zone", "samples",
-				"origin_release_pos",
+				"origin_release_pos", "line_ft",
 				"release_velocity", "release_angular_velocity", "first_contact_pos",
 				"settle_pos", "landing_distance_in", "ringer", "flip_rotations", "turn_rotations"]
 			for key: String in required:
@@ -454,6 +471,7 @@ func _run() -> void:
 	test_release_math()
 	test_angular_math()
 	test_ringer_geometry()
+	test_line_classification()
 	test_recorder_schema()
 	test_grab_state()
 	test_locomotion_math()

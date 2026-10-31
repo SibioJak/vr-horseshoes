@@ -13,6 +13,8 @@ extends RefCounted
 ## estimate_velocity_origin_relative().
 
 const METERS_TO_INCHES: float = 39.3701
+const SHORT_LINE_DISTANCE_M: float = 9.144 # 30 ft from the stake
+const STANDARD_LINE_DISTANCE_M: float = 12.192 # 40 ft from the stake
 
 
 static func make_sample(t: float, pos: Vector3, quat: Quaternion, opos: Vector3 = Vector3.ZERO) -> Dictionary:
@@ -30,6 +32,18 @@ static func yaw_deg(fwd: Vector3) -> float:
 	if Vector2(fwd.x, fwd.z).length() < 0.0001:
 		return 0.0
 	return rad_to_deg(atan2(fwd.x, -fwd.z))
+
+
+## Which foul line a release belongs to, from the release point's
+## horizontal distance to the stake: nearer the 30 ft (9.144 m) line
+## distance classifies as 30, nearer the 40 ft (12.192 m) distance as
+## 40. Height is ignored - a release is high by definition, and its
+## height must not push a short-line throw into the standard class.
+static func line_ft_for_release(release_pos: Vector3, stake_pos: Vector3) -> int:
+	var d: float = Vector2(release_pos.x - stake_pos.x, release_pos.z - stake_pos.z).length()
+	var to_short: float = absf(d - SHORT_LINE_DISTANCE_M)
+	var to_standard: float = absf(d - STANDARD_LINE_DISTANCE_M)
+	return 30 if to_short < to_standard else 40
 
 
 ## Per-sample speeds by central difference (endpoints one-sided).
