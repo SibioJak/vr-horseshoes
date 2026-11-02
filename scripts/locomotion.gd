@@ -7,26 +7,25 @@ extends RefCounted
 ## assumption failed in his real play space - he walks virtually to
 ## the stand, up the court to inspect a landing, and between ends.
 ##
-## Pure math + one bit of snap-turn state, no scene access, so the
-## logic suites exercise exactly what the headset runs.
+## Pure math, no state, no scene access, so the logic suites
+## exercise exactly what the headset runs.
 ##
 ## Walk: RIGHT stick (moved from the left in Fix Pass 4, Chris's
 ## field order - his rig, his layout), head-relative on the flat,
 ## direct (no accel lag, no head-bob), ~2 m/s at full deflection
 ## past a radial deadzone.
-## Turn: LEFT stick X, 30-degree snap steps about the CAMERA's XZ
-## position, edge-armed so a held stick fires exactly once per push.
+## Turn: LEFT stick X, SMOOTH turning about the CAMERA's XZ
+## position at a rate proportional to deflection, up to
+## TURN_SPEED at full push (Fix Pass 5: the Fix Pass 2-4 snap
+## steps were replaced at Chris's field order - he felt the steps,
+## not smooth turning; there is no snap mode anymore).
 ## Left stick Y is deliberately unused.
 
 const WALK_SPEED: float = 2.0
 const DEADZONE: float = 0.15
-const SNAP_DEGREES: float = 30.0
-const SNAP_ON: float = 0.7
-const SNAP_OFF: float = 0.3
+const TURN_SPEED: float = 100.0 # degrees per second at full deflection
 const PLAY_CENTER := Vector3(0.0, 0.0, -6.096) # court centre (midpoint of the 40 ft)
 const PLAY_RADIUS: float = 25.0
-
-var _snap_armed: bool = true
 
 
 ## World-space displacement for one frame of walk-stick input.
@@ -87,19 +86,17 @@ static func rotate_about(tf: Transform3D, pivot_world: Vector3, angle_rad: float
 	return Transform3D(r * tf.basis, new_origin)
 
 
-## Snap-turn edge logic. Feed the left stick's X every frame;
-## returns the degrees to rotate THIS frame (0, +30, or -30).
+## Smooth-turn rate for one frame of left-stick X input; returns
+## the degrees to rotate THIS frame. Deflection past the deadzone
+## is rescaled exactly like walking, so a touch of stick turns
+## slowly and precisely and a full push turns at TURN_SPEED.
 ## Positive X (push right) turns right, which is a negative Godot
-## yaw. One turn per push past SNAP_ON; re-arms below SNAP_OFF.
-func snap_turn_update(stick_x: float) -> float:
-	if not _snap_armed:
-		if absf(stick_x) < SNAP_OFF:
-			_snap_armed = true
+## yaw - the sign sense the old snap had. Feed it every frame and
+## apply the result about the camera with rotate_about(); the
+## heading then moves in small continuous increments, never a step.
+static func turn_angle(stick_x: float, delta: float) -> float:
+	var mag: float = absf(stick_x)
+	if mag < DEADZONE or delta <= 0.0:
 		return 0.0
-	if stick_x > SNAP_ON:
-		_snap_armed = false
-		return -SNAP_DEGREES
-	if stick_x < -SNAP_ON:
-		_snap_armed = false
-		return SNAP_DEGREES
-	return 0.0
+	var scaled: float = (minf(mag, 1.0) - DEADZONE) / (1.0 - DEADZONE)
+	return -signf(stick_x) * scaled * TURN_SPEED * delta

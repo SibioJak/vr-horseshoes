@@ -164,24 +164,40 @@ func _run() -> void:
 	# --- Proof C: locomotion through the REAL tracker stick inputs ---
 	# (the same "primary" action the headset's thumbsticks feed).
 	# Pass-4 mapping: right_hand stick walks (forward push reads
-	# y=+1 on Chris's rig), left_hand stick X snaps the turn.
+	# y=+1 on Chris's rig), left_hand stick X turns smoothly (FP5).
 	set_stick(&"right_hand", Vector2(0.0, 1.0))
 	await create_timer(1.0).timeout
 	set_stick(&"right_hand", Vector2.ZERO)
 	var walked: Vector3 = main.origin.global_position
 	check(walked.z < -1.2 and walked.z > -2.8 and absf(walked.x) < 0.4,
 		"tracker right stick walks the origin forward (~2 m in 1 s, got %s)" % str(walked))
-	var head_before: Vector3 = main.cam.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+	# Smooth turn through the real tracker input: hold the left
+	# stick over, sampling the camera heading every ~0.1 s. The
+	# measured rate must be ~100 deg/s (asserted on rate - timer
+	# pacing varies under Xvfb), no step anywhere near the old
+	# 30 deg snap, origin untranslated.
+	var last_head: Vector3 = main.cam.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+	var p_max_step: float = 0.0
+	var p_total: float = 0.0
 	set_stick(&"left_hand", Vector2(1.0, 0.0))
-	await settle(6)
+	var p_t0: int = Time.get_ticks_msec()
+	for i: int in 5:
+		await create_timer(0.1).timeout
+		var h_now2: Vector3 = main.cam.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+		var p_step: float = absf(rad_to_deg(Vector2(last_head.x, last_head.z).angle_to(
+			Vector2(h_now2.x, h_now2.z))))
+		p_max_step = maxf(p_max_step, p_step)
+		p_total += p_step
+		last_head = h_now2
 	set_stick(&"left_hand", Vector2.ZERO)
-	var head_after: Vector3 = main.cam.global_transform.basis * Vector3(0.0, 0.0, -1.0)
-	var turn_ang: float = rad_to_deg(Vector2(head_before.x, head_before.z).angle_to(
-		Vector2(head_after.x, head_after.z)))
-	check(absf(absf(turn_ang) - 30.0) < 2.0,
-		"tracker left stick snaps the heading by 30 deg (got %.1f)" % turn_ang)
+	var p_secs: float = float(Time.get_ticks_msec() - p_t0) / 1000.0
+	var p_rate: float = p_total / maxf(p_secs, 0.001)
+	check(p_rate > 70.0 and p_rate < 130.0,
+		"tracker left stick turns smoothly at ~100 deg/s (got %.0f deg/s over %.2f s)" % [p_rate, p_secs])
+	check(p_max_step < 24.0,
+		"tracker turning has NO STEP: largest sampled heading change %.1f deg (snap was 30 at once)" % p_max_step)
 	check(main.origin.global_position.distance_to(walked) < 0.02,
-		"tracker snap turn does not translate the origin (moved %.3f m)" % main.origin.global_position.distance_to(walked))
+		"tracker smooth turn does not translate the origin (moved %.3f m)" % main.origin.global_position.distance_to(walked))
 
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))
 	print("---")

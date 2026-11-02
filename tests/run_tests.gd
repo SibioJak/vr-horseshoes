@@ -339,16 +339,50 @@ func test_locomotion_math() -> void:
 	check(Locomotion.clamp_origin(inside) == inside, "clamp: a position inside the disc is untouched")
 
 
-func test_snap_turn() -> void:
-	var loco := Locomotion.new()
-	check(loco.snap_turn_update(0.0) == 0.0, "snap: centred stick does nothing")
-	check(loco.snap_turn_update(0.5) == 0.0, "snap: 0.5 deflection is below the 0.7 fire line")
-	check(loco.snap_turn_update(0.85) == -30.0, "snap: push right fires ONE -30 deg (right) turn")
-	check(loco.snap_turn_update(0.9) == 0.0, "snap: held stick does not machine-gun")
-	check(loco.snap_turn_update(0.5) == 0.0, "snap: still latched above the 0.3 re-arm line")
-	check(loco.snap_turn_update(0.1) == 0.0, "snap: dropping below 0.3 re-arms (no turn)")
-	check(loco.snap_turn_update(-0.85) == 30.0, "snap: push left fires ONE +30 deg (left) turn")
-	check(loco.snap_turn_update(-0.9) == 0.0, "snap: held left does not machine-gun either")
+func test_smooth_turn() -> void:
+	# Fix Pass 5 (Chris's field order): the snap steps are GONE - the
+	# left stick turns CONTINUOUSLY at a deflection-proportional rate.
+	# Deadzone: centred and small inputs produce exactly nothing.
+	check(Locomotion.turn_angle(0.0, 0.016) == 0.0, "turn: centred stick does nothing")
+	check(Locomotion.turn_angle(0.14, 0.016) == 0.0, "turn: 0.14 deflection is inside the 0.15 deadzone")
+	check(Locomotion.turn_angle(-0.10, 0.016) == 0.0, "turn: -0.10 deflection is inside the deadzone")
+	# Full push for a full second = the max rate, signed both ways:
+	# push right turns right (negative Godot yaw), push left positive.
+	check(absf(Locomotion.turn_angle(1.0, 1.0) + 100.0) < 0.01,
+		"turn: full push right = -100 deg/s (got %.2f)" % Locomotion.turn_angle(1.0, 1.0))
+	check(absf(Locomotion.turn_angle(-1.0, 1.0) - 100.0) < 0.01,
+		"turn: full push left = +100 deg/s (got %.2f)" % Locomotion.turn_angle(-1.0, 1.0))
+	# Proportionality: the rescale maps 0.575 to exactly half rate,
+	# and the rate grows monotonically with deflection.
+	check(absf(Locomotion.turn_angle(0.575, 1.0) + 50.0) < 0.01,
+		"turn: 0.575 deflection is exactly half rate (-50 deg/s, got %.2f)" % Locomotion.turn_angle(0.575, 1.0))
+	var r_half: float = absf(Locomotion.turn_angle(0.5, 1.0))
+	var r_mid: float = absf(Locomotion.turn_angle(0.75, 1.0))
+	var r_full: float = absf(Locomotion.turn_angle(1.0, 1.0))
+	check(r_half < r_mid and r_mid < r_full,
+		"turn: rate grows with deflection (%.1f < %.1f < %.1f deg/s)" % [r_half, r_mid, r_full])
+	# NO-STEP regression: hold a full push for 0.5 s at 60 fps and
+	# apply each frame's angle about a camera pivot exactly as main
+	# does. Every single-frame step must be small (~1.7 deg, nowhere
+	# near the old 30 deg snap), the total lands at ~50 deg (half a
+	# second at the 100 deg/s max), and the camera never translates.
+	var pivot := Vector3(0.35, 1.6, 0.25)
+	var tf := Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, 0.0))
+	var cam_local := Transform3D(Basis.IDENTITY, pivot)
+	var max_step: float = 0.0
+	var total: float = 0.0
+	for i: int in 30:
+		var step: float = Locomotion.turn_angle(1.0, 1.0 / 60.0)
+		max_step = maxf(max_step, absf(step))
+		total += step
+		tf = Locomotion.rotate_about(tf, pivot, deg_to_rad(step))
+	check(max_step < 3.0,
+		"turn: NO STEP - largest single-frame change is %.2f deg (the old snap jumped 30)" % max_step)
+	check(absf(absf(total) - 50.0) < 0.5,
+		"turn: 0.5 s at full push totals ~50 deg (got %.2f)" % total)
+	var cam_after: Vector3 = tf * cam_local.origin
+	check(cam_after.distance_to(pivot) < 0.0001,
+		"turn: smooth turning about the camera never translates it (moved %.5f m)" % cam_after.distance_to(pivot))
 
 
 func test_rotate_about() -> void:
@@ -364,7 +398,7 @@ func test_rotate_about() -> void:
 	var head_after: Vector3 = out.basis * Vector3(0.0, 0.0, -1.0)
 	var head_expect: Vector3 = Basis(Vector3.UP, ang) * Vector3(0.0, 0.0, -1.0)
 	check(head_after.distance_to(head_expect) < 0.0001,
-		"rotate-about: heading rotates by exactly the snap angle")
+		"rotate-about: heading rotates by exactly the applied angle")
 	# A point fixed in origin space (the shoe stand) rides a circle
 	# around the camera's XZ: its distance to the pivot XZ is kept.
 	var p_local := Vector3(0.52, 0.785, 0.32)
@@ -477,7 +511,7 @@ func _run() -> void:
 	test_recorder_schema()
 	test_grab_state()
 	test_locomotion_math()
-	test_snap_turn()
+	test_smooth_turn()
 	test_rotate_about()
 	test_origin_relative_velocity()
 	test_yaw_deg()

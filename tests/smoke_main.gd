@@ -143,7 +143,7 @@ func _run() -> void:
 	# --- Locomotion through the production path (test stick hooks) ---
 	# Pass-4 mapping (Chris's field order): the RIGHT stick walks,
 	# with the field-corrected Y (his forward push reads y=+1 on
-	# this rig), and the LEFT stick X snaps the turn.
+	# this rig), and the LEFT stick X turns smoothly (Fix Pass 5).
 	main.test_stick["R"] = Vector2(0.0, 1.0)
 	await create_timer(2.0).timeout
 	main.test_stick["R"] = Vector2.ZERO
@@ -170,17 +170,37 @@ func _run() -> void:
 		"right stick no longer turns (pass-4 regression, turned %.1f deg)" % rx_turn)
 	check(main.origin.global_position.x > walked.x + 0.3,
 		"right stick X strafes +X with the unchanged sign (x %.2f -> %.2f)" % [walked.x, main.origin.global_position.x])
-	# Left stick X fires ONE 30 deg snap about the camera, in place.
-	var pre_snap: Vector3 = main.origin.global_position
+	# Left stick X turns SMOOTHLY about the camera (Fix Pass 5):
+	# hold a full push, sampling the heading every ~0.1 s of real
+	# time. The measured RATE must land at ~100 deg/s (timer pacing
+	# varies between environments, so the assertion is on rate, not
+	# a fixed total), no sampled step may come anywhere near the
+	# old 30 deg snap, and the player must not translate. Against
+	# the old snap both assertions fail: one 30 deg step, then a
+	# ~44 deg/s average while the stick sits latched.
+	var pre_turn: Vector3 = main.origin.global_position
+	var last_heading: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+	var max_step: float = 0.0
+	var total_turn: float = 0.0
 	main.test_stick["L"] = Vector2(1.0, 0.0)
-	await frames(4)
+	var turn_t0: int = Time.get_ticks_msec()
+	for i: int in 5:
+		await create_timer(0.1).timeout
+		var h_now: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+		var step_deg: float = absf(rad_to_deg(Vector2(last_heading.x, last_heading.z).angle_to(
+			Vector2(h_now.x, h_now.z))))
+		max_step = maxf(max_step, step_deg)
+		total_turn += step_deg
+		last_heading = h_now
 	main.test_stick["L"] = Vector2.ZERO
-	var heading: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
-	var turn_deg: float = rad_to_deg(Vector2(heading.x, heading.z).angle_to(Vector2(0.0, -1.0)))
-	check(absf(absf(turn_deg) - 30.0) < 1.5,
-		"left stick snaps the heading by 30 deg (got %.1f)" % turn_deg)
-	check(main.origin.global_position.distance_to(pre_snap) < 0.01,
-		"snap turn does not translate the player (moved %.3f m)" % main.origin.global_position.distance_to(pre_snap))
+	var turn_secs: float = float(Time.get_ticks_msec() - turn_t0) / 1000.0
+	var turn_rate: float = total_turn / maxf(turn_secs, 0.001)
+	check(turn_rate > 70.0 and turn_rate < 130.0,
+		"left stick held turns smoothly at ~100 deg/s (got %.0f deg/s over %.2f s)" % [turn_rate, turn_secs])
+	check(max_step < 24.0,
+		"turning has NO STEP: largest sampled heading change %.1f deg (the old snap jumped 30 at once)" % max_step)
+	check(main.origin.global_position.distance_to(pre_turn) < 0.01,
+		"smooth turn does not translate the player (moved %.3f m)" % main.origin.global_position.distance_to(pre_turn))
 	await frames(2)
 	main.origin.global_transform = Transform3D.IDENTITY
 

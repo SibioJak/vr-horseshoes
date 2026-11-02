@@ -76,8 +76,6 @@ var _fly_time: float = 0.0
 var _still_time: float = 0.0
 var _wait_time: float = 0.0
 
-var locomotion := Locomotion.new()
-
 # Test hooks (used by the headless suites / render proofs only).
 var test_hand_tf: Dictionary = {}
 var test_grip: Dictionary = {}
@@ -483,8 +481,8 @@ func _find_candidate() -> void:
 ## at Chris's field order: the RIGHT stick walks, the LEFT stick
 ## turns). Runs BEFORE sampling/grab so every hand transform this
 ## frame already includes the new origin. Walk is head-relative and
-## direct; snap turn rotates the origin about the camera so turning
-## never translates the player.
+## direct; the smooth turn rotates the origin about the camera so
+## turning never translates the player.
 func _process_locomotion(delta: float) -> void:
 	if delta <= 0.0:
 		return
@@ -493,7 +491,7 @@ func _process_locomotion(delta: float) -> void:
 	if disp != Vector3.ZERO:
 		origin.global_position = Locomotion.clamp_origin(origin.global_position + disp)
 	var ls: Vector2 = _stick_value("L")
-	var ang: float = locomotion.snap_turn_update(ls.x)
+	var ang: float = Locomotion.turn_angle(ls.x, delta)
 	if not is_zero_approx(ang):
 		origin.global_transform = Locomotion.rotate_about(
 			origin.global_transform, cam.global_position, deg_to_rad(ang))
@@ -629,8 +627,8 @@ func _release_shoe(release_samples: Array) -> void:
 			"line_ft": ThrowMath.line_ft_for_release(release_tf.origin, STAKE_POS),
 			"origin_pos": origin.global_position,
 			# Stance evidence, captured at the release moment: where
-			# the HEAD faced vs how the whole RIG was yawed (snap-turn
-			# or a crooked recenter). Their difference separates
+			# the HEAD faced vs how the whole RIG was yawed (stick
+			# turns or a crooked recenter). Their difference separates
 			# "he turned his head" from "the rig was rotated".
 			"head_yaw_deg": ThrowMath.yaw_deg(-cam.global_transform.basis.z),
 			"origin_yaw_deg": ThrowMath.yaw_deg(-origin.global_transform.basis.z),
