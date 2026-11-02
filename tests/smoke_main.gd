@@ -89,6 +89,12 @@ func _on_stake_test_body_entered(body: Node) -> void:
 ## body hit, and how deep past the stake's axis plane did the
 ## shoe's centre ever get while lined up with the stake (a ringer
 ## wrap legitimately reaches ~0.07 m; a ghost sails far past)?
+## Fix Pass 9 re-derivation: "hit" now means the stake was
+## engaged by EITHER the physics solver (body_entered) OR the
+## shoe's sweep guard (stake_guard_saves) - the guard exists
+## because the solver + CCD demonstrably miss a fast flat shoe
+## in the upper band. The guarded property is unchanged: a
+## dead-centre full-speed shoe must not pass the stake untouched.
 func fire_at_stake(release_pos: Vector3, vel: Vector3, omega: float) -> Dictionary:
 	# Wait for the shoe to sit stocked at its home pedestal, then
 	# stand the player at that home line so the pass-7 restock
@@ -102,6 +108,7 @@ func fire_at_stake(release_pos: Vector3, vel: Vector3, omega: float) -> Dictiona
 	main.origin.global_transform = Transform3D(Basis.IDENTITY,
 		Vector3(0.0, 0.0, main.line_z_for_ft(int(main.active_stand_line_ft))))
 	stake_contacts.clear()
+	var saves0: int = int(main.shoe.stake_guard_saves)
 	var toe_c: Vector3 = main.shoe.zone_world_center("toe")
 	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, toe_c)
 	main.test_grip["R"] = 1.0
@@ -137,7 +144,11 @@ func fire_at_stake(release_pos: Vector3, vel: Vector3, omega: float) -> Dictiona
 			var h: float = (p.y - stake_pos.y) / cos(deg_to_rad(8.0))
 			var axis_z: float = stake_pos.z + h * sin(deg_to_rad(8.0))
 			max_beyond = maxf(max_beyond, axis_z - p.z)
-	return {"fired": fired, "contact": stake_contacts.has(stake_body),
+	return {"fired": fired,
+		"contact": stake_contacts.has(stake_body) or int(main.shoe.stake_guard_saves) > saves0,
+		"guard_save": int(main.shoe.stake_guard_saves) > saves0,
+		"axis_dist": Vector2(main.shoe.global_position.x - stake_pos.x,
+			main.shoe.global_position.z - stake_pos.z).length(),
 		"max_beyond": max_beyond}
 
 
@@ -672,11 +683,18 @@ func _run() -> void:
 		"pass 8 shot B: centre never crosses to the far side untouched (deepest %.3f m)"
 		% float(shot_b["max_beyond"]))
 	# (c) Ground-skimming: touches down inside the pit and skims
-	# into the stake base, tumbling, dead centre.
+	# into the stake base, tumbling, dead centre. With damping
+	# removed (pass 9) the shoe arrives livelier and can thread
+	# the opening slowly, settling wrapped AROUND the stake with
+	# no single registrable contact - a ringer, not a ghost.
+	# Either evidence answers the check: a stake engagement
+	# (solver or guard), or a final rest encircling the stake
+	# (centre within 6 cm of the axis).
 	var shot_c: Dictionary = await fire_at_stake(
 		Vector3(0.0, 0.75, -8.3), Vector3(0.0, -0.2, -9.6), -7.0)
-	check(bool(shot_c["fired"]) and bool(shot_c["contact"]),
-		"pass 8 shot C (pit touchdown, skim into the base): the stake is HIT, not ghosted")
+	check(bool(shot_c["fired"]) and (bool(shot_c["contact"]) or float(shot_c["axis_dist"]) < 0.06),
+		"pass 8 shot C (pit touchdown, skim into the base): the stake is HIT, not ghosted (or the shoe settles wrapped on it, axis dist %.3f m)"
+		% float(shot_c["axis_dist"]))
 	check(bool(shot_c["contact"]) or float(shot_c["max_beyond"]) <= 0.12,
 		"pass 8 shot C: centre never crosses to the far side untouched (deepest %.3f m)"
 		% float(shot_c["max_beyond"]))
@@ -689,6 +707,31 @@ func _run() -> void:
 	check(bool(shot_d["contact"]) or float(shot_d["max_beyond"]) <= 0.12,
 		"pass 8 shot D: centre never crosses to the far side untouched (deepest %.3f m)"
 		% float(shot_d["max_beyond"]))
+	# --- Fix Pass 9: the damping pin and the sweep guard ---
+	# The technique audit found the shoe had silently inherited
+	# the physics space's default 0.1 linear + angular damp:
+	# spin bled ~10%/s in flight and throws landed ~1 m short of
+	# their ballistic line. The shoe now pins both damps to zero
+	# in REPLACE mode - assert it stays that way.
+	check(main.shoe.linear_damp_mode == RigidBody3D.DAMP_MODE_REPLACE
+		and main.shoe.angular_damp_mode == RigidBody3D.DAMP_MODE_REPLACE
+		and is_zero_approx(main.shoe.linear_damp) and is_zero_approx(main.shoe.angular_damp),
+		"pass 9: shoe damping pinned to zero in REPLACE mode (no silent space-default decay)")
+	# The undamped shoe arrives faster and higher, and the solver
+	# + CCD miss the flat dead-centre shot A outright (it crossed
+	# 0.66 m past the stake untouched in the audit's traces). The
+	# sweep guard is what engages it now: shot A above counted as
+	# a hit through solver contact OR a guard save (see
+	# fire_at_stake), and with the guard disabled the same shot
+	# must ghost again (negative control).
+	main.shoe.guard_enabled = false
+	var shot_ctl: Dictionary = await fire_at_stake(
+		Vector3(0.0, 1.56, -7.6), Vector3(0.0, 0.0, -9.2), 0.0)
+	main.shoe.guard_enabled = true
+	check(bool(shot_ctl["fired"]) and not bool(shot_ctl["contact"])
+		and float(shot_ctl["max_beyond"]) > 0.12,
+		"pass 9 control: guard disabled, shot A ghosts again (deepest %.3f m untouched) - the guard is the save"
+		% float(shot_ctl["max_beyond"]))
 	main.origin.global_transform = Transform3D.IDENTITY
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))
 

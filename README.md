@@ -46,8 +46,16 @@ settle position, landing distance in inches, and ringer flags.
 ```
 ~/workspace/tools/godot/Godot_v4.7-stable_linux.x86_64 --headless --path . --script tests/run_tests.gd
 ~/workspace/tools/godot/Godot_v4.7-stable_linux.x86_64 --headless --path . --script tests/smoke_main.gd
+~/workspace/tools/godot/Godot_v4.7-stable_linux.x86_64 --headless --path . --script tests/technique_audit.gd
 xvfb-run -a -s "-screen 0 1280x800x24" ~/workspace/tools/godot/Godot_v4.7-stable_linux.x86_64 --path . --script tests/render_proofs.gd
 ```
+
+The technique audit (Fix Pass 9) scripts each real pitching
+technique — flip, 3/4 / 1-1/4 / 1-3/4 turns, reverse turn —
+through the production release and proves it arrives at the
+stake with its rotation count and opening intact. It is the
+standing guard on Chris's rule that the physics must allow
+every technique, whatever it is.
 
 Rendered proofs land in `proofs/` (court_view.png, held_shoe.png).
 Suites verify math and wiring — feel is judged in the headset only.

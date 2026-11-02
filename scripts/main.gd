@@ -39,6 +39,9 @@ var xr_ok: bool = false
 var head_tracking_ok: bool = false
 
 var shoe: Shoe
+var stake_body_node: StaticBody3D = null
+var stake_axis_a: Vector3 = Vector3.ZERO # stake collision axis endpoints (world)
+var stake_axis_b: Vector3 = Vector3.ZERO
 var stand_tfs: Dictionary = {} # line_ft (30/40) -> pedestal shoe transform
 var stand_tf: Transform3D # the pedestal the shoe currently belongs to
 var active_stand_line_ft: int = 40
@@ -287,6 +290,15 @@ func _build_world() -> void:
 	scs.shape = scyl
 	scs.position = Vector3(0.0, 0.058, 0.0)
 	stake_body.add_child(scs)
+	# Fix Pass 9: even the fat core + CCD does not stop a fast
+	# FLAT shoe in the upper band (measured ghosts at centre
+	# heights 0.21-0.34, sub-step graze windows the cast misses).
+	# The shoe therefore carries a sweep guard against this
+	# stake (see shoe.gd): hand it the body and the collision
+	# cylinder's world axis endpoints.
+	stake_body_node = stake_body
+	stake_axis_a = stake_pivot.global_transform * Vector3(0.0, 0.058 - 0.31, 0.0)
+	stake_axis_b = stake_pivot.global_transform * Vector3(0.0, 0.058 + 0.31, 0.0)
 
 	# Foul lines the pitcher stands behind: the 40 ft standard and
 	# the 30 ft short line (NHPA learning distance, Fix Pass 3).
@@ -430,6 +442,11 @@ func _update_board() -> void:
 func _spawn_shoe() -> void:
 	shoe = Shoe.new()
 	add_child(shoe)
+	shoe.guard_axis_a = stake_axis_a
+	shoe.guard_axis_b = stake_axis_b
+	shoe.guard_radius = STAKE_COLLISION_RADIUS
+	shoe.guard_body = stake_body_node
+	shoe.guard_enabled = true
 	shoe.freeze = true
 	shoe.global_transform = stand_tf
 	shoe.body_entered.connect(_on_shoe_body_entered)
@@ -695,6 +712,7 @@ func _release_shoe(release_samples: Array) -> void:
 		_fly_time = 0.0
 		_still_time = 0.0
 		state = "FLYING"
+		shoe.reset_stake_guard()
 		shoe.freeze = false
 		shoe.global_transform = release_tf
 		shoe.linear_velocity = vel
