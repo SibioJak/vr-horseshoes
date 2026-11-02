@@ -89,9 +89,9 @@ func _run() -> void:
 	check(main.controls_label.text.contains("GRAB") and main.controls_label.text.contains("THROW")
 		and main.controls_label.text.contains("SLIDE") and main.controls_label.text.contains("RECENTER"),
 		"board lists every control (grab/slide/throw/recenter)")
-	check(main.controls_label.text.contains("Right stick: walk")
-		and main.controls_label.text.contains("Left stick: turn"),
-		"board lists the pass-4 stick controls (swapped: right walks, left turns)")
+	check(main.controls_label.text.contains("Left stick: move")
+		and main.controls_label.text.contains("Right stick: turn"),
+		"board lists the pass-6 standard stick controls (left moves, right turns)")
 	check(main.controls_label.text.contains("30 FT LINE"),
 		"board notes the 30 ft short line (pass 3)")
 	check(main.status_label.text.contains("THROWS: 0"), "board starts at zero throws")
@@ -141,36 +141,39 @@ func _run() -> void:
 	check(main.active_stand_line_ft == 40, "the shoe starts homed to the 40 ft pedestal")
 
 	# --- Locomotion through the production path (test stick hooks) ---
-	# Pass-4 mapping (Chris's field order): the RIGHT stick walks,
-	# with the field-corrected Y (his forward push reads y=+1 on
-	# this rig), and the LEFT stick X turns smoothly (Fix Pass 5).
-	main.test_stick["R"] = Vector2(0.0, 1.0)
+	# Pass-6 mapping (STANDARD twin-stick, Chris's field order): the
+	# LEFT stick walks, with the FP4 field-corrected Y (his forward
+	# push reads y=+1 on this rig), and the RIGHT stick X turns
+	# smoothly (Fix Pass 5 math). The two blend (checked below).
+	main.test_stick["L"] = Vector2(0.0, 1.0)
 	await create_timer(2.0).timeout
-	main.test_stick["R"] = Vector2.ZERO
+	main.test_stick["L"] = Vector2.ZERO
 	var walked: Vector3 = main.origin.global_position
 	check(walked.z < -3.2 and walked.z > -4.8 and absf(walked.x) < 0.3,
-		"right stick forward push walks the origin ~4 m in the facing direction in 2 s (got %s)" % str(walked))
-	# Regression: the OLD mapping is dead - the left stick no longer
-	# walks (a full 0.5 s forward push must not move the player).
-	main.test_stick["L"] = Vector2(0.0, 1.0)
-	await create_timer(0.5).timeout
-	main.test_stick["L"] = Vector2.ZERO
-	check(main.origin.global_position.distance_to(walked) < 0.01,
-		"left stick no longer walks (pass-4 regression, moved %.3f m)" % main.origin.global_position.distance_to(walked))
-	# Right stick X strafes with the unchanged sign and no longer
-	# turns (heading must hold while the origin slides +X).
-	var heading_rx: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
-	main.test_stick["R"] = Vector2(1.0, 0.0)
+		"left stick forward push walks the origin ~4 m in the facing direction in 2 s (got %s)" % str(walked))
+	# Regression: the pass-4/5 assignment is dead - the right stick
+	# no longer walks (its Y is unused; a full 0.5 s forward push
+	# must not move the player).
+	main.test_stick["R"] = Vector2(0.0, 1.0)
 	await create_timer(0.5).timeout
 	main.test_stick["R"] = Vector2.ZERO
-	var heading_rx2: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
-	var rx_turn: float = rad_to_deg(Vector2(heading_rx.x, heading_rx.z).angle_to(
-		Vector2(heading_rx2.x, heading_rx2.z)))
-	check(absf(rx_turn) < 1.5,
-		"right stick no longer turns (pass-4 regression, turned %.1f deg)" % rx_turn)
+	check(main.origin.global_position.distance_to(walked) < 0.01,
+		"right stick no longer walks (pass-6 regression, moved %.3f m)" % main.origin.global_position.distance_to(walked))
+	# Left stick X strafes with the unchanged sign and no longer
+	# turns (heading must hold while the origin slides +X).
+	var heading_lx: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+	main.test_stick["L"] = Vector2(1.0, 0.0)
+	await create_timer(0.5).timeout
+	main.test_stick["L"] = Vector2.ZERO
+	var heading_lx2: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+	var lx_turn: float = rad_to_deg(Vector2(heading_lx.x, heading_lx.z).angle_to(
+		Vector2(heading_lx2.x, heading_lx2.z)))
+	check(absf(lx_turn) < 1.5,
+		"left stick no longer turns (pass-6 regression, turned %.1f deg)" % lx_turn)
 	check(main.origin.global_position.x > walked.x + 0.3,
-		"right stick X strafes +X with the unchanged sign (x %.2f -> %.2f)" % [walked.x, main.origin.global_position.x])
-	# Left stick X turns SMOOTHLY about the camera (Fix Pass 5):
+		"left stick X strafes +X with the unchanged sign (x %.2f -> %.2f)" % [walked.x, main.origin.global_position.x])
+	# Right stick X turns SMOOTHLY about the camera (Fix Pass 5
+	# math, re-pointed at the right stick in Pass 6):
 	# hold a full push, sampling the heading every ~0.1 s of real
 	# time. The measured RATE must land at ~100 deg/s (timer pacing
 	# varies between environments, so the assertion is on rate, not
@@ -182,7 +185,7 @@ func _run() -> void:
 	var last_heading: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
 	var max_step: float = 0.0
 	var total_turn: float = 0.0
-	main.test_stick["L"] = Vector2(1.0, 0.0)
+	main.test_stick["R"] = Vector2(1.0, 0.0)
 	var turn_t0: int = Time.get_ticks_msec()
 	for i: int in 5:
 		await create_timer(0.1).timeout
@@ -192,15 +195,48 @@ func _run() -> void:
 		max_step = maxf(max_step, step_deg)
 		total_turn += step_deg
 		last_heading = h_now
-	main.test_stick["L"] = Vector2.ZERO
+	main.test_stick["R"] = Vector2.ZERO
 	var turn_secs: float = float(Time.get_ticks_msec() - turn_t0) / 1000.0
 	var turn_rate: float = total_turn / maxf(turn_secs, 0.001)
 	check(turn_rate > 70.0 and turn_rate < 130.0,
-		"left stick held turns smoothly at ~100 deg/s (got %.0f deg/s over %.2f s)" % [turn_rate, turn_secs])
+		"right stick held turns smoothly at ~100 deg/s (got %.0f deg/s over %.2f s)" % [turn_rate, turn_secs])
 	check(max_step < 24.0,
 		"turning has NO STEP: largest sampled heading change %.1f deg (the old snap jumped 30 at once)" % max_step)
 	check(main.origin.global_position.distance_to(pre_turn) < 0.01,
 		"smooth turn does not translate the player (moved %.3f m)" % main.origin.global_position.distance_to(pre_turn))
+	await frames(2)
+	main.origin.global_transform = Transform3D.IDENTITY
+	# --- BLEND (Pass 6): both sticks at once must curve the path ---
+	# Left stick forward (walk) AND right stick sideways (turn),
+	# held together for ~0.5 s. The player must BOTH displace
+	# (> 0.5 m - a curved walk, not a turn in place) AND change
+	# heading (> 20 deg of smooth turn), with no single sampled
+	# step anywhere near the old snap. Neither stick alone can
+	# produce both effects, so this fails if either assignment or
+	# the same-frame application breaks.
+	var blend_from: Vector3 = main.origin.global_position
+	var blend_last: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+	var blend_max_step: float = 0.0
+	var blend_total: float = 0.0
+	main.test_stick["L"] = Vector2(0.0, 1.0)
+	main.test_stick["R"] = Vector2(1.0, 0.0)
+	for i: int in 5:
+		await create_timer(0.1).timeout
+		var bh_now: Vector3 = main.origin.global_transform.basis * Vector3(0.0, 0.0, -1.0)
+		var b_step: float = absf(rad_to_deg(Vector2(blend_last.x, blend_last.z).angle_to(
+			Vector2(bh_now.x, bh_now.z))))
+		blend_max_step = maxf(blend_max_step, b_step)
+		blend_total += b_step
+		blend_last = bh_now
+	main.test_stick["L"] = Vector2.ZERO
+	main.test_stick["R"] = Vector2.ZERO
+	var blend_disp: float = main.origin.global_position.distance_to(blend_from)
+	check(blend_disp > 0.5,
+		"blended input walks WHILE turning: displaced %.2f m in ~0.5 s (walk alone would give ~1 m, turn alone ~0)" % blend_disp)
+	check(blend_total > 20.0,
+		"blended input turns WHILE walking: heading changed %.1f deg in ~0.5 s" % blend_total)
+	check(blend_max_step < 24.0,
+		"blended turning has NO STEP: largest sampled heading change %.1f deg" % blend_max_step)
 	await frames(2)
 	main.origin.global_transform = Transform3D.IDENTITY
 

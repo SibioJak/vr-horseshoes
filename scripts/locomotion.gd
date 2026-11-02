@@ -10,16 +10,27 @@ extends RefCounted
 ## Pure math, no state, no scene access, so the logic suites
 ## exercise exactly what the headset runs.
 ##
-## Walk: RIGHT stick (moved from the left in Fix Pass 4, Chris's
-## field order - his rig, his layout), head-relative on the flat,
-## direct (no accel lag, no head-bob), ~2 m/s at full deflection
-## past a radial deadzone.
-## Turn: LEFT stick X, SMOOTH turning about the CAMERA's XZ
+## Fix Pass 6 restored the STANDARD twin-stick scheme, Chris's
+## field order after he loaded Ancient Dungeon VR to check what
+## his hands know: "When you see me move, that's all left stick.
+## Turning is right stick. That's the standard in most games. And
+## then the two are blended by player to get where you're going."
+## (FP2 shipped this assignment; FP4 swapped the sticks; FP5 put
+## the smooth turn on the left. This pass puts the assignment
+## back, keeping FP4's walk sign and FP5's smooth turn.)
+##
+## Walk: LEFT stick, head-relative on the flat, direct (no accel
+## lag, no head-bob), ~2 m/s at full deflection past a radial
+## deadzone. The Y sign is FP4's field-corrected one - see
+## walk_displacement; it travelled with the walk math, unchanged.
+## Turn: RIGHT stick X, SMOOTH turning about the CAMERA's XZ
 ## position at a rate proportional to deflection, up to
 ## TURN_SPEED at full push (Fix Pass 5: the Fix Pass 2-4 snap
 ## steps were replaced at Chris's field order - he felt the steps,
 ## not smooth turning; there is no snap mode anymore).
-## Left stick Y is deliberately unused.
+## Right stick Y is deliberately unused. The two sticks are read
+## and applied independently in the same frame, so the player
+## blends them into a curved path.
 
 const WALK_SPEED: float = 2.0
 const DEADZONE: float = 0.15
@@ -86,7 +97,7 @@ static func rotate_about(tf: Transform3D, pivot_world: Vector3, angle_rad: float
 	return Transform3D(r * tf.basis, new_origin)
 
 
-## Smooth-turn rate for one frame of left-stick X input; returns
+## Smooth-turn rate for one frame of right-stick X input; returns
 ## the degrees to rotate THIS frame. Deflection past the deadzone
 ## is rescaled exactly like walking, so a touch of stick turns
 ## slowly and precisely and a full push turns at TURN_SPEED.

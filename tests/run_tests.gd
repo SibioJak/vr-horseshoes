@@ -341,7 +341,7 @@ func test_locomotion_math() -> void:
 
 func test_smooth_turn() -> void:
 	# Fix Pass 5 (Chris's field order): the snap steps are GONE - the
-	# left stick turns CONTINUOUSLY at a deflection-proportional rate.
+	# turn stick turns CONTINUOUSLY at a deflection-proportional rate.
 	# Deadzone: centred and small inputs produce exactly nothing.
 	check(Locomotion.turn_angle(0.0, 0.016) == 0.0, "turn: centred stick does nothing")
 	check(Locomotion.turn_angle(0.14, 0.016) == 0.0, "turn: 0.14 deflection is inside the 0.15 deadzone")
