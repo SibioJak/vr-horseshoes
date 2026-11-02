@@ -14,6 +14,8 @@ extends Node3D
 ## on this rig.
 
 const STAKE_POS := Vector3(0.0, 0.05, -12.192) # pit surface point, 40 ft from the foul line (z=0)
+const STAKE_VISUAL_RADIUS: float = 0.0127 # the 1 in steel Chris sees
+const STAKE_COLLISION_RADIUS: float = 0.0157 # visual + 3 mm (Fix Pass 8, see _build_world)
 const PIT_SIZE := Vector3(0.914, 0.05, 1.829) # 36 in x 72 in
 const FOUL_40_Z: float = 0.0
 const FOUL_30_Z: float = -3.048 # 30 ft line: 9.144 m from the stake
@@ -256,16 +258,31 @@ func _build_world() -> void:
 	stake_pivot.add_child(stake_body)
 	var smi := MeshInstance3D.new()
 	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.0127
-	cyl.bottom_radius = 0.0127
+	cyl.top_radius = STAKE_VISUAL_RADIUS
+	cyl.bottom_radius = STAKE_VISUAL_RADIUS
 	cyl.height = 0.62
 	smi.mesh = cyl
 	smi.position = Vector3(0.0, 0.058, 0.0)
 	smi.material_override = _mat(Color(0.55, 0.57, 0.62))
 	stake_body.add_child(smi)
+	# Fix Pass 8 - the stake is NOT hollow, and never was: the
+	# collision shape is a solid CylinderShape3D, audited in code
+	# and at runtime. The hole is step size: at 60 Hz a 9 m/s shoe
+	# travels ~15 cm per physics step past a 25 mm target, and the
+	# shoe's shape-cast CCD sweeps its LINEAR motion only - it
+	# cannot sweep the tumble. Chris's one ghost in 88 throws
+	# (2026-11-02) crossed ~9 cm off centre at 0.18 m height,
+	# mid-skip after a touchdown: exactly the phase a step or a
+	# linear cast can slip. The collision core therefore runs
+	# +3 mm fat (the mesh stays a true 1 in) - enough to close
+	# graze-phase gaps, small enough to stay inside the visual
+	# contact tolerance of a 21-27 mm thick shoe, so no honest
+	# near-miss gets stolen. Scoring geometry (ringer window,
+	# landing distance) still measures against the true 1 in
+	# stake; only contact wears the extra 3 mm.
 	var scs := CollisionShape3D.new()
 	var scyl := CylinderShape3D.new()
-	scyl.radius = 0.0127
+	scyl.radius = STAKE_COLLISION_RADIUS
 	scyl.height = 0.62
 	scs.shape = scyl
 	scs.position = Vector3(0.0, 0.058, 0.0)

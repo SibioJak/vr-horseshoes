@@ -9,6 +9,8 @@ extends SceneTree
 var failures: int = 0
 var checks: int = 0
 var main: Node
+var stake_body: StaticBody3D = null
+var stake_contacts: Array = []
 
 
 func check(cond: bool, name: String) -> void:
@@ -66,6 +68,77 @@ func wait_shoe_at(line_ft: int, timeout_sec: float) -> float:
 			return float(Time.get_ticks_msec() - t0) / 1000.0
 		await create_timer(0.05).timeout
 	return -1.0
+
+
+## Fix Pass 8: find the stake body in the built scene (a
+## StaticBody3D under the pivot at Main.STAKE_POS).
+func find_stake() -> void:
+	for child: Node in main.get_children():
+		if child is Node3D and (child as Node3D).position.distance_to(main.STAKE_POS) < 0.001:
+			for sub: Node in child.get_children():
+				if sub is StaticBody3D:
+					stake_body = sub as StaticBody3D
+
+
+func _on_stake_test_body_entered(body: Node) -> void:
+	stake_contacts.append(body)
+
+
+## Fix Pass 8: fire one shot at the stake through the production
+## grab/release path and watch it the whole way: was the stake
+## body hit, and how deep past the stake's axis plane did the
+## shoe's centre ever get while lined up with the stake (a ringer
+## wrap legitimately reaches ~0.07 m; a ghost sails far past)?
+func fire_at_stake(release_pos: Vector3, vel: Vector3, omega: float) -> Dictionary:
+	# Wait for the shoe to sit stocked at its home pedestal, then
+	# stand the player at that home line so the pass-7 restock
+	# watcher cannot relocate the shoe mid-grab.
+	for i: int in 120:
+		await physics_frame
+		if String(main.state) == "STAND":
+			var home_tf: Transform3D = main.stand_tfs[int(main.active_stand_line_ft)]
+			if main.shoe.global_position.distance_to(home_tf.origin) < 0.01:
+				break
+	main.origin.global_transform = Transform3D(Basis.IDENTITY,
+		Vector3(0.0, 0.0, main.line_z_for_ft(int(main.active_stand_line_ft))))
+	stake_contacts.clear()
+	var toe_c: Vector3 = main.shoe.zone_world_center("toe")
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, toe_c)
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	if String(main.state) != "HELD":
+		return {"fired": false, "contact": false, "max_beyond": 0.0}
+	# Toe/flip hold, identity hand: shoe origin = hand + this offset.
+	var hand_pos: Vector3 = release_pos - Vector3(0.0, -0.018, -0.0834)
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, hand_pos)
+	await frames(4)
+	var now: float = float(Time.get_ticks_msec()) / 1000.0
+	var dur: float = 0.30
+	var hz: float = 90.0
+	var samples: Array = []
+	for i: int in int(dur * hz) + 1:
+		var t: float = float(i) / hz
+		var q := Quaternion(Vector3.RIGHT, omega * (t - dur))
+		samples.append(ThrowMath.make_sample(now - dur + t,
+			release_pos + vel * (t - dur), q))
+	main.samples = samples
+	main._release_shoe(samples)
+	main.grab_state.reset()
+	main.test_grip["R"] = 0.0
+	var fired: bool = String(main.state) == "FLYING"
+	var stake_pos: Vector3 = main.STAKE_POS
+	var max_beyond: float = -1e9
+	var elapsed: float = 0.0
+	while String(main.state) == "FLYING" and elapsed < 12.0:
+		await physics_frame
+		elapsed += 1.0 / 60.0
+		var p: Vector3 = main.shoe.global_position
+		if p.y > -0.05 and p.y < 0.50 and absf(p.x) < 0.11:
+			var h: float = (p.y - stake_pos.y) / cos(deg_to_rad(8.0))
+			var axis_z: float = stake_pos.z + h * sin(deg_to_rad(8.0))
+			max_beyond = maxf(max_beyond, axis_z - p.z)
+	return {"fired": fired, "contact": stake_contacts.has(stake_body),
+		"max_beyond": max_beyond}
 
 
 ## Wait until the tracked test-hand speed estimate settles (a
@@ -552,6 +625,71 @@ func _run() -> void:
 	check(settle_arr.size() == 3
 		and Vector3(float(settle_arr[0]), float(settle_arr[1]), float(settle_arr[2])).distance_to(rest_tf.origin) < 0.002,
 		"quick settle records the rest position itself, not an earlier guess")
+
+	# --- Fix Pass 8: a shoe must never ghost through the stake ---
+	# Field report (Chris, 2026-11-02): a shoe went "right through
+	# stake... think it's hollow". Audit: the stake collision is a
+	# SOLID cylinder and the shoe's continuous CD is on - the hole
+	# is step size vs a 25 mm target (a 9 m/s shoe steps ~15 cm;
+	# the linear CCD cast cannot sweep the tumble). His throw
+	# crossed ~9 cm off centre at 0.18 m height, mid-skip. These
+	# guards pin the fix in place: the visual stays 1 in, the
+	# collision core runs +3 mm, CCD stays on, and dead-centre
+	# full-speed shots through the production path must CLANG.
+	find_stake()
+	check(stake_body != null, "pass 8: stake body found in the built scene")
+	var stake_col_radius: float = -1.0
+	var stake_vis_radius: float = -1.0
+	if stake_body != null:
+		for sub: Node in stake_body.get_children():
+			if sub is CollisionShape3D and (sub as CollisionShape3D).shape is CylinderShape3D:
+				stake_col_radius = ((sub as CollisionShape3D).shape as CylinderShape3D).radius
+			if sub is MeshInstance3D and (sub as MeshInstance3D).mesh is CylinderMesh:
+				stake_vis_radius = ((sub as MeshInstance3D).mesh as CylinderMesh).top_radius
+	check(absf(stake_vis_radius - 0.0127) < 0.0005,
+		"pass 8: stake VISUAL stays true 1 in steel (r %.4f m)" % stake_vis_radius)
+	check(stake_col_radius > stake_vis_radius
+		and stake_col_radius - stake_vis_radius <= 0.0035,
+		"pass 8: stake COLLISION core runs a few mm fat, no more (r %.4f m, +%.1f mm)"
+		% [stake_col_radius, (stake_col_radius - stake_vis_radius) * 1000.0])
+	check(bool(main.shoe.continuous_cd),
+		"pass 8: shoe continuous CD is on (Godot 4.7 bool shape cast)")
+	main.shoe.body_entered.connect(_on_stake_test_body_entered)
+	# (a) In flight at stake-top height, flat, dead centre, 9.2 m/s.
+	var shot_a: Dictionary = await fire_at_stake(
+		Vector3(0.0, 1.56, -7.6), Vector3(0.0, 0.0, -9.2), 0.0)
+	check(bool(shot_a["fired"]) and bool(shot_a["contact"]),
+		"pass 8 shot A (flight at stake-top height): the stake is HIT, not ghosted")
+	check(bool(shot_a["contact"]) or float(shot_a["max_beyond"]) <= 0.12,
+		"pass 8 shot A: centre never crosses to the far side untouched (deepest %.3f m)"
+		% float(shot_a["max_beyond"]))
+	# (b) In flight low in the exposed band, flat, dead centre.
+	var shot_b: Dictionary = await fire_at_stake(
+		Vector3(0.0, 1.38, -7.6), Vector3(0.0, 0.0, -9.2), 0.0)
+	check(bool(shot_b["fired"]) and bool(shot_b["contact"]),
+		"pass 8 shot B (flight low in the band): the stake is HIT, not ghosted")
+	check(bool(shot_b["contact"]) or float(shot_b["max_beyond"]) <= 0.12,
+		"pass 8 shot B: centre never crosses to the far side untouched (deepest %.3f m)"
+		% float(shot_b["max_beyond"]))
+	# (c) Ground-skimming: touches down inside the pit and skims
+	# into the stake base, tumbling, dead centre.
+	var shot_c: Dictionary = await fire_at_stake(
+		Vector3(0.0, 0.75, -8.3), Vector3(0.0, -0.2, -9.6), -7.0)
+	check(bool(shot_c["fired"]) and bool(shot_c["contact"]),
+		"pass 8 shot C (pit touchdown, skim into the base): the stake is HIT, not ghosted")
+	check(bool(shot_c["contact"]) or float(shot_c["max_beyond"]) <= 0.12,
+		"pass 8 shot C: centre never crosses to the far side untouched (deepest %.3f m)"
+		% float(shot_c["max_beyond"]))
+	# (d) Chris's geometry: ~9 cm off centre, tumbling, crossing in
+	# flight at band height - the graze that ghosted in the field.
+	var shot_d: Dictionary = await fire_at_stake(
+		Vector3(0.09, 1.55, -7.3), Vector3(0.0, 0.1, -9.3), -9.0)
+	check(bool(shot_d["fired"]) and bool(shot_d["contact"]),
+		"pass 8 shot D (the field graze, 9 cm off centre): the stake is HIT, not ghosted")
+	check(bool(shot_d["contact"]) or float(shot_d["max_beyond"]) <= 0.12,
+		"pass 8 shot D: centre never crosses to the far side untouched (deepest %.3f m)"
+		% float(shot_d["max_beyond"]))
+	main.origin.global_transform = Transform3D.IDENTITY
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))
 
 	print("---")

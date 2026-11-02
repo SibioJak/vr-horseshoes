@@ -91,6 +91,11 @@ func _ready() -> void:
 	physics_material_override = phys
 	contact_monitor = true
 	max_contacts_reported = 6
+	# Continuous CD. In Godot 4.7 this property is a BOOL (the old
+	# CCDMode enum is gone): on = shape-cast CCD. It sweeps the
+	# shoe's LINEAR motion only - it cannot sweep the tumble -
+	# which is why the stake also carries a collision core 3 mm
+	# fat (Fix Pass 8). The smoke suite asserts this stays on.
 	continuous_cd = true
 	_build_part("toe", Vector3(WIDTH, HEIGHT, BAR), Vector3(0.0, 0.0, -LENGTH * 0.5 + BAR * 0.5), 0.0)
 	_build_part("shank_left", Vector3(BAR, HEIGHT, LENGTH - BAR), Vector3(-WIDTH * 0.5 + BAR * 0.5, 0.0, BAR * 0.5), 0.0)
