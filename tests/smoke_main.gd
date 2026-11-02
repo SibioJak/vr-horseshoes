@@ -56,6 +56,27 @@ func wait_rest_to_stand(timeout_sec: float) -> float:
 	return -1.0
 
 
+## Fix Pass 7: seconds until the shoe is stocked (homed) on the
+## given line's pedestal, or -1 on timeout.
+func wait_shoe_at(line_ft: int, timeout_sec: float) -> float:
+	var t0: int = Time.get_ticks_msec()
+	while float(Time.get_ticks_msec() - t0) / 1000.0 < timeout_sec:
+		if int(main.active_stand_line_ft) == line_ft \
+				and main.shoe.global_position.distance_to(main.stand_tfs[line_ft].origin) < 0.01:
+			return float(Time.get_ticks_msec() - t0) / 1000.0
+		await create_timer(0.05).timeout
+	return -1.0
+
+
+## Wait until the tracked test-hand speed estimate settles (a
+## teleported test hand spikes it; a drop needs a still hand).
+func wait_hand_still(hand: String) -> void:
+	for i: int in 40:
+		if float(main.hand_speed[hand]) < 0.3:
+			break
+		await process_frame
+
+
 func _init() -> void:
 	_run()
 
@@ -359,10 +380,117 @@ func _run() -> void:
 						% [float(td["head_yaw_deg"]), float(td["origin_yaw_deg"])])
 	check(found_throw, "smoke recorder holds a throw record")
 
+	# --- Fix Pass 7: the shoe waits where you are ---
+	# The defect: the home pedestal was set only at latch time from
+	# the shoe's OWN position, and the shoe starts on the 40 ft
+	# pedestal - so it re-homed there forever and the 30 ft
+	# pedestal could never be stocked. Now the stocked shoe
+	# follows the line the PLAYER is standing at.
+	# (a) Walk (production stick input) from the standard end to
+	# the short line, empty-handed: a shoe must be waiting there.
+	main.test_stick["L"] = Vector2(0.0, 1.0)
+	await create_timer(1.55).timeout
+	main.test_stick["L"] = Vector2.ZERO
+	var arrive_sec: float = await wait_shoe_at(30, 1.0)
+	check(arrive_sec >= 0.0,
+		"walk to the short line empty-handed: a shoe is waiting on the 30 ft pedestal (stocked %.2f s after arrival)" % arrive_sec)
+	# (b) It is grabbable there, and a still-hand drop there comes
+	# back to the short pedestal.
+	var toe30a: Vector3 = main.shoe.zone_world_center("toe")
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, toe30a)
+	main.test_grip["R"] = 1.0
+	await frames(5)
+	check(main.state == "HELD" and main.held_hold == "flip",
+		"the relocated shoe grabs at the short pedestal (state %s)" % main.state)
+	await wait_hand_still("R")
+	main.test_grip["R"] = 0.0
+	await frames(4)
+	check(main.state == "DROPPED", "still-hand release at the short line drops (state %s)" % main.state)
+	check(await wait_state("STAND", 3.0), "dropped shoe at the short line returns")
+	check(main.shoe.global_position.distance_to(main.stand_tfs[30].origin) < 0.01,
+		"dropped shoe restocks at the SHORT pedestal (at %s)" % str(main.shoe.global_position))
+	# (c) Throw from the short line: the next shoe stocks at the
+	# SHORT pedestal within the pass-3 turnaround budget, and the
+	# throw record tags line_ft 30.
+	main.test_grip["R"] = 1.0
+	await frames(5)
+	check(main.state == "HELD", "re-grab at the short pedestal after the drop cycle")
+	var now30: float = float(Time.get_ticks_msec()) / 1000.0
+	var samples30: Array = []
+	var v30 := Vector3(0.3, 3.4, -4.2)
+	var g30 := Vector3(0.0, -9.8, 0.0)
+	var p30 := Vector3(0.25, 1.15, -2.75)
+	var hz30: float = 90.0
+	var dur30: float = 0.30
+	for i: int in int(dur30 * hz30) + 1:
+		var t30: float = float(i) / hz30
+		samples30.append(ThrowMath.make_sample(now30 - dur30 + t30,
+			p30 + v30 * t30 + 0.5 * g30 * t30 * t30, Quaternion.IDENTITY))
+	main.samples = samples30
+	main._release_shoe(samples30)
+	main.grab_state.reset()
+	main.test_grip["R"] = 0.0
+	check(main.state == "FLYING", "release at the short line throws (state %s)" % main.state)
+	# (d) A shoe in flight is NEVER relocated: walk the player back
+	# to the standard end mid-flight - the flying shoe and its home
+	# must be untouched (the return keys off the RELEASE line).
+	main.origin.global_transform = Transform3D.IDENTITY
+	await frames(6)
+	check(main.state == "FLYING" and main.active_stand_line_ft == 30,
+		"in-flight shoe is not relocated by the player walking away (state %s, home %d)"
+		% [main.state, main.active_stand_line_ft])
+	main.origin.global_transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -3.048))
+	var cycle30: float = await wait_rest_to_stand(14.0)
+	check(cycle30 >= 0.0 and cycle30 <= 1.2,
+		"short-line throw: rest -> next shoe grabbable in %.2f s (pass-3 budget)" % cycle30)
+	check(main.shoe.global_position.distance_to(main.stand_tfs[30].origin) < 0.01,
+		"short-line throw restocks at the SHORT pedestal (at %s)" % str(main.shoe.global_position))
+	var f30: FileAccess = FileAccess.open(rec_path, FileAccess.READ)
+	var last30: Dictionary = {}
+	if f30 != null:
+		for line30: String in f30.get_as_text().split("\n", false):
+			var pj30: Variant = JSON.parse_string(line30)
+			if pj30 is Dictionary and String(pj30.get("type", "")) == "throw":
+				last30 = pj30
+	check(int(last30.get("line_ft", -1)) == 30,
+		"short-line throw records line_ft 30 (got %d)" % int(last30.get("line_ft", -1)))
+	# (e) A HELD shoe is never relocated either: hold it, walk the
+	# player to the standard end - the shoe stays in the hand, and
+	# the home stays at the short line.
+	main.test_grip["R"] = 1.0
+	await frames(5)
+	check(main.state == "HELD", "grabbed again at the short pedestal")
+	main.origin.global_transform = Transform3D.IDENTITY
+	await frames(10)
+	check(main.state == "HELD" and main.active_stand_line_ft == 30
+		and main.shoe.global_position.distance_to(main.stand_tfs[40].origin) > 0.5,
+		"held shoe is never relocated (state %s, home %d)" % [main.state, main.active_stand_line_ft])
+	main.origin.global_transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -3.048))
+	await wait_hand_still("R")
+	main.test_grip["R"] = 0.0
+	await frames(4)
+	check(await wait_state("STAND", 3.0), "released shoe returns after the held test")
+	check(main.shoe.global_position.distance_to(main.stand_tfs[30].origin) < 0.01,
+		"back at his line, the dropped shoe restocks at the SHORT pedestal")
+	# (f) Walk back to the standard end empty-handed: the shoe
+	# re-stocks at the 40 ft pedestal.
+	main.test_stick["L"] = Vector2(0.0, -1.0)
+	await create_timer(1.6).timeout
+	main.test_stick["L"] = Vector2.ZERO
+	var back_sec: float = await wait_shoe_at(40, 1.0)
+	check(back_sec >= 0.0,
+		"walk back to the standard end: the shoe re-stocks at the 40 ft pedestal (%.2f s)" % back_sec)
+	main.origin.global_transform = Transform3D.IDENTITY
+
 	# --- The shoe returns to the pedestal it was grabbed from ---
 	# Place it on the 30 ft pedestal (as a return would leave it),
 	# grab it there, drop it still: it must come back to the SHORT
-	# pedestal, not the standard one.
+	# pedestal, not the standard one. Fix Pass 7 re-derivation: the
+	# player's BODY stands at the short line too - stocking now
+	# follows the player, so the old hand-only teleport would be
+	# overruled by the restock watcher (in the headset the hand is
+	# never 3 m from the body anyway).
+	main.origin.global_transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -3.048))
 	main.shoe.global_transform = main.stand_tfs[30]
 	await frames(2)
 	var toe30: Vector3 = main.shoe.zone_world_center("toe")
@@ -382,6 +510,7 @@ func _run() -> void:
 	var back_tf: Transform3D = main.stand_tfs[30]
 	check(main.shoe.global_position.distance_to(back_tf.origin) < 0.01,
 		"shoe returned to the 30 ft pedestal it was grabbed from (at %s)" % str(main.shoe.global_position))
+	main.origin.global_transform = Transform3D.IDENTITY
 
 	# --- Settle honesty regression (pass 3) ---
 	# A shoe placed at a known TRUE REST transform (frozen, zero

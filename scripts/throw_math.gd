@@ -46,6 +46,29 @@ static func line_ft_for_release(release_pos: Vector3, stake_pos: Vector3) -> int
 	return 30 if to_short < to_standard else 40
 
 
+## How close (in metres of stake distance) a point must sit to a
+## foul line's distance to count as standing AT that line. Covers
+## the stance box (the line +/- 0.40 m) plus a natural lean/reach,
+## while the 3.048 m gap between the lines keeps mid-court and the
+## pit firmly "neither".
+const LINE_PROXIMITY_M: float = 0.75
+
+
+## Which foul line a PERSON is standing at, or 0 for neither
+## (Fix Pass 7: shoe stocking follows the player). Built on
+## line_ft_for_release - the same nearer-line classification the
+## throw records use - plus a proximity gate: the bare classifier
+## always answers 30 or 40, but a player up at the pit inspecting
+## a landing is at NEITHER line and must not drag the stocked
+## shoe with him. Height is ignored, as in the release
+## classification.
+static func standing_line_ft(pos: Vector3, stake_pos: Vector3) -> int:
+	var line_ft: int = line_ft_for_release(pos, stake_pos)
+	var d: float = Vector2(pos.x - stake_pos.x, pos.z - stake_pos.z).length()
+	var line_d: float = SHORT_LINE_DISTANCE_M if line_ft == 30 else STANDARD_LINE_DISTANCE_M
+	return line_ft if absf(d - line_d) <= LINE_PROXIMITY_M else 0
+
+
 ## Per-sample speeds by central difference (endpoints one-sided).
 static func sample_speeds(samples: Array) -> PackedFloat32Array:
 	var speeds := PackedFloat32Array()

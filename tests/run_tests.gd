@@ -156,6 +156,32 @@ func test_line_classification() -> void:
 		"line: release height and a small lateral offset do not change the class")
 
 
+func test_standing_line() -> void:
+	# Fix Pass 7: stocking follows the player, so "which line is he
+	# standing at" needs an answer with a NEITHER - the release
+	# classifier alone always answers 30 or 40. standing_line_ft is
+	# that classifier plus a proximity gate on stake distance.
+	var stake := Vector3(0.0, 0.05, -12.192)
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -3.048), stake) == 30,
+		"standing: on the 30 ft line is the 30 ft line")
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, 0.0), stake) == 40,
+		"standing: on the 40 ft line is the 40 ft line")
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -2.548), stake) == 30,
+		"standing: half a metre behind the short line (a stance) still counts")
+	check(ThrowMath.standing_line_ft(Vector3(0.75, 1.6, -2.548), stake) == 30,
+		"standing: beside the short pedestal, reaching for it, still counts")
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, 0.5), stake) == 40,
+		"standing: half a metre behind the standard line still counts")
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 0.2, -3.048), stake) == 30,
+		"standing: head height is ignored (seated play reads the same)")
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -6.096), stake) == 0,
+		"standing: mid-court between the lines is NEITHER line")
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -12.0), stake) == 0,
+		"standing: up at the pit inspecting a landing is NEITHER line")
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -3.9), stake) == 0,
+		"standing: past the short line toward the pit, beyond the gate, is NEITHER")
+
+
 func test_recorder_schema() -> void:
 	var test_path: String = "user://test_throws.jsonl"
 	var abs_path: String = ProjectSettings.globalize_path(test_path)
@@ -508,6 +534,7 @@ func _run() -> void:
 	test_angular_math()
 	test_ringer_geometry()
 	test_line_classification()
+	test_standing_line()
 	test_recorder_schema()
 	test_grab_state()
 	test_locomotion_math()

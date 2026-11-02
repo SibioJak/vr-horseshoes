@@ -164,6 +164,36 @@ func _set_active_stand(line_ft: int) -> void:
 	stand_tf = stand_tfs[line_ft]
 
 
+## "The shoe waits where you are" (Fix Pass 7). While the shoe sits
+## stocked (STAND), the home pedestal follows the PLAYER: standing
+## at a foul line - ThrowMath.standing_line_ft, the FP3 release
+## classification with a proximity gate, read off the head - with
+## the shoe homed to the other line relocates the stocked shoe to
+## that line's pedestal. Instant and silent: the shoe is frozen at
+## rest, so this is a clean teleport, never a visible flight.
+## Runs only in STAND - a held, flying or still-settling shoe is
+## never touched - and at neither line the shoe stays where it is.
+##
+## Defect history: before this pass the home was set ONLY at latch
+## time, from the shoe's own position (_nearest_stand_line). The
+## shoe starts on the 40 ft pedestal and can only reach a pedestal
+## by being returned to the current home, so every latch re-homed
+## it to the pedestal it was already sitting on - the 30 ft
+## pedestal could become home only by being grabbed from, which
+## required the shoe to already be there. It never was. Chris, in
+## the headset: "the shorter distance podium doesn't spawn a
+## horseshoe, very stingy."
+func _restock_to_player_line() -> void:
+	if state != "STAND":
+		return
+	var line_ft: int = ThrowMath.standing_line_ft(cam.global_position, STAKE_POS)
+	if line_ft != 0 and line_ft != active_stand_line_ft:
+		_set_active_stand(line_ft)
+		shoe.freeze = true
+		shoe.global_transform = stand_tf
+		shoe.clear_highlights()
+
+
 func _nearest_stand_line() -> int:
 	var best_line: int = active_stand_line_ft
 	var best_dist: float = INF
@@ -556,8 +586,11 @@ func _process_grab() -> void:
 
 
 func _do_latch(hand: String, zone: String) -> void:
-	# The shoe belongs to the pedestal it was just grabbed from;
-	# after the throw (or a drop) it returns to THAT pedestal.
+	# Home starts as the pedestal the shoe was just grabbed from.
+	# It does not stay glued there: a throw re-homes to the line
+	# it was released from (see _settle_throw), a drop returns
+	# here, and while the shoe sits stocked the home follows the
+	# line the player is standing at (Fix Pass 7).
 	_set_active_stand(_nearest_stand_line())
 	held_hand = hand
 	held_zone = zone
@@ -672,6 +705,7 @@ func _on_shoe_body_entered(_body: Node) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	_restock_to_player_line()
 	if state == "HELD":
 		_add_sample()
 		if not grab_state.sliding:
@@ -751,6 +785,12 @@ func _settle_throw() -> void:
 		"flip_rotations": flip_rot,
 		"turn_rotations": turn_rot,
 	})
+	# The next shoe stocks where the throw was made from (Fix
+	# Pass 7): home follows the release's own line classification,
+	# so the return below lands directly on the throwing line's
+	# pedestal instead of whichever pedestal the shoe was grabbed
+	# from (a shoe grabbed at 40 and pitched from 30 restocks at 30).
+	_set_active_stand(int(release_cache["line_ft"]))
 	state = "RETURNING"
 	_wait_time = 0.0 # no linger: rhythm matters (Fix Pass 3)
 
