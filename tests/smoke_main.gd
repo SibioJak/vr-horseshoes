@@ -193,6 +193,77 @@ func _init() -> void:
 	_run()
 
 
+## Synthetic swing stream (the technique audit's shape): an
+## accelerating swing sampled at 90 Hz ending at the release
+## instant, carrying a constant spin about a fixed axis.
+func build_stream(hand_pos: Vector3, q_hand: Quaternion, vel: Vector3,
+		omega: Vector3, seed_val: int) -> Array:
+	var hz: float = 90.0
+	var steps: int = 30
+	var accel: Vector3 = vel.normalized() * 20.0
+	var axis: Vector3 = omega.normalized()
+	var rate: float = omega.length()
+	var now: float = float(Time.get_ticks_msec()) / 1000.0
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_val
+	var out: Array = []
+	for i: int in steps + 1:
+		var tau: float = float(steps - i) / hz
+		var pos: Vector3 = hand_pos - vel * tau + 0.5 * accel * tau * tau
+		pos += Vector3(rng.randf_range(-0.002, 0.002),
+			rng.randf_range(-0.002, 0.002), rng.randf_range(-0.002, 0.002))
+		var q: Quaternion = Quaternion(axis, -rate * tau) * q_hand
+		out.append(ThrowMath.make_sample(now - tau, pos, q))
+	return out
+
+
+## One player throw in a game, entirely through the production
+## path (the audit's injection pattern): grab the toe of the
+## active shoe, park the hand at the solved release pose, inject
+## the swing stream, release. A plain club flip at the target
+## stake, whichever end the inning is played toward.
+func scripted_game_throw() -> bool:
+	if String(main.state) != "STAND":
+		return false
+	var thrown_shoe: Shoe = main.shoe
+	var line_z: float = main.game_line_z()
+	var travel: float = -1.0 if main.target_far else 1.0
+	var target: Vector3 = main.target_stake_pos()
+	var release_pos := Vector3(0.25, 1.25, line_z - 0.35 * travel)
+	var t_f: float = 1.15
+	var vel := Vector3((target.x - release_pos.x) / t_f,
+		(0.50 - release_pos.y + 4.9 * t_f * t_f) / t_f,
+		(target.z - release_pos.z) / t_f)
+	var omega := Vector3(-travel * TAU / t_f, 0.0, 0.0)
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
+		thrown_shoe.zone_world_center("toe"))
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	for i: int in 2:
+		await physics_frame
+	if String(main.state) != "HELD":
+		return false
+	var rel_tf: Transform3D = Shoe.hold_transform("toe", "R")
+	var hand_pos: Vector3 = release_pos - rel_tf.origin
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, hand_pos)
+	await frames(4)
+	for i: int in 2:
+		await physics_frame
+	main.samples = build_stream(hand_pos, Quaternion.IDENTITY, vel, omega, 777)
+	main._release_shoe(main.samples)
+	main.grab_state.reset()
+	main.test_grip["R"] = 0.0
+	if String(main.state) != "FLYING":
+		return false
+	var waited: float = 0.0
+	while waited < 10.0:
+		if String(main.shoe_status[thrown_shoe]) == "DOWN":
+			return true
+		await create_timer(0.2).timeout
+		waited += 0.2
+	return false
+
+
 func _run() -> void:
 	var rec_path: String = "user://smoke_throws.jsonl"
 	if FileAccess.file_exists(rec_path):
@@ -227,7 +298,41 @@ func _run() -> void:
 		"board lists the pass-6 standard stick controls (left moves, right turns)")
 	check(main.controls_label.text.contains("30 FT LINE"),
 		"board notes the 30 ft short line (pass 3)")
+	check(main.controls_label.text.contains("A BUTTON")
+		and main.controls_label.text.contains("B BUTTON"),
+		"board lists the game buttons (A start/play again, B swap/practice) - standing rule: every accepted command is listed")
 	check(main.status_label.text.contains("THROWS: 0"), "board starts at zero throws")
+
+	# --- Backyard Game v1: full court, pairs, the opponent ---
+	check(main.stakes.size() == 2, "two stakes built, one per end (%d)" % main.stakes.size())
+	var sp_far: Vector3 = main.stakes["FAR"]["pos"]
+	var sp_home: Vector3 = main.stakes["HOME"]["pos"]
+	check(absf(sp_far.distance_to(sp_home) - 12.192) < 0.001,
+		"the two stakes stand exactly 12.192 m apart (%.3f)" % sp_far.distance_to(sp_home))
+	check(absf(main.line_z_for_ft_at(40, true)) < 0.001
+		and absf(main.line_z_for_ft_at(30, true) + 3.048) < 0.001
+		and absf(main.line_z_for_ft_at(40, false) + 12.192) < 0.001
+		and absf(main.line_z_for_ft_at(30, false) + 9.144) < 0.001,
+		"foul lines mirror at both ends (0 / -3.048 / -9.144 / -12.192)")
+	check(main.player_pair.size() == 2 and main.ai_pair.size() == 2,
+		"two pairs of shoes: the player's and the AI's")
+	for s: Shoe in main._all_shoes():
+		var want_slot: Transform3D = main.slot_tf(true, 40, main._slot_of(s))
+		check(s.global_position.distance_to(want_slot.origin) < 0.01,
+			"shoe hangs on its rail slot at boot (slot %d)" % main._slot_of(s))
+		check(String(main.shoe_status[s]) == "RAILED", "boot shoe is stocked (RAILED)")
+	check(main.player_pair[0].tint == main.PLAYER_PAIR_COLOR
+		and main.ai_pair[0].tint == main.AI_PAIR_COLOR,
+		"pairs wear their colours: yellow player, blue AI")
+	var slot0_pos: Vector3 = main.slot_tf(true, 40, 0).origin
+	var rail_pieces: int = 0
+	for child: Node in main.get_children():
+		if child is MeshInstance3D and (child as MeshInstance3D).global_position.distance_to(slot0_pos) < 1.0:
+			rail_pieces += 1
+	check(rail_pieces >= 4,
+		"rail stand furniture (posts, rail, shelf) stands at the home 40 ft stock point (%d pieces)" % rail_pieces)
+	check(main.ai_pitcher != null and main.ai_pitcher.is_inside_tree(),
+		"the AI opponent character stands at the home end")
 
 	# --- Board placement (pass-10 re-derivation of the pass-2 guard) ---
 	# Pass 1's board faced AWAY from the player; pass 2 moved it
@@ -278,17 +383,25 @@ func _run() -> void:
 			"board label '%s...' fits the slab (%.2f x %.2f m on %.1f x %.1f)"
 			% [text_lines[0], w_max, h_tot, main.board_slab_size.x, main.board_slab_size.y])
 	# The boot text never exercises the widest line the board can
-	# show - measure the worst-case status block (long TURN hold,
-	# three-digit count, RINGER! line) with the label's own font.
-	var worst: String = "THROWS: 999\nHOLD: TURN (SHANK_RIGHT)\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!"
-	var w_lines: PackedStringArray = worst.split("\n")
-	var w_worst: float = 0.0
-	for ln2: String in w_lines:
-		w_worst = maxf(w_worst, fb_font.get_string_size(ln2, HORIZONTAL_ALIGNMENT_LEFT, -1.0, main.status_label.font_size).x * main.status_label.pixel_size)
-	var h_worst: float = float(w_lines.size()) * fb_font.get_height(main.status_label.font_size) * main.status_label.pixel_size \
-		+ float(w_lines.size() - 1) * main.status_label.line_spacing * main.status_label.pixel_size
-	check(w_worst <= main.board_slab_size.x - 0.08 and h_worst <= main.board_slab_size.y - 0.08,
-		"worst-case status block fits the slab (%.2f x %.2f m)" % [w_worst, h_worst])
+	# show - measure the worst-case status blocks with the label's
+	# own font. Backyard Game v1 re-derived them: the status font
+	# stepped down (58 / 0.0029) because a game status runs to
+	# SEVEN lines where practice ran to six, and the longest
+	# honest lines grew ("LAST INNING: ... (RINGER)",
+	# "B: SWAP ENDS - OR WALK THERE"). Both modes are measured.
+	var worst_cases: Array = [
+		"THROWS: 999\nHOLD: TURN (SHANK_RIGHT)\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!\nA: START GAME",
+		"YOU 99 - 99 OPP\nINNING 99 - YOUR THROW 2 OF 2\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nLAST INNING: YOU +6 (RINGER)\nB: SWAP ENDS - OR WALK THERE",
+	]
+	for worst: String in worst_cases:
+		var w_lines: PackedStringArray = worst.split("\n")
+		var w_worst: float = 0.0
+		for ln2: String in w_lines:
+			w_worst = maxf(w_worst, fb_font.get_string_size(ln2, HORIZONTAL_ALIGNMENT_LEFT, -1.0, main.status_label.font_size).x * main.status_label.pixel_size)
+		var h_worst: float = float(w_lines.size()) * fb_font.get_height(main.status_label.font_size) * main.status_label.pixel_size \
+			+ float(w_lines.size() - 1) * main.status_label.line_spacing * main.status_label.pixel_size
+		check(w_worst <= main.board_slab_size.x - 0.08 and h_worst <= main.board_slab_size.y - 0.08,
+			"worst-case status block fits the slab (%.2f x %.2f m)" % [w_worst, h_worst])
 
 	# --- Scenery dressing (Fix Pass 10 comfort) ---
 	# Static references at several distances against the flat
@@ -323,14 +436,20 @@ func _run() -> void:
 			sky_ok = (child as WorldEnvironment).environment.background_mode == Environment.BG_SKY
 	check(sky_ok, "a real sky replaces the flat clear colour")
 
-	# --- Pedestals clear of the stance boxes (pass-3 replacement) ---
+	# --- Rail stands clear of the stance boxes (pass-3 checks,
+	# re-derived for Backyard Game v1) ---
 	# FP2 measured the stand from the SPAWN point (0.61 m) and called
 	# it fine; Chris's photo showed it sitting on the foul line where
-	# his stance goes. The permanent assertion now measures against
+	# his stance goes. The permanent assertion measures against
 	# the STANCE BOX at each line: |x| <= 0.85, line z +/- 0.40.
-	# A pedestal must sit outside that box, behind its line, and
+	# A stand must sit outside that box, behind its line, and
 	# within ~0.9 m reach of a player standing at the line.
-	check(main.stand_tfs.size() == 2, "two pedestals exist, one per foul line (%d)" % main.stand_tfs.size())
+	# V1 re-derivation: pedestals retired for rail stands, but the
+	# rail's FIRST slot hangs exactly where the pedestal top put
+	# the shoe - the placement Chris judged - so these checks now
+	# read the rail's slot-0 transforms, and a mirrored set covers
+	# the far end's stands (x flips sign, "behind" flips with it).
+	check(main.stand_tfs.size() == 2, "two home-end stands exist, one per foul line (%d)" % main.stand_tfs.size())
 	for line_ft: int in [40, 30]:
 		var ptf: Transform3D = main.stand_tfs[line_ft]
 		var pp: Vector3 = ptf.origin
@@ -338,15 +457,31 @@ func _run() -> void:
 		var in_stance: bool = absf(pp.x) <= main.STANCE_HALF_WIDTH \
 			and absf(pp.z - line_z) <= main.STANCE_HALF_DEPTH
 		check(not in_stance,
-			"%d ft pedestal is OUTSIDE the stance box (at %s, line z %.3f)" % [line_ft, str(pp), line_z])
+			"%d ft stand is OUTSIDE the stance box (at %s, line z %.3f)" % [line_ft, str(pp), line_z])
 		check(pp.z - line_z > 0.40 and pp.z - line_z < 0.60,
-			"%d ft pedestal sits ~0.5 m BEHIND its line (%.2f m)" % [line_ft, pp.z - line_z])
+			"%d ft stand sits ~0.5 m BEHIND its line (%.2f m)" % [line_ft, pp.z - line_z])
 		check(pp.x > 0.60 and pp.x < 0.90,
-			"%d ft pedestal sits ~0.75 m to the side (x %.2f)" % [line_ft, pp.x])
+			"%d ft stand sits ~0.75 m to the side (x %.2f)" % [line_ft, pp.x])
 		var reach: float = Vector2(pp.x, pp.z).distance_to(Vector2(0.0, line_z))
 		check(reach <= 0.92,
-			"%d ft pedestal is within reach of the line (%.2f m from line centre)" % [line_ft, reach])
-	check(main.active_stand_line_ft == 40, "the shoe starts homed to the 40 ft pedestal")
+			"%d ft stand is within reach of the line (%.2f m from line centre)" % [line_ft, reach])
+	check(main.active_stand_line_ft == 40, "the shoe starts homed to the 40 ft stand")
+	check(main.stand_tfs_far.size() == 2, "two far-end stands exist, mirrored (%d)" % main.stand_tfs_far.size())
+	for line_ft2: int in [40, 30]:
+		var ptf2: Transform3D = main.stand_tfs_far[line_ft2]
+		var pp2: Vector3 = ptf2.origin
+		var line_z2: float = main.line_z_for_ft_at(line_ft2, false)
+		var in_stance2: bool = absf(pp2.x) <= main.STANCE_HALF_WIDTH \
+			and absf(pp2.z - line_z2) <= main.STANCE_HALF_DEPTH
+		check(not in_stance2,
+			"far %d ft stand is OUTSIDE the stance box (at %s, line z %.3f)" % [line_ft2, str(pp2), line_z2])
+		check(pp2.z - line_z2 < -0.40 and pp2.z - line_z2 > -0.60,
+			"far %d ft stand sits ~0.5 m BEHIND its line (%.2f m)" % [line_ft2, pp2.z - line_z2])
+		check(pp2.x < -0.60 and pp2.x > -0.90,
+			"far %d ft stand sits ~0.75 m to the side (x %.2f)" % [line_ft2, pp2.x])
+		var reach2: float = Vector2(pp2.x, pp2.z).distance_to(Vector2(0.0, line_z2))
+		check(reach2 <= 0.92,
+			"far %d ft stand is within reach of the line (%.2f m from line centre)" % [line_ft2, reach2])
 
 	# --- Locomotion through the production path (test stick hooks) ---
 	# Pass-6 mapping (STANDARD twin-stick, Chris's field order): the
@@ -863,6 +998,109 @@ func _run() -> void:
 		and float(shot_ctl["max_beyond"]) > 0.12,
 		"pass 9 control: guard disabled, shot A ghosts again (deepest %.3f m untouched) - the guard is the save"
 		% float(shot_ctl["max_beyond"]))
+	# ============ Backyard Game v1: win-rule probes ============
+	# Deterministic, no throwing: the win is an inning-END rule.
+	main.origin.global_transform = Transform3D.IDENTITY
+	main.start_game()
+	check(main.mode == "GAME" and main.phase == "P_TURN" and main.inning == 1,
+		"game: A starts a game - inning 1, player throws first")
+	check(main.status_label.text.contains("YOU 0 - 0 OPP"),
+		"game: the board shows the score")
+	main.score_you = 20
+	main.inning_results = [
+		{"owner": "P", "dist_in": 2.0, "ringer": false},
+		{"owner": "AI", "dist_in": 9.0, "ringer": false}]
+	main._score_inning()
+	check(main.score_you == 21 and main.phase == "OVER"
+		and main.winner_text == "YOU WIN!",
+		"game: reaching exactly 21 at an inning's end wins")
+	main.start_game()
+	main.score_you = 19
+	main.inning_results = [{"owner": "P", "dist_in": 0.0, "ringer": true}]
+	main._score_inning()
+	check(main.score_you == 22 and main.phase == "OVER",
+		"game: passing 21 wins too (no win-by-two)")
+	main.start_game()
+	main.inning_results = [
+		{"owner": "P", "dist_in": 8.0, "ringer": false},
+		{"owner": "AI", "dist_in": 9.0, "ringer": false}]
+	main._score_inning()
+	check(main.phase == "SWAP" and main.last_scorer == "",
+		"game: a scoreless inning goes to the swap prompt")
+	main._complete_swap(true)
+	check(main.inning == 2 and main.inning_first == "AI",
+		"game: after a scoreless inning the first throw alternates")
+
+	# ============ Backyard Game v1: a full game ============
+	# Scripted player throws (production input path) + the AI's
+	# own turns drive a complete game to a winner. End swaps
+	# alternate between the B button and walking there.
+	main.start_game()
+	var saw_far_target: bool = false
+	var swap_methods: Array = []
+	var guard_innings: int = 0
+	while main.phase != "OVER" and guard_innings < 40:
+		guard_innings += 1
+		if main.phase == "SWAP":
+			if main.inning % 2 == 1:
+				main.test_button["B"] = true
+				await frames(4)
+				main.test_button["B"] = false
+				await frames(4)
+				swap_methods.append("button")
+			else:
+				var spot_z: float = 0.55 if not main.target_far else -12.742
+				var yaw2: float = 0.0 if not main.target_far else PI
+				var want_cam := Transform3D(Basis(Vector3.UP, yaw2),
+					Vector3(0.0, 1.6, spot_z))
+				main.origin.global_transform = want_cam * main.cam.transform.inverse()
+				await frames(6)
+				swap_methods.append("walk")
+			check(main.phase != "SWAP",
+				"game: end swap completed (%s)" % String(swap_methods[swap_methods.size() - 1]))
+		if not main.target_far:
+			saw_far_target = true
+		# Play out the inning in whichever order the first-throw
+		# rule dictates: turns alternate within the inning.
+		var inning_no: int = main.inning
+		var turn_guard: int = 0
+		while main.phase != "SWAP" and main.phase != "OVER" and turn_guard < 6:
+			turn_guard += 1
+			if main.phase == "P_TURN":
+				check(await scripted_game_throw(),
+					"game: player throw flies and settles (inning %d)" % inning_no)
+			elif main.phase == "AI_TURN":
+				var waited_ai: float = 0.0
+				while main.phase == "AI_TURN" and waited_ai < 40.0:
+					await create_timer(0.5).timeout
+					waited_ai += 0.5
+				check(main.phase != "AI_TURN",
+					"game: the AI's turn completes (inning %d)" % inning_no)
+			else:
+				break
+		check(main.phase == "SWAP" or main.phase == "OVER",
+			"game: inning %d completes" % inning_no)
+	check(main.phase == "OVER",
+		"game: a full game reaches a winner (final %d-%d in %d innings)"
+		% [main.score_you, main.score_opp, main.inning])
+	check(maxi(main.score_you, main.score_opp) >= 21,
+		"game: the winner reached 21 or more")
+	check(saw_far_target, "game: innings alternate ends (home-stake innings happened)")
+	check(swap_methods.has("button") and swap_methods.has("walk"),
+		"game: end swaps worked by button AND by walking %s" % str(swap_methods))
+	main.test_button["B"] = true
+	await frames(4)
+	main.test_button["B"] = false
+	await frames(4)
+	check(main.mode == "PRACTICE", "game: B at game over returns to practice")
+	check(main.status_label.text.contains("THROWS:"),
+		"game: the practice board readouts are back")
+	check(main.state == "STAND"
+		and main.shoe.global_position.distance_to(
+			main.slot_tf(main.stock_target_far, main.active_stand_line_ft,
+				main._slot_of(main.shoe)).origin) < 0.01,
+		"game: practice after the game stocks the shoe on the rail as before")
+
 	main.origin.global_transform = Transform3D.IDENTITY
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))
 

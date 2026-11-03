@@ -1,10 +1,15 @@
 extends Node3D
 
-## VR Horseshoes - DE Toss Test.
-## One pit, one stake at 40 ft, twenty shoes. Everything here serves
-## the toss: zone-snap grab + sticky slide (GrabState/Shoe), windowed
-## release sampling (ThrowMath), an honest rigid-body shoe, a JSONL
-## recorder, and an in-world board. No scoring, no opponents, no audio.
+## VR Horseshoes - Backyard Game v1.
+## The DE toss test grew a game: a full two-pit court, pairs of
+## shoes on rail stands, NHPA cancellation scoring to 21 against
+## a visible AI club player. The judged core is untouched and
+## stays guarded by the suites: zone-snap grab + sticky slide
+## (GrabState/Shoe), windowed release sampling (ThrowMath), the
+## honest rigid-body shoe (zero damping, stake sweep guard), the
+## JSONL recorder, standard twin-stick movement, and the in-world
+## scoreboard. PRACTICE mode is the old test, exactly: free
+## throwing with per-throw readouts.
 ##
 ## Rig binding is FIELD-CENSUS settled (VR Baseball Duel, same rig:
 ## Quest 3 + Virtual Desktop/VDXR + Godot 4.7): hands register as
@@ -13,18 +18,23 @@ extends Node3D
 ## "fix" these names to /user/hand/... paths - no such trackers exist
 ## on this rig.
 
-const STAKE_POS := Vector3(0.0, 0.05, -12.192) # pit surface point, 40 ft from the foul line (z=0)
+const STAKE_POS := Vector3(0.0, 0.05, -12.192) # far pit surface point, 40 ft from the home foul line (z=0)
+const HOME_STAKE_POS := Vector3(0.0, 0.05, 0.0) # home pit stake: exactly 12.192 m from the far stake
 const STAKE_VISUAL_RADIUS: float = 0.0127 # the 1 in steel Chris sees
-const STAKE_COLLISION_RADIUS: float = 0.0157 # visual + 3 mm (Fix Pass 8, see _build_world)
+const STAKE_COLLISION_RADIUS: float = 0.0157 # visual + 3 mm (Fix Pass 8, see _build_pit)
 const PIT_SIZE := Vector3(0.914, 0.05, 1.829) # 36 in x 72 in
 const FOUL_40_Z: float = 0.0
-const FOUL_30_Z: float = -3.048 # 30 ft line: 9.144 m from the stake
+const FOUL_30_Z: float = -3.048 # 30 ft line: 9.144 m from the far stake
 const FOUL_Z: float = FOUL_40_Z
 const STANCE_HALF_WIDTH: float = 0.85
 const STANCE_HALF_DEPTH: float = 0.40
 const STAND_SIDE_X: float = 0.75
 const STAND_BEHIND_M: float = 0.50
 const STAND_SHOE_Y: float = 0.785
+const SLOT_STEP_X: float = 0.24 # pair slots along a rail stand
+const PLAYER_PAIR_COLOR := Color(0.92, 0.75, 0.16) # yellow (photo feed)
+const AI_PAIR_COLOR := Color(0.18, 0.36, 0.85) # blue (photo feed)
+const WIN_SCORE: int = 21
 const CANDIDATE_RADIUS: float = 0.14
 const BOARD_POS := Vector3(-2.4, 0.0, -16.2) # Fix Pass 10: beyond the pit, left of the stake
 const BOARD_YAW_DEG: float = 10.0 # face turned back at the pitching end
@@ -40,13 +50,21 @@ var ctrl_rep: Dictionary = {}
 var xr_ok: bool = false
 var head_tracking_ok: bool = false
 
-var shoe: Shoe
-var stake_body_node: StaticBody3D = null
-var stake_axis_a: Vector3 = Vector3.ZERO # stake collision axis endpoints (world)
+var shoe: Shoe # the ACTIVE player shoe (the state machine drives this one)
+var player_pair: Array = [] # Array[Shoe], yellow
+var ai_pair: Array = [] # Array[Shoe], blue
+var shoe_status: Dictionary = {} # Shoe -> "RAILED" | "HELD" | "FLYING" | "DOWN"
+var stake_body_node: StaticBody3D = null # far stake (spawn wiring compat)
+var stake_axis_a: Vector3 = Vector3.ZERO # far stake collision axis endpoints (world)
 var stake_axis_b: Vector3 = Vector3.ZERO
-var stand_tfs: Dictionary = {} # line_ft (30/40) -> pedestal shoe transform
-var stand_tf: Transform3D # the pedestal the shoe currently belongs to
+var stakes: Dictionary = {} # "FAR"|"HOME" -> {body, axis_a, axis_b, pos}
+var stand_tfs: Dictionary = {} # line_ft (30/40) -> rail slot-0 transform, HOME end (target: far stake)
+var stand_tfs_far: Dictionary = {} # line_ft (30/40) -> rail slot-0 transform, FAR end (target: home stake)
+var stand_tf: Transform3D # the rail slot the ACTIVE shoe currently belongs to
 var active_stand_line_ft: int = 40
+var stock_target_far: bool = true # stocked shoes aim at the far stake
+var ai_pitcher: AIPitcher
+var ai_rng := RandomNumberGenerator.new()
 var board_root: Node3D
 var board_slab_size := Vector3(3.0, 2.7, 0.05)
 var title_label: Label3D
@@ -86,25 +104,54 @@ var has_contact: bool = false
 var first_contact_pos: Vector3 = Vector3.ZERO
 var _fly_time: float = 0.0
 var _still_time: float = 0.0
+var _pos_still_time: float = 0.0 # positional stillness (leaner guard)
+var _pos_anchor: Vector3 = Vector3.ZERO
 var _wait_time: float = 0.0
+
+# --- Backyard Game v1 state ---
+# mode: "PRACTICE" (the old test) or "GAME". In GAME, phase runs
+# the loop: "P_TURN" -> "AI_TURN" (order set by inning_first) ->
+# "SCORE" (instant) -> "SWAP" (prompt) -> next inning, or
+# "OVER". Innings pitch from one end: target_far says which
+# stake is being thrown at; the throwing end alternates.
+var mode: String = "PRACTICE"
+var phase: String = ""
+var inning: int = 0
+var score_you: int = 0
+var score_opp: int = 0
+var target_far: bool = true # throwing at the FAR stake this inning
+var inning_first: String = "P" # who throws first this inning
+var turn_side: String = "" # side currently throwing
+var turn_throws_left: int = 0
+var inning_results: Array = [] # settled {owner, dist_in, ringer} this inning
+var last_inning_text: String = ""
+var winner_text: String = ""
+var grab_armed: bool = true # game phases disarm the grab (AI turn etc.)
+var ai_flight: Dictionary = {} # Shoe -> flight tracking dict (AI throws)
+var ai_throw_pending: bool = false # an AI swing is animating
+var ai_wait_clear: float = 0.0
+var _btn_prev: Dictionary = {"A": false, "B": false}
 
 # Test hooks (used by the headless suites / render proofs only).
 var test_hand_tf: Dictionary = {}
 var test_grip: Dictionary = {}
 var test_trigger: Dictionary = {}
 var test_stick: Dictionary = {}
+var test_button: Dictionary = {} # "A"/"B" -> bool
 var debug_show_zones: bool = false
 
 
 func _ready() -> void:
 	recorder = ThrowRecorder.new(recorder_path)
+	ai_rng.randomize()
 	_init_stands()
 	_build_world()
 	_build_rig()
 	_build_board()
-	_spawn_shoe()
+	_spawn_shoes()
+	_build_ai()
 	head_tracking_ok = _head_tracking_ok()
-	print("VR Horseshoes toss test ready. xr_ok=", xr_ok, " head_tracking=", head_tracking_ok)
+	print("VR Horseshoes backyard game ready. xr_ok=", xr_ok, " head_tracking=", head_tracking_ok)
 	_update_board()
 
 
@@ -153,64 +200,140 @@ static func line_z_for_ft(line_ft: int) -> float:
 	return FOUL_30_Z if line_ft == 30 else FOUL_40_Z
 
 
-static func make_stand_tf(line_ft: int) -> Transform3D:
-	# Pedestal rule (Fix Pass 3): behind the line and to the side,
-	# NEVER inside the stance box (|x| <= 0.85, line z +/- 0.40) -
-	# the pass-1/2 pedestal sat where the pitcher's feet go.
+## Foul line z for a line pitched AT the given target stake:
+## the lines mirror at both ends, distances preserved (the 40 ft
+## line is the OPPOSITE stake's plane; the 30 ft line is 9.144 m
+## from the target stake).
+static func line_z_for_ft_at(line_ft: int, p_target_far: bool) -> float:
+	var dist: float = 9.144 if line_ft == 30 else 12.192
+	return -12.192 + dist if p_target_far else -dist
+
+
+static func make_stand_tf(line_ft: int, p_target_far: bool) -> Transform3D:
+	# Rail slot rule (was the pedestal rule, Fix Pass 3): behind
+	# the line and to the side, NEVER inside the stance box
+	# (|x| <= 0.85, line z +/- 0.40) - the pass-1/2 pedestal sat
+	# where the pitcher's feet go. The shoe HANGS on the rail by
+	# its toe bridge: plane near-vertical, bridge up (Backyard
+	# Game v1, per Chris's photo feed).
+	var sx: float = 1.0 if p_target_far else -1.0
+	var yaw: float = -30.0 if p_target_far else 150.0
+	var behind: float = STAND_BEHIND_M if p_target_far else -STAND_BEHIND_M
 	return Transform3D(
-		Basis.from_euler(Vector3(deg_to_rad(-14.0), deg_to_rad(-30.0), 0.0)),
-		Vector3(STAND_SIDE_X, STAND_SHOE_Y, line_z_for_ft(line_ft) + STAND_BEHIND_M))
+		Basis.from_euler(Vector3(deg_to_rad(-78.0), deg_to_rad(yaw), 0.0)),
+		Vector3(sx * STAND_SIDE_X, STAND_SHOE_Y,
+			line_z_for_ft_at(line_ft, p_target_far) + behind))
+
+
+# Rail slots hang side by side OUTWARD from slot 0 (the judged
+# pedestal spot): slot index steps away from the lane, so the
+# player's pair (slots 0-1) sits nearest the line and no slot
+# ever hangs over the pit.
+const SLOT_OFFSETS: Array = [0, 1, 2, 3] # slot index -> rail steps from slot 0
+
+
+## World transform of one rail slot. Slots 0/1 hold the player's
+## pair, 2/3 the AI's; slot 0 is the active shoe's home and sits
+## exactly on the old pedestal spot.
+func slot_tf(p_target_far: bool, line_ft: int, slot: int) -> Transform3D:
+	var base: Transform3D = (stand_tfs if p_target_far else stand_tfs_far)[line_ft]
+	var sx: float = 1.0 if p_target_far else -1.0
+	var off: float = float(SLOT_OFFSETS[slot]) * SLOT_STEP_X * sx
+	return Transform3D(base.basis, base.origin + Vector3(off, 0.0, 0.0))
+
+
+func _slot_of(shoe_node: Shoe) -> int:
+	var pi: int = player_pair.find(shoe_node)
+	if pi >= 0:
+		return pi
+	var ai: int = ai_pair.find(shoe_node)
+	if ai >= 0:
+		return 2 + ai
+	return 0
+
+
+func _stock_dict(p_target_far: bool) -> Dictionary:
+	return stand_tfs if p_target_far else stand_tfs_far
 
 
 func _init_stands() -> void:
-	stand_tfs = {
-		40: make_stand_tf(40),
-		30: make_stand_tf(30),
-	}
+	stand_tfs = {40: make_stand_tf(40, true), 30: make_stand_tf(30, true)}
+	stand_tfs_far = {40: make_stand_tf(40, false), 30: make_stand_tf(30, false)}
 	active_stand_line_ft = 40
+	stock_target_far = true
 	stand_tf = stand_tfs[active_stand_line_ft]
+
+
+func _refresh_stand_tf() -> void:
+	stand_tf = slot_tf(stock_target_far, active_stand_line_ft, _slot_of(shoe))
 
 
 func _set_active_stand(line_ft: int) -> void:
 	active_stand_line_ft = line_ft
-	stand_tf = stand_tfs[line_ft]
+	_refresh_stand_tf()
 
 
-## "The shoe waits where you are" (Fix Pass 7). While the shoe sits
-## stocked (STAND), the home pedestal follows the PLAYER: standing
-## at a foul line - ThrowMath.standing_line_ft, the FP3 release
-## classification with a proximity gate, read off the head - with
-## the shoe homed to the other line relocates the stocked shoe to
-## that line's pedestal. Instant and silent: the shoe is frozen at
-## rest, so this is a clean teleport, never a visible flight.
-## Runs only in STAND - a held, flying or still-settling shoe is
-## never touched - and at neither line the shoe stays where it is.
+## "The shoe waits where you are" (Fix Pass 7, generalised in
+## Backyard Game v1). While a shoe sits stocked (RAILED), its
+## home follows the PLAYER: standing at a foul line - at EITHER
+## end of the full court now - relocates every stocked shoe to
+## that line's rail stand, pairs and all. Instant and silent:
+## the shoes are frozen at rest, so this is a clean teleport,
+## never a visible flight. Runs only in PRACTICE with the
+## active shoe at rest (state STAND) - a held, flying or
+## still-settling shoe is never touched, a game in progress
+## places its own shoes, and at neither line nothing moves.
 ##
-## Defect history: before this pass the home was set ONLY at latch
-## time, from the shoe's own position (_nearest_stand_line). The
-## shoe starts on the 40 ft pedestal and can only reach a pedestal
-## by being returned to the current home, so every latch re-homed
-## it to the pedestal it was already sitting on - the 30 ft
-## pedestal could become home only by being grabbed from, which
-## required the shoe to already be there. It never was. Chris, in
-## the headset: "the shorter distance podium doesn't spawn a
-## horseshoe, very stingy."
+## Defect history: before Fix Pass 7 the home was set ONLY at
+## latch time, from the shoe's own position (_nearest_stand_line).
+## The shoe starts on the 40 ft pedestal and could only reach a
+## pedestal by being returned to the current home, so every
+## latch re-homed it to the pedestal it was already sitting on -
+## the 30 ft pedestal could become home only by being grabbed
+## from, which required the shoe to already be there. It never
+## was. Chris, in the headset: "the shorter distance podium
+## doesn't spawn a horseshoe, very stingy."
 func _restock_to_player_line() -> void:
-	if state != "STAND":
+	if mode != "PRACTICE" or state != "STAND":
 		return
-	var line_ft: int = ThrowMath.standing_line_ft(cam.global_position, STAKE_POS)
-	if line_ft != 0 and line_ft != active_stand_line_ft:
-		_set_active_stand(line_ft)
-		shoe.freeze = true
-		shoe.global_transform = stand_tf
-		shoe.clear_highlights()
+	var cam_pos: Vector3 = cam.global_position
+	var want_far: bool = stock_target_far
+	var want_line: int = 0
+	var line_far: int = ThrowMath.standing_line_ft(cam_pos, STAKE_POS)
+	if line_far != 0:
+		want_far = true
+		want_line = line_far
+	else:
+		var line_home: int = ThrowMath.standing_line_ft(cam_pos, HOME_STAKE_POS)
+		if line_home != 0:
+			want_far = false
+			want_line = line_home
+	if want_line == 0:
+		return
+	if want_far == stock_target_far and want_line == active_stand_line_ft:
+		return
+	stock_target_far = want_far
+	_set_active_stand(want_line)
+	for s: Shoe in _all_shoes():
+		if String(shoe_status[s]) == "RAILED":
+			s.freeze = true
+			s.global_transform = slot_tf(want_far, want_line, _slot_of(s))
+			s.clear_highlights()
+
+
+func _all_shoes() -> Array:
+	var out: Array = []
+	out.append_array(player_pair)
+	out.append_array(ai_pair)
+	return out
 
 
 func _nearest_stand_line() -> int:
+	var dict: Dictionary = _stock_dict(stock_target_far)
 	var best_line: int = active_stand_line_ft
 	var best_dist: float = INF
 	for line_ft: int in [40, 30]:
-		var tf: Transform3D = stand_tfs[line_ft]
+		var tf: Transform3D = dict[line_ft]
 		var d: float = shoe.global_position.distance_to(tf.origin)
 		if d < best_dist:
 			best_dist = d
@@ -218,11 +341,22 @@ func _nearest_stand_line() -> int:
 	return best_line
 
 
-func _build_pedestal(tf: Transform3D) -> void:
-	var p: Vector3 = tf.origin
-	_box(self, Vector3(p.x, 0.37, p.z), Vector3(0.07, 0.74, 0.07), _mat(Color(0.40, 0.29, 0.17)))
-	var plate := _box(self, Vector3(p.x, 0.755, p.z), Vector3(0.34, 0.03, 0.34), _mat(Color(0.48, 0.35, 0.21)))
-	plate.rotation_degrees = Vector3(-14.0, -30.0, 0.0)
+## A rail stand (Backyard Game v1, Chris's photo feed): two
+## posts, a horizontal rail the shoes hang on by their openings,
+## and a low shelf board. Slot 0 sits at base_pos; the rail runs
+## along X through all four slots.
+func _build_rail_stand(base_pos: Vector3, sx: float) -> void:
+	var post_mat := _mat(Color(0.40, 0.29, 0.17))
+	var rail_mat := _mat(Color(0.48, 0.35, 0.21))
+	var x0: float = base_pos.x - 0.16 * sx
+	var x1: float = base_pos.x + float(SLOT_OFFSETS[3]) * SLOT_STEP_X * sx + 0.16 * sx
+	_box(self, Vector3(x0, 0.44, base_pos.z), Vector3(0.07, 0.88, 0.07), post_mat)
+	_box(self, Vector3(x1, 0.44, base_pos.z), Vector3(0.07, 0.88, 0.07), post_mat)
+	var mid_x: float = (x0 + x1) * 0.5
+	_box(self, Vector3(mid_x, 0.885, base_pos.z),
+		Vector3(absf(x1 - x0) + 0.07, 0.045, 0.045), rail_mat)
+	_box(self, Vector3(mid_x, 0.30, base_pos.z + 0.02),
+		Vector3(absf(x1 - x0) + 0.07, 0.03, 0.30), post_mat)
 
 
 func _build_world() -> void:
@@ -259,24 +393,61 @@ func _build_world() -> void:
 	ground_phys.bounce = 0.35
 	_static_box(Vector3(0.0, -0.05, -6.0), Vector3(40.0, 0.1, 48.0), _mat(Color(0.32, 0.52, 0.26)), ground_phys)
 
+	# Two regulation pits, stakes exactly 12.192 m apart, built
+	# by the one code path so the contact behaviour Chris judged
+	# (solid core, sweep-guard geometry) is identical at both ends.
+	_build_pit(STAKE_POS, "FAR")
+	_build_pit(HOME_STAKE_POS, "HOME")
+
+	# Foul lines at BOTH ends: each end's 40 ft line is the
+	# opposite stake's plane, its 30 ft line 9.144 m from the
+	# target stake. The 40 ft strips pass through the home pit's
+	# clay (the stake plane does), so they are drawn as side
+	# segments flanking the pit instead of a buried centre strip.
+	for lz: float in [line_z_for_ft_at(40, true), line_z_for_ft_at(40, false)]:
+		_box(self, Vector3(-0.72, 0.006, lz), Vector3(0.55, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
+		_box(self, Vector3(0.72, 0.006, lz), Vector3(0.55, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
+	for lz2: float in [line_z_for_ft_at(30, true), line_z_for_ft_at(30, false)]:
+		_box(self, Vector3(0.0, 0.006, lz2), Vector3(1.6, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
+
+	# One rail stand per stock point (both lines, both ends),
+	# placed by the stand rule: behind the line, to the side,
+	# clear of the stance box.
+	for tfar: bool in [true, false]:
+		for stand_line: int in [40, 30]:
+			var stf: Transform3D = (stand_tfs if tfar else stand_tfs_far)[stand_line]
+			_build_rail_stand(stf.origin, 1.0 if tfar else -1.0)
+
+	_build_scenery()
+
+
+## One pit + stake, built once per end (Backyard Game v1).
+## Everything inside - the clay, the frame, the 1 in stake on its
+## leaning pivot, the +3 mm collision core (Fix Pass 8) and the
+## sweep-guard axis the shoe reads (Fix Pass 9) - is the judged
+## construction; the second end inherits it verbatim.
+func _build_pit(stake_pos: Vector3, key: String) -> void:
 	# Clay pit: high friction, almost no bounce - shoes deaden + slide.
 	var clay_phys := PhysicsMaterial.new()
 	clay_phys.friction = 1.0
 	clay_phys.bounce = 0.04
-	var pit_pos := Vector3(STAKE_POS.x, 0.025, STAKE_POS.z)
+	var pit_pos := Vector3(stake_pos.x, 0.025, stake_pos.z)
 	_static_box(pit_pos, PIT_SIZE, _mat(Color(0.62, 0.44, 0.30)), clay_phys)
 	# Pit frame boards.
 	var frame_mat := _mat(Color(0.45, 0.33, 0.20))
-	_box(self, Vector3(0.0, 0.03, STAKE_POS.z - PIT_SIZE.z * 0.5 - 0.03), Vector3(PIT_SIZE.x + 0.12, 0.06, 0.06), frame_mat)
-	_box(self, Vector3(0.0, 0.03, STAKE_POS.z + PIT_SIZE.z * 0.5 + 0.03), Vector3(PIT_SIZE.x + 0.12, 0.06, 0.06), frame_mat)
-	_box(self, Vector3(-PIT_SIZE.x * 0.5 - 0.03, 0.03, STAKE_POS.z), Vector3(0.06, 0.06, PIT_SIZE.z), frame_mat)
-	_box(self, Vector3(PIT_SIZE.x * 0.5 + 0.03, 0.03, STAKE_POS.z), Vector3(0.06, 0.06, PIT_SIZE.z), frame_mat)
+	_box(self, Vector3(0.0, 0.03, stake_pos.z - PIT_SIZE.z * 0.5 - 0.03), Vector3(PIT_SIZE.x + 0.12, 0.06, 0.06), frame_mat)
+	_box(self, Vector3(0.0, 0.03, stake_pos.z + PIT_SIZE.z * 0.5 + 0.03), Vector3(PIT_SIZE.x + 0.12, 0.06, 0.06), frame_mat)
+	_box(self, Vector3(-PIT_SIZE.x * 0.5 - 0.03, 0.03, stake_pos.z), Vector3(0.06, 0.06, PIT_SIZE.z), frame_mat)
+	_box(self, Vector3(PIT_SIZE.x * 0.5 + 0.03, 0.03, stake_pos.z), Vector3(0.06, 0.06, PIT_SIZE.z), frame_mat)
 
-	# Stake: 1 in steel, top 14.5 in above the pit, leaning ~8 deg so
-	# the top sits ~3 in toward the pitcher. Pivot at the pit surface.
+	# Stake: 1 in steel, top 14.5 in above the pit, leaning ~8 deg
+	# toward the pitcher who throws at it. The far stake leans
+	# toward +z (its pitcher stands at z > stake); the home stake
+	# mirrors, leaning toward -z. Pivot at the pit surface.
+	var lean: float = 8.0 if key == "FAR" else -8.0
 	var stake_pivot := Node3D.new()
-	stake_pivot.position = STAKE_POS
-	stake_pivot.rotation_degrees = Vector3(8.0, 0.0, 0.0)
+	stake_pivot.position = stake_pos
+	stake_pivot.rotation_degrees = Vector3(lean, 0.0, 0.0)
 	add_child(stake_pivot)
 	var stake_body := StaticBody3D.new()
 	stake_pivot.add_child(stake_body)
@@ -314,26 +485,27 @@ func _build_world() -> void:
 	# Fix Pass 9: even the fat core + CCD does not stop a fast
 	# FLAT shoe in the upper band (measured ghosts at centre
 	# heights 0.21-0.34, sub-step graze windows the cast misses).
-	# The shoe therefore carries a sweep guard against this
-	# stake (see shoe.gd): hand it the body and the collision
-	# cylinder's world axis endpoints.
-	stake_body_node = stake_body
-	stake_axis_a = stake_pivot.global_transform * Vector3(0.0, 0.058 - 0.31, 0.0)
-	stake_axis_b = stake_pivot.global_transform * Vector3(0.0, 0.058 + 0.31, 0.0)
+	# The shoe therefore carries a sweep guard against the stake
+	# it is thrown at (see shoe.gd): at every release the shoe is
+	# handed the target stake's body and axis endpoints. They are
+	# registered here, per stake.
+	var axis_a: Vector3 = stake_pivot.global_transform * Vector3(0.0, 0.058 - 0.31, 0.0)
+	var axis_b: Vector3 = stake_pivot.global_transform * Vector3(0.0, 0.058 + 0.31, 0.0)
+	stakes[key] = {"body": stake_body, "axis_a": axis_a, "axis_b": axis_b, "pos": stake_pos}
+	if key == "FAR":
+		stake_body_node = stake_body
+		stake_axis_a = axis_a
+		stake_axis_b = axis_b
 
-	# Foul lines the pitcher stands behind: the 40 ft standard and
-	# the 30 ft short line (NHPA learning distance, Fix Pass 3).
-	for line_ft: int in [40, 30]:
-		_box(self, Vector3(0.0, 0.006, line_z_for_ft(line_ft)),
-			Vector3(1.6, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
 
-	# One shoe pedestal per line, both placed by the same rule:
-	# behind the line, to the side, clear of the stance box.
-	for stand_line: int in [40, 30]:
-		var tf: Transform3D = stand_tfs[stand_line]
-		_build_pedestal(tf)
+## The stake currently being thrown at, as a stakes-dict key.
+func target_stake_key() -> String:
+	var far: bool = target_far if mode == "GAME" else stock_target_far
+	return "FAR" if far else "HOME"
 
-	_build_scenery()
+
+func target_stake_pos() -> Vector3:
+	return STAKE_POS if target_stake_key() == "FAR" else HOME_STAKE_POS
 
 
 ## Fix Pass 10 scenery / comfort dressing: the first sketch of the
@@ -620,7 +792,7 @@ func _build_board() -> void:
 	_box(board_root, Vector3(1.38, 1.75, -0.03), Vector3(0.09, 3.50, 0.09), wood)
 	_box(board_root, Vector3(0.0, 1.85, -0.02), board_slab_size, wood)
 	title_label = Label3D.new()
-	title_label.text = "HORSESHOES - TOSS TEST"
+	title_label.text = "HORSESHOES - BACKYARD"
 	title_label.font_size = 56
 	title_label.pixel_size = 0.0026
 	title_label.modulate = Color(1.0, 0.93, 0.75)
@@ -628,25 +800,31 @@ func _build_board() -> void:
 	title_label.outline_modulate = Color(0.1, 0.07, 0.03)
 	title_label.position = Vector3(0.0, 3.04, 0.01)
 	board_root.add_child(title_label)
+	# Backyard Game v1: the status block grows to 7 worst-case
+	# lines (game score/turn/result/prompt joins the practice
+	# readouts), so the status font steps down a size (58/0.0029,
+	# ~0.17 m capitals - still distance-legible) and the controls
+	# block steps down with it. The smoke suite's slab-fit guard
+	# measures both blocks at their new worst cases.
 	status_label = Label3D.new()
-	status_label.font_size = 64
-	status_label.pixel_size = 0.0031
+	status_label.font_size = 58
+	status_label.pixel_size = 0.0029
 	status_label.modulate = Color(0.95, 0.97, 0.90)
 	status_label.outline_size = 8
 	status_label.outline_modulate = Color(0.1, 0.07, 0.03)
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	status_label.position = Vector3(0.0, 2.02, 0.01)
+	status_label.position = Vector3(0.0, 2.06, 0.01)
 	board_root.add_child(status_label)
 	controls_label = Label3D.new()
-	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing, open hand (shoe returns)\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nRECENTER: menu long-press - seated/standing ok"
-	controls_label.font_size = 34
-	controls_label.pixel_size = 0.00105
-	controls_label.line_spacing = 2.0
+	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON: start game / play again\nB BUTTON: swap ends when prompted\nRECENTER: menu long-press - seated/standing ok"
+	controls_label.font_size = 30
+	controls_label.pixel_size = 0.00095
+	controls_label.line_spacing = 1.0
 	controls_label.modulate = Color(0.88, 0.90, 0.82)
 	controls_label.outline_size = 6
 	controls_label.outline_modulate = Color(0.1, 0.07, 0.03)
 	controls_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	controls_label.position = Vector3(0.0, 0.83, 0.01)
+	controls_label.position = Vector3(0.0, 0.79, 0.01)
 	board_root.add_child(controls_label)
 
 
@@ -664,25 +842,93 @@ func _update_board() -> void:
 		# attempts actually turn (or not) from where he stands.
 		flip_text = "%.2f REV" % last_flip_rev
 		turn_text = "%.2f REV" % last_turn_rev
-	var lines: String = "THROWS: %d\nHOLD: %s\nLAST: %s\nFLIP: %s\nTURN: %s" % [
-		throw_count, last_hold_text, dist_text, flip_text, turn_text]
-	if last_ringer:
-		lines += "\nRINGER!"
-	status_label.text = lines
+	var lines: Array = []
+	if mode == "PRACTICE":
+		lines = [
+			"THROWS: %d" % throw_count,
+			"HOLD: %s" % last_hold_text,
+			"LAST: %s" % dist_text,
+			"FLIP: %s" % flip_text,
+			"TURN: %s" % turn_text,
+		]
+		if last_ringer:
+			lines.append("RINGER!")
+		lines.append("A: START GAME")
+	elif phase == "OVER":
+		lines = [
+			"YOU %d - %d OPP" % [score_you, score_opp],
+			winner_text,
+			"FINAL - %d INNINGS" % inning,
+			"A: PLAY AGAIN",
+			"B: PRACTICE",
+		]
+	elif phase == "SWAP":
+		lines = [
+			"YOU %d - %d OPP" % [score_you, score_opp],
+			"INNING %d DONE" % inning,
+			"LAST INNING: %s" % last_inning_text,
+			"THROW FROM THE OTHER END",
+			"B: SWAP ENDS - OR WALK THERE",
+		]
+	else:
+		var turn_text2: String = "YOUR THROW %d OF 2" % (3 - turn_throws_left) \
+			if turn_side == "P" else "OPP THROWING"
+		lines = [
+			"YOU %d - %d OPP" % [score_you, score_opp],
+			"INNING %d - %s" % [inning, turn_text2],
+			"LAST: %s" % dist_text,
+			"FLIP: %s" % flip_text,
+			"TURN: %s" % turn_text,
+			"LAST INNING: %s" % (last_inning_text if last_inning_text != "" else "-"),
+		]
+		if last_ringer:
+			lines.append("RINGER!")
+	status_label.text = "\n".join(PackedStringArray(lines))
 
 
-func _spawn_shoe() -> void:
-	shoe = Shoe.new()
-	add_child(shoe)
-	shoe.guard_axis_a = stake_axis_a
-	shoe.guard_axis_b = stake_axis_b
-	shoe.guard_radius = STAKE_COLLISION_RADIUS
-	shoe.guard_body = stake_body_node
-	shoe.guard_enabled = true
-	shoe.freeze = true
-	shoe.global_transform = stand_tf
-	shoe.body_entered.connect(_on_shoe_body_entered)
+## Point one shoe's stake sweep guard at a stake (Fix Pass 9's
+## guard, generalised): called at spawn and again at EVERY
+## release, since either stake can now be the target.
+func _wire_guard(shoe_node: Shoe, stake_key: String) -> void:
+	var st: Dictionary = stakes[stake_key]
+	shoe_node.guard_axis_a = st["axis_a"]
+	shoe_node.guard_axis_b = st["axis_b"]
+	shoe_node.guard_radius = STAKE_COLLISION_RADIUS
+	shoe_node.guard_body = st["body"]
+	# guard_enabled is NOT set here: it is enabled once at spawn
+	# and left alone after, so the Fix Pass 9 negative control
+	# (guard deliberately disabled) survives a release.
+
+
+func _make_shoe(pair_color: Color) -> Shoe:
+	var s := Shoe.new()
+	add_child(s)
+	s.apply_tint(pair_color)
+	_wire_guard(s, "FAR")
+	s.guard_enabled = true
+	s.freeze = true
+	s.body_entered.connect(_on_any_shoe_body_entered.bind(s))
+	shoe_status[s] = "RAILED"
+	return s
+
+## Four shoes: the player's yellow pair and the AI's blue pair,
+## all stocked on the home end's 40 ft rail at boot (practice).
+## The active shoe is the player's first; the state machine
+## drives it exactly as the single test shoe was driven.
+func _spawn_shoes() -> void:
+	player_pair = [_make_shoe(PLAYER_PAIR_COLOR), _make_shoe(PLAYER_PAIR_COLOR)]
+	ai_pair = [_make_shoe(AI_PAIR_COLOR), _make_shoe(AI_PAIR_COLOR)]
+	shoe = player_pair[0]
+	for s: Shoe in _all_shoes():
+		s.global_transform = slot_tf(true, 40, _slot_of(s))
 	state = "STAND"
+
+
+func _build_ai() -> void:
+	ai_pitcher = AIPitcher.new()
+	ai_pitcher.name = "AIPitcher"
+	add_child(ai_pitcher)
+	ai_pitcher.place_at(1, FOUL_40_Z)
 
 
 # --- Hand access (test overrides first, then the real controllers) ---
@@ -723,14 +969,57 @@ func _stick_value(hand: String) -> Vector2:
 	return c.get_vector2(&"primary")
 
 
+## Game buttons (Backyard Game v1): A/X = start game / play
+## again, B/Y = swap ends / back to practice - the board lists
+## both, in the controls and at each prompt. Either hand counts.
+func _button_down(btn: String) -> bool:
+	if test_button.has(btn):
+		return bool(test_button[btn])
+	var action: StringName = &"ax_button" if btn == "A" else &"by_button"
+	for hand: String in ["L", "R"]:
+		var c: XRController3D = hand_ctrl[hand]
+		if c != null and c.is_button_pressed(action):
+			return true
+	return false
+
+
+func _poll_buttons() -> void:
+	var a_now: bool = _button_down("A")
+	var b_now: bool = _button_down("B")
+	var a_edge: bool = a_now and not bool(_btn_prev["A"])
+	var b_edge: bool = b_now and not bool(_btn_prev["B"])
+	_btn_prev["A"] = a_now
+	_btn_prev["B"] = b_now
+	if a_edge:
+		if mode == "PRACTICE" and state == "STAND":
+			start_game()
+		elif mode == "GAME" and phase == "OVER":
+			start_game()
+	if b_edge and mode == "GAME":
+		if phase == "SWAP":
+			_complete_swap(false)
+		elif phase == "OVER":
+			_enter_practice()
+
+
 func _track_hand_speed(hand: String) -> void:
 	var now: float = float(Time.get_ticks_msec()) / 1000.0
 	var pos: Vector3 = _hand_tf(hand).origin
 	if _prev_hand_t.has(hand):
 		var dt: float = now - float(_prev_hand_t[hand])
 		if dt > 0.0005:
+			# Bench note (Backyard Game v1): the divisor is
+			# floored at a 240 Hz tick. On the headset frames
+			# arrive at a steady ~90 Hz so the floor never
+			# engages; in headless runs an iteration can
+			# collapse to ~1 ms and ordinary hand motion then
+			# reads as a multi-m/s wave, randomly tripping the
+			# slide/throw speed gates (the slide stays-put
+			# check flaked on the untouched FP10 base for this
+			# reason). The release estimator's windowed fit
+			# does not read this speed.
 			var prev: Vector3 = _prev_hand_pos[hand]
-			var inst: float = (pos - prev).length() / dt
+			var inst: float = (pos - prev).length() / maxf(dt, 1.0 / 240.0)
 			hand_speed[hand] = lerpf(float(hand_speed[hand]), inst, 0.45)
 	_prev_hand_pos[hand] = pos
 	_prev_hand_t[hand] = now
@@ -760,7 +1049,7 @@ func _add_sample() -> void:
 func _find_candidate() -> void:
 	candidate_hand = ""
 	candidate_zone = ""
-	if state != "STAND":
+	if state != "STAND" or not grab_armed:
 		return
 	var best_dist: float = CANDIDATE_RADIUS
 	for hand: String in ["L", "R"]:
@@ -797,6 +1086,7 @@ func _process_locomotion(delta: float) -> void:
 
 func _process(_delta: float) -> void:
 	_process_locomotion(_delta)
+	_poll_buttons()
 	_track_hand_speed("L")
 	_track_hand_speed("R")
 	if state == "HELD":
@@ -856,8 +1146,12 @@ func _do_latch(hand: String, zone: String) -> void:
 	# It does not stay glued there: a throw re-homes to the line
 	# it was released from (see _settle_throw), a drop returns
 	# here, and while the shoe sits stocked the home follows the
-	# line the player is standing at (Fix Pass 7).
-	_set_active_stand(_nearest_stand_line())
+	# line the player is standing at (Fix Pass 7). Practice only:
+	# a game places its shoes itself, and stand_tf was set when
+	# the shoe was activated.
+	if mode == "PRACTICE":
+		_set_active_stand(_nearest_stand_line())
+	shoe_status[shoe] = "HELD"
 	held_hand = hand
 	held_zone = zone
 	var z: Dictionary = Shoe.zones()[zone]
@@ -925,7 +1219,7 @@ func _release_shoe(release_samples: Array) -> void:
 		release_cache = {
 			"hand": hand_was, "zone": zone_was, "hold": hold_was,
 			"slide_offset_m": slide_was,
-			"line_ft": ThrowMath.line_ft_for_release(release_tf.origin, STAKE_POS),
+			"line_ft": ThrowMath.line_ft_for_release(release_tf.origin, target_stake_pos()),
 			"origin_pos": origin.global_position,
 			# Stance evidence, captured at the release moment: where
 			# the HEAD faced vs how the whole RIG was yawed (stick
@@ -943,7 +1237,11 @@ func _release_shoe(release_samples: Array) -> void:
 		has_contact = false
 		_fly_time = 0.0
 		_still_time = 0.0
+		_pos_still_time = 0.0
+		_pos_anchor = shoe.global_position
 		state = "FLYING"
+		shoe_status[shoe] = "FLYING"
+		_wire_guard(shoe, target_stake_key())
 		shoe.reset_stake_guard()
 		shoe.freeze = false
 		shoe.global_transform = release_tf
@@ -965,10 +1263,16 @@ func _release_shoe(release_samples: Array) -> void:
 
 # --- Flight / settle ---
 
-func _on_shoe_body_entered(_body: Node) -> void:
-	if state == "FLYING" and not has_contact:
-		has_contact = true
-		first_contact_pos = shoe.global_position
+func _on_any_shoe_body_entered(_body: Node, shoe_node: Shoe) -> void:
+	if shoe_node == shoe:
+		if state == "FLYING" and not has_contact:
+			has_contact = true
+			first_contact_pos = shoe.global_position
+	elif ai_flight.has(shoe_node):
+		var fl: Dictionary = ai_flight[shoe_node]
+		if not bool(fl["has_contact"]):
+			fl["has_contact"] = true
+			fl["first_contact_pos"] = shoe_node.global_position
 
 
 func _physics_process(delta: float) -> void:
@@ -989,7 +1293,20 @@ func _physics_process(delta: float) -> void:
 					_still_time += delta
 				else:
 					_still_time = 0.0
-				if _still_time > SETTLE_STILL_SEC:
+				# Leaner guard (Backyard Game v1): a shoe can come
+				# to rest LEANING on the stake, gently rocking -
+				# linear velocity ~0 but angular velocity spiking
+				# past the still threshold forever, so the velocity
+				# test never settles it and (in a game) the inning
+				# hangs. Positional stillness is the robust signal:
+				# a shoe that has not moved 2 cm in a full second
+				# is down, wherever it is resting.
+				if shoe.global_position.distance_to(_pos_anchor) < 0.02:
+					_pos_still_time += delta
+				else:
+					_pos_still_time = 0.0
+					_pos_anchor = shoe.global_position
+				if _still_time > SETTLE_STILL_SEC or _pos_still_time > 1.0:
 					_settle_throw()
 			if shoe.global_position.length() > 40.0 or shoe.global_position.y < -2.0:
 				_settle_throw()
@@ -1005,12 +1322,22 @@ func _physics_process(delta: float) -> void:
 			_wait_time += delta
 			if _wait_time > RETURN_WAIT_SEC:
 				_return_to_stand()
+	_track_ai_flights(delta)
+	if mode == "GAME" and phase == "SWAP":
+		# Walking there manually also works: arrival at the new
+		# throwing end (read against the NEW target stake) ends
+		# the swap without the button.
+		var want_key: String = "FAR" if not target_far else "HOME"
+		var want_pos: Vector3 = STAKE_POS if want_key == "FAR" else HOME_STAKE_POS
+		if ThrowMath.standing_line_ft(cam.global_position, want_pos) != 0:
+			_complete_swap(true)
 
 
 func _settle_throw() -> void:
 	if state != "FLYING":
 		return
-	var stake_at_shoe := Vector3(STAKE_POS.x, shoe.global_position.y, STAKE_POS.z)
+	var tsp: Vector3 = target_stake_pos()
+	var stake_at_shoe := Vector3(tsp.x, shoe.global_position.y, tsp.z)
 	var dist_in: float = ThrowMath.nearest_distance_inches(
 		shoe.global_transform, stake_at_shoe, Shoe.WIDTH * 0.5, Shoe.LENGTH * 0.5)
 	var ringer: bool = ThrowMath.is_ringer(
@@ -1054,6 +1381,15 @@ func _settle_throw() -> void:
 		"flip_rotations": flip_rot,
 		"turn_rotations": turn_rot,
 	})
+	if mode == "GAME":
+		# A game shoe STAYS DOWN: it is evidence for the inning's
+		# scoring. Frozen where it settled; the turn advances.
+		shoe_status[shoe] = "DOWN"
+		shoe.freeze = true
+		inning_results.append({"owner": "P", "dist_in": dist_in, "ringer": ringer})
+		state = "STAND"
+		_on_turn_shoe_settled("P")
+		return
 	# The next shoe stocks where the throw was made from (Fix
 	# Pass 7): home follows the release's own line classification,
 	# so the return below lands directly on the throwing line's
@@ -1068,6 +1404,329 @@ func _return_to_stand() -> void:
 	shoe.freeze = true
 	shoe.global_transform = stand_tf
 	shoe.clear_highlights()
+	shoe_status[shoe] = "RAILED"
 	has_contact = false
 	release_cache.clear()
 	state = "STAND"
+
+
+# ============================================================
+# Backyard Game v1: practice <-> game, innings, the AI turn,
+# scoring, end swaps. The judged toss machinery above is the
+# only way a shoe ever flies; this layer just deals the shoes.
+# ============================================================
+
+var last_scorer: String = "" # side that scored the last inning
+
+
+func game_line_z() -> float:
+	return line_z_for_ft_at(40, target_far)
+
+
+func game_end_sign() -> int:
+	return 1 if target_far else -1
+
+
+## Clean reset: every shoe frozen onto its rail slot at the
+## given stock point, the player's first shoe active.
+func _gather_to_rail(p_target_far: bool, line_ft: int) -> void:
+	for s: Shoe in _all_shoes():
+		s.freeze = true
+		s.global_transform = slot_tf(p_target_far, line_ft, _slot_of(s))
+		s.clear_highlights()
+		shoe_status[s] = "RAILED"
+	stock_target_far = p_target_far
+	active_stand_line_ft = line_ft
+	shoe = player_pair[0]
+	_refresh_stand_tf()
+	grab_state.reset()
+	has_contact = false
+	release_cache.clear()
+	ai_flight.clear()
+	ai_throw_pending = false
+	state = "STAND"
+
+
+func start_game() -> void:
+	mode = "GAME"
+	score_you = 0
+	score_opp = 0
+	inning = 1
+	target_far = true
+	inning_first = "P"
+	last_scorer = ""
+	last_inning_text = ""
+	winner_text = ""
+	inning_results.clear()
+	_gather_to_rail(true, 40)
+	ai_pitcher.place_at(1, game_line_z())
+	_begin_turn("P")
+	_update_board()
+
+
+func _enter_practice() -> void:
+	mode = "PRACTICE"
+	phase = ""
+	inning = 0
+	inning_results.clear()
+	# Stock the pairs at the end the player is standing at (the
+	# FP7 rule decides; default to wherever stock already lives).
+	var cam_pos: Vector3 = cam.global_position
+	var lf: int = ThrowMath.standing_line_ft(cam_pos, STAKE_POS)
+	var hf: int = ThrowMath.standing_line_ft(cam_pos, HOME_STAKE_POS)
+	if lf != 0:
+		_gather_to_rail(true, lf)
+	elif hf != 0:
+		_gather_to_rail(false, hf)
+	else:
+		_gather_to_rail(stock_target_far, active_stand_line_ft)
+	grab_armed = true
+	ai_pitcher.place_at(1 if stock_target_far else -1,
+		line_z_for_ft_at(40, stock_target_far))
+	_update_board()
+
+
+func _activate_next_player_shoe() -> bool:
+	for s: Shoe in player_pair:
+		if String(shoe_status[s]) == "RAILED":
+			shoe = s
+			_refresh_stand_tf()
+			state = "STAND"
+			return true
+	return false
+
+
+func _begin_turn(side: String) -> void:
+	turn_side = side
+	turn_throws_left = 2
+	phase = "P_TURN" if side == "P" else "AI_TURN"
+	if side == "P":
+		grab_armed = true
+		_activate_next_player_shoe()
+	else:
+		grab_armed = false
+		ai_delay = 0.8
+	_update_board()
+
+
+## Called by both settle paths (player + AI) once per game shoe.
+func _on_turn_shoe_settled(side: String) -> void:
+	if mode != "GAME":
+		return
+	turn_throws_left -= 1
+	_update_board()
+	if turn_throws_left > 0:
+		if side == "P":
+			_activate_next_player_shoe()
+		else:
+			ai_delay = 0.6
+		return
+	if turn_side == inning_first:
+		_begin_turn("AI" if turn_side == "P" else "P")
+	else:
+		_score_inning()
+
+
+func _score_inning() -> void:
+	var res: Dictionary = Scoring.score_inning(inning_results)
+	score_you += int(res["points_p"])
+	score_opp += int(res["points_ai"])
+	last_scorer = String(res["scorer"])
+	last_inning_text = String(res["summary"])
+	inning_results.clear()
+	grab_armed = false
+	if score_you >= WIN_SCORE or score_opp >= WIN_SCORE:
+		phase = "OVER"
+		winner_text = "YOU WIN!" if score_you > score_opp else "OPP WINS"
+	else:
+		phase = "SWAP"
+	_update_board()
+
+
+## End the between-innings prompt: flip the throwing end,
+## gather the shoes to its rail, put the AI in its box, and
+## start the next inning with whoever scored (NHPA custom;
+## scoreless innings alternate the first throw).
+func _complete_swap(arrived: bool) -> void:
+	if phase != "SWAP":
+		return
+	target_far = not target_far
+	inning += 1
+	if last_scorer != "":
+		inning_first = last_scorer
+	else:
+		inning_first = "AI" if inning_first == "P" else "P"
+	_gather_to_rail(target_far, 40)
+	ai_pitcher.place_at(game_end_sign(), game_line_z())
+	if not arrived:
+		_move_player_to_end()
+	_begin_turn(inning_first)
+	_update_board()
+
+
+func _move_player_to_end() -> void:
+	var cx: float = clampf(cam.global_position.x, -0.6, 0.6)
+	var spot_z: float = game_line_z() + (0.55 if target_far else -0.55)
+	var yaw: float = 0.0 if target_far else PI
+	var want_cam := Transform3D(Basis(Vector3.UP, yaw),
+		Vector3(cx, cam.global_position.y, spot_z))
+	origin.global_transform = want_cam * cam.transform.inverse()
+
+
+## The lane the AI is about to throw down: the corridor between
+## the foul line and the target stake. The AI holds its throw
+## while the player stands in it.
+func _player_in_lane() -> bool:
+	var cp: Vector3 = cam.global_position
+	if absf(cp.x) > 1.3:
+		return false
+	var lz: float = game_line_z()
+	var tz: float = target_stake_pos().z
+	return cp.z > minf(lz, tz) + 0.15 and cp.z < maxf(lz, tz) - 0.15
+
+
+var ai_delay: float = -1.0 # seconds until the AI's next throw; <0 idle
+var ai_pending_shoe: Shoe = null
+var ai_pending_release: Dictionary = {}
+
+
+func _ai_next_throw() -> void:
+	if mode != "GAME" or phase != "AI_TURN" or ai_throw_pending:
+		return
+	if _player_in_lane():
+		ai_delay = 0.35 # hold: the player is in the lane
+		return
+	var next_shoe: Shoe = null
+	for s: Shoe in ai_pair:
+		if String(shoe_status[s]) == "RAILED":
+			next_shoe = s
+			break
+	if next_shoe == null:
+		return
+	var end_sign: int = game_end_sign()
+	ai_pitcher.place_at(end_sign, game_line_z())
+	var from_pos: Vector3 = AIPitcher.release_base_pos(end_sign, game_line_z())
+	var rel: Dictionary = AIPitcher.sample_release(ai_rng, from_pos, target_stake_pos())
+	ai_pending_shoe = next_shoe
+	ai_pending_release = rel
+	ai_throw_pending = true
+	shoe_status[next_shoe] = "HELD"
+	next_shoe.freeze = true
+	ai_pitcher.play_throw(next_shoe, rel, _ai_release_now, _ai_swing_done)
+
+
+func _ai_release_now() -> void:
+	var s: Shoe = ai_pending_shoe
+	if s == null:
+		return
+	var rel: Dictionary = ai_pending_release
+	_wire_guard(s, target_stake_key())
+	s.reset_stake_guard()
+	s.freeze = false
+	s.global_transform = Transform3D(rel["basis"], rel["pos"])
+	s.linear_velocity = rel["vel"]
+	s.angular_velocity = rel["ang"]
+	shoe_status[s] = "FLYING"
+	ai_flight[s] = {
+		"fly_time": 0.0, "still_time": 0.0,
+		"pos_still": 0.0, "pos_anchor": rel["pos"],
+		"flip": 0.0, "turn": 0.0,
+		"has_contact": false, "first_contact_pos": Vector3.ZERO,
+		"release": rel,
+		"line_ft": ThrowMath.line_ft_for_release(rel["pos"], target_stake_pos()),
+	}
+
+
+func _ai_swing_done() -> void:
+	ai_throw_pending = false
+	ai_pending_shoe = null
+
+
+## AI flight tracking: the same settle discipline as the
+## player's shoe (0.6 s minimum flight, rest thresholds, the
+## same rotation accounting for the record).
+func _track_ai_flights(delta: float) -> void:
+	if ai_delay > 0.0:
+		ai_delay -= delta
+		if ai_delay <= 0.0:
+			_ai_next_throw()
+	if ai_flight.is_empty():
+		return
+	var done: Array = []
+	for s: Shoe in ai_flight.keys():
+		var fl: Dictionary = ai_flight[s]
+		fl["fly_time"] = float(fl["fly_time"]) + delta
+		var av: Vector3 = s.angular_velocity
+		var x_axis: Vector3 = s.global_transform.basis.x.normalized()
+		fl["flip"] = float(fl["flip"]) + av.dot(x_axis) * delta / TAU
+		fl["turn"] = float(fl["turn"]) + av.y * delta / TAU
+		if float(fl["fly_time"]) > 0.6:
+			if s.linear_velocity.length() < 0.10 and s.angular_velocity.length() < 0.30:
+				fl["still_time"] = float(fl["still_time"]) + delta
+			else:
+				fl["still_time"] = 0.0
+			# Same leaner guard as the player's shoe: positional
+			# stillness settles a shoe rocking against the stake.
+			if s.global_position.distance_to(fl["pos_anchor"]) < 0.02:
+				fl["pos_still"] = float(fl["pos_still"]) + delta
+			else:
+				fl["pos_still"] = 0.0
+				fl["pos_anchor"] = s.global_position
+			if float(fl["still_time"]) > SETTLE_STILL_SEC or float(fl["pos_still"]) > 1.0:
+				done.append(s)
+		if s.global_position.length() > 40.0 or s.global_position.y < -2.0:
+			done.append(s)
+	for s2: Shoe in done:
+		_settle_ai_shoe(s2)
+
+
+func _settle_ai_shoe(s: Shoe) -> void:
+	if not ai_flight.has(s):
+		return
+	var fl: Dictionary = ai_flight[s]
+	ai_flight.erase(s)
+	var tsp: Vector3 = target_stake_pos()
+	var stake_at_shoe := Vector3(tsp.x, s.global_position.y, tsp.z)
+	var dist_in: float = ThrowMath.nearest_distance_inches(
+		s.global_transform, stake_at_shoe, Shoe.WIDTH * 0.5, Shoe.LENGTH * 0.5)
+	var ringer: bool = ThrowMath.is_ringer(
+		s.global_transform, stake_at_shoe,
+		Shoe.RINGER_INNER_HALF, Shoe.RINGER_Z_MIN, Shoe.RINGER_Z_MAX)
+	s.freeze = true
+	shoe_status[s] = "DOWN"
+	throw_count += 1
+	last_hold_text = "FLIP (TOE)"
+	last_distance_in = dist_in
+	last_flip_rev = float(fl["flip"])
+	last_turn_rev = float(fl["turn"])
+	last_ringer = ringer
+	_update_board()
+	var rel: Dictionary = fl["release"]
+	recorder.log_record({
+		"type": "throw",
+		"ts": Time.get_datetime_string_from_system(),
+		"throw_index": throw_count,
+		"hand": "AI",
+		"hold": "flip",
+		"zone": "toe",
+		"slide_offset_m": 0.0,
+		"line_ft": int(fl["line_ft"]),
+		"origin_release_pos": ThrowRecorder.vec3_arr(origin.global_position),
+		"head_yaw_deg": ThrowMath.yaw_deg(-cam.global_transform.basis.z),
+		"origin_yaw_deg": ThrowMath.yaw_deg(-origin.global_transform.basis.z),
+		"samples": [],
+		"release_pos": ThrowRecorder.vec3_arr(rel["pos"]),
+		"release_quat": ThrowRecorder.quat_arr(
+			(rel["basis"] as Basis).get_rotation_quaternion()),
+		"release_velocity": ThrowRecorder.vec3_arr(rel["vel"]),
+		"release_angular_velocity": ThrowRecorder.vec3_arr(rel["ang"]),
+		"first_contact_pos": ThrowRecorder.vec3_arr(fl["first_contact_pos"]) if bool(fl["has_contact"]) else [],
+		"settle_pos": ThrowRecorder.vec3_arr(s.global_position),
+		"settle_quat": ThrowRecorder.quat_arr(s.global_transform.basis.get_rotation_quaternion()),
+		"landing_distance_in": dist_in,
+		"ringer": ringer,
+		"flip_rotations": float(fl["flip"]),
+		"turn_rotations": float(fl["turn"]),
+	})
+	inning_results.append({"owner": "AI", "dist_in": dist_in, "ringer": ringer})
+	_on_turn_shoe_settled("AI")

@@ -523,10 +523,94 @@ func test_api_guard() -> void:
 		["XRController3D", "get_input"], ["XRController3D", "trigger_haptic_pulse"],
 		["XRController3D", "get_is_active"],
 		["XRController3D", "get_vector2"],
+		["XRController3D", "is_button_pressed"],
 	]
 	for p: Array in pairs:
 		check(ClassDB.class_has_method(String(p[0]), String(p[1])),
 			"API guard: %s.%s exists" % [String(p[0]), String(p[1])])
+
+
+func test_scoring() -> void:
+	# Backyard Game v1: NHPA cancellation scoring, hand-computed
+	# cases. A shoe entry is {owner, dist_in, ringer}; a ringer is
+	# worth 3 and ringers cancel in pairs; then only the side
+	# holding the closest point shoe(s) scores, 1 per shoe inside
+	# 6 in and closer than the opponent's closest.
+	var r := {"owner": "P", "dist_in": 0.0, "ringer": true}
+	var ra := {"owner": "AI", "dist_in": 0.0, "ringer": true}
+	var res: Dictionary = Scoring.score_inning([r, ra,
+		{"owner": "P", "dist_in": 4.0, "ringer": false},
+		{"owner": "AI", "dist_in": 5.0, "ringer": false}])
+	check(int(res["points_p"]) == 1 and int(res["points_ai"]) == 0,
+		"scoring: ringer cancels ringer, closer point shoe takes the inning 1-0")
+	res = Scoring.score_inning([r, {"owner": "P", "dist_in": 0.0, "ringer": true}, ra])
+	check(int(res["points_p"]) == 3 and int(res["points_ai"]) == 0,
+		"scoring: 2 ringers vs 1 leaves one standing = 3")
+	res = Scoring.score_inning([
+		{"owner": "P", "dist_in": 3.0, "ringer": false},
+		{"owner": "AI", "dist_in": 5.0, "ringer": false}])
+	check(int(res["points_p"]) == 1, "scoring: a lone closer point shoe = 1")
+	res = Scoring.score_inning([
+		{"owner": "P", "dist_in": 2.0, "ringer": false},
+		{"owner": "P", "dist_in": 4.0, "ringer": false},
+		{"owner": "AI", "dist_in": 5.0, "ringer": false}])
+	check(int(res["points_p"]) == 2,
+		"scoring: two point shoes vs one farther = 2")
+	res = Scoring.score_inning([
+		{"owner": "P", "dist_in": 7.0, "ringer": false},
+		{"owner": "AI", "dist_in": 9.0, "ringer": false}])
+	check(int(res["points_p"]) == 0 and int(res["points_ai"]) == 0
+		and String(res["scorer"]) == "",
+		"scoring: shoes outside 6 in score nothing")
+	res = Scoring.score_inning([
+		{"owner": "P", "dist_in": 3.0, "ringer": false},
+		{"owner": "AI", "dist_in": 3.0, "ringer": false}])
+	check(int(res["points_p"]) == 0 and int(res["points_ai"]) == 0,
+		"scoring: tied closest shoes = scoreless inning")
+	res = Scoring.score_inning([r,
+		{"owner": "AI", "dist_in": 2.0, "ringer": false}])
+	check(int(res["points_p"]) == 3 and int(res["points_ai"]) == 0,
+		"scoring: an uncancelled ringer blocks the opponent's point shoe")
+	res = Scoring.score_inning([r,
+		{"owner": "P", "dist_in": 4.0, "ringer": false},
+		{"owner": "AI", "dist_in": 5.0, "ringer": false}])
+	check(int(res["points_p"]) == 4,
+		"scoring: ringer + own point shoe inside the opponent's closest = 4")
+	res = Scoring.score_inning([ra])
+	check(int(res["points_ai"]) == 3 and String(res["scorer"]) == "AI",
+		"scoring: a lone AI ringer = 3 for the AI")
+
+
+func test_ai_release() -> void:
+	# The AI's constructed release: a ballistic flip that crosses
+	# the target stake's plane at scoring height, spinning about
+	# the shoe's lateral axis toward the target - both directions.
+	var far_stake := Vector3(0.0, 0.05, -12.192)
+	var rel: Dictionary = AIPitcher.base_release(
+		AIPitcher.release_base_pos(1, 0.0), far_stake)
+	var p0: Vector3 = rel["pos"]
+	var v0: Vector3 = rel["vel"]
+	check(v0.z < 0.0, "AI release: home-end throw travels toward -z")
+	var t_cross: float = (far_stake.z - p0.z) / v0.z
+	var y_cross: float = p0.y + v0.y * t_cross - 4.9 * t_cross * t_cross
+	check(absf(y_cross - 0.50) < 0.02,
+		"AI release: crosses the far stake plane at 0.50 m (got %.2f)" % y_cross)
+	check(absf(p0.x + v0.x * t_cross) < 0.01,
+		"AI release: crosses the far stake plane on the centre line")
+	check((rel["ang"] as Vector3).x > 0.0
+		and absf((rel["ang"] as Vector3).length() - TAU / 1.15) < 0.01,
+		"AI release: one flip revolution per flight at the 40 ft cadence (the FP9 audit's proven +X flip for a -z throw)")
+	var home_stake := Vector3(0.0, 0.05, 0.0)
+	var rel2: Dictionary = AIPitcher.base_release(
+		AIPitcher.release_base_pos(-1, -12.192), home_stake)
+	var p1: Vector3 = rel2["pos"]
+	var v1: Vector3 = rel2["vel"]
+	check(v1.z > 0.0 and (rel2["ang"] as Vector3).x < 0.0,
+		"AI release: far-end throw mirrors (travels +z, spin flips sign)")
+	var t2: float = (home_stake.z - p1.z) / v1.z
+	var y2: float = p1.y + v1.y * t2 - 4.9 * t2 * t2
+	check(absf(y2 - 0.50) < 0.02,
+		"AI release: crosses the home stake plane at 0.50 m (got %.2f)" % y2)
 
 
 func _run() -> void:
@@ -543,6 +627,8 @@ func _run() -> void:
 	test_origin_relative_velocity()
 	test_yaw_deg()
 	test_api_guard()
+	test_scoring()
+	test_ai_release()
 	var shoe_node := Shoe.new()
 	root.add_child(shoe_node)
 	await physics_frame

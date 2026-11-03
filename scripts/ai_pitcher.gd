@@ -1,0 +1,258 @@
+class_name AIPitcher
+extends Node3D
+
+## The AI opponent (Backyard Game v1): a low-poly club player
+## built from primitives - legs, torso, head, cap, one swinging
+## arm - plus the release model it throws with.
+##
+## The release is CONSTRUCTED, not estimated (the brief allows
+## this): a ballistic "good flip" is computed from the release
+## point to the target stake, then sampled with human error.
+## The shoe then flies the PRODUCTION physics - stake sweep
+## guard, clay, settle and scoring are the real path; no outcome
+## is faked. The sampler's spread constants below were tuned
+## against tests/ai_measure.gd run over the real scene (see the
+## delivery report for the measured ringer line).
+##
+## Swing animation is cosmetic: the arm carries the shoe through
+## a windup / swing / follow-through, and at the release angle
+## the caller's on_release fires and physics takes the shoe.
+
+const GRAV: float = 9.8
+const FLIGHT_T: float = 1.15 # planned seconds, release to stake plane
+const ARRIVE_H: float = 0.50 # planned height crossing the stake plane
+# Arrival phase, found by grid search over the production
+# physics (tests/ai_grid.gd during the v1 build): a flip whose
+# opening faces the stake AT the plane crossing arrives too
+# early in its rotation and clangs off; rotated ~75 deg further
+# at release, the shoe comes down OVER the stake and wraps -
+# ringers live in a ~60-90 deg corridor, 75 is its centre.
+const PHASE_DEG: float = 75.0
+
+# --- Error model (measured with tests/ai_measure.gd) ---
+# Final line, 220 simulated throws in the real scene through
+# the production flight path (2026-11-02): 24.1% ringers,
+# 73.6% of shoes inside 6 in, mean landing 7.1 in, self-play
+# 1.65 points per side per inning - a club player, beatable.
+# (The base release's PHASE_DEG matters more than any of these:
+# at phase 0 the same spread rang 0.0%.)
+const ERR_SPEED_FRAC: float = 0.021 # fraction of release speed
+const ERR_AZIMUTH_DEG: float = 0.65 # horizontal direction, degrees
+const ERR_VY: float = 0.09 # added vertical velocity, m/s
+const ERR_POS_X: float = 0.045 # release point lateral jitter, m
+const ERR_POS_Y: float = 0.025 # release point height jitter, m
+const ERR_SPIN_FRAC: float = 0.07 # flip rate jitter, fraction
+
+const ARM_LEN: float = 0.62
+const SHOULDER_LOCAL := Vector3(-0.30, 1.45, 0.0)
+const A_RELEASE: float = 1.15 # arm angle (rad) at the release instant
+const THROW_DUR: float = 1.9 # seconds for a full swing at speed 1
+
+var speed_scale: float = 1.0 # tests raise this; feel is judged live
+
+var _arm_pivot: Node3D
+var _body_root: Node3D
+var _throwing: bool = false
+var _anim_t: float = 0.0
+var _shoe: Shoe = null
+var _release: Dictionary = {}
+var _on_release: Callable
+var _on_done: Callable
+var _released: bool = false
+var _idle_t: float = 0.0
+
+
+## Where the AI's releases originate when it pitches from an end:
+## a step in front of that end's 40 ft foul line, near the lane.
+## end_sign: +1 = home end (throws toward -z), -1 = far end.
+static func release_base_pos(end_sign: int, line_z: float) -> Vector3:
+	var travel: float = -float(end_sign)
+	return Vector3(0.42 * float(end_sign), 1.22, line_z + 0.35 * travel)
+
+
+## The un-sampled "good flip": ballistic velocity that crosses
+## the target stake's plane at ARRIVE_H after FLIGHT_T, with one
+## full end-over-end revolution in the same time (the audit's
+## proven flip profile: opening toward the target at release,
+## spin about world X, sign mirrored with travel direction).
+static func base_release(from_pos: Vector3, target_stake: Vector3) -> Dictionary:
+	var travel: float = signf(target_stake.z - from_pos.z)
+	var vel := Vector3(
+		(target_stake.x - from_pos.x) / FLIGHT_T,
+		(ARRIVE_H - from_pos.y + 0.5 * GRAV * FLIGHT_T * FLIGHT_T) / FLIGHT_T,
+		(target_stake.z - from_pos.z) / FLIGHT_T)
+	var basis: Basis = Basis(Vector3(1.0, 0.0, 0.0), deg_to_rad(-travel * PHASE_DEG)) \
+		* (Basis(Vector3.UP, PI) if travel < 0.0 else Basis.IDENTITY)
+	var rate: float = TAU / FLIGHT_T
+	var ang := Vector3(-travel * rate, 0.0, 0.0)
+	return {"pos": from_pos, "basis": basis, "vel": vel, "ang": ang}
+
+
+## One sampled AI release: the good flip plus club-player error.
+static func sample_release(rng: RandomNumberGenerator, from_pos: Vector3,
+		target_stake: Vector3) -> Dictionary:
+	var rel: Dictionary = base_release(from_pos, target_stake)
+	var pos: Vector3 = rel["pos"]
+	pos.x += rng.randfn(0.0, ERR_POS_X)
+	pos.y += rng.randfn(0.0, ERR_POS_Y)
+	var vel: Vector3 = rel["vel"]
+	var speed: float = vel.length()
+	var dir: Vector3 = vel / speed
+	# Azimuth error rotates the (flat) direction of travel.
+	var az: float = deg_to_rad(rng.randfn(0.0, ERR_AZIMUTH_DEG))
+	var flat := Vector2(dir.x, dir.z).rotated(az)
+	dir.x = flat.x
+	dir.z = flat.y
+	dir = dir.normalized()
+	vel = dir * (speed * (1.0 + rng.randfn(0.0, ERR_SPEED_FRAC)))
+	vel.y += rng.randfn(0.0, ERR_VY)
+	rel["pos"] = pos
+	rel["vel"] = vel
+	var ang: Vector3 = rel["ang"]
+	rel["ang"] = ang * (1.0 + rng.randfn(0.0, ERR_SPIN_FRAC))
+	return rel
+
+
+func _mat(c: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	return m
+
+
+func _box(parent: Node, pos: Vector3, size: Vector3, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	mi.mesh = bm
+	mi.position = pos
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
+
+
+func _ready() -> void:
+	_body_root = Node3D.new()
+	add_child(_body_root)
+	var denim := _mat(Color(0.20, 0.26, 0.44))
+	var shirt := _mat(Color(0.16, 0.38, 0.72)) # opponent blue
+	var skin := _mat(Color(0.82, 0.62, 0.47))
+	var cap_mat := _mat(Color(0.75, 0.16, 0.14))
+	_box(_body_root, Vector3(-0.11, 0.42, 0.0), Vector3(0.15, 0.84, 0.17), denim)
+	_box(_body_root, Vector3(0.11, 0.42, 0.0), Vector3(0.15, 0.84, 0.17), denim)
+	_box(_body_root, Vector3(0.0, 1.12, 0.0), Vector3(0.46, 0.58, 0.24), shirt)
+	var head := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 0.115
+	sm.height = 0.23
+	sm.radial_segments = 16
+	sm.rings = 8
+	head.mesh = sm
+	head.material_override = skin
+	head.position = Vector3(0.0, 1.56, 0.0)
+	_body_root.add_child(head)
+	var cap := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.12
+	cm.bottom_radius = 0.125
+	cm.height = 0.07
+	cap.mesh = cm
+	cap.material_override = cap_mat
+	cap.position = Vector3(0.0, 1.645, 0.0)
+	_body_root.add_child(cap)
+	_box(_body_root, Vector3(0.0, 1.615, -0.14), Vector3(0.20, 0.025, 0.13), cap_mat)
+	# Rest arm (far side): hangs still.
+	_box(_body_root, Vector3(0.31, 1.06, 0.0), Vector3(0.11, 0.58, 0.12), shirt)
+	# Throwing arm: pivot at the lane-side shoulder.
+	_arm_pivot = Node3D.new()
+	_arm_pivot.position = SHOULDER_LOCAL
+	_body_root.add_child(_arm_pivot)
+	_box(_arm_pivot, Vector3(0.0, -ARM_LEN * 0.5, 0.0), Vector3(0.11, ARM_LEN, 0.12), shirt)
+	var hand := MeshInstance3D.new()
+	var hm := SphereMesh.new()
+	hm.radius = 0.05
+	hm.height = 0.10
+	hand.mesh = hm
+	hand.material_override = skin
+	hand.position = Vector3(0.0, -ARM_LEN, 0.0)
+	_arm_pivot.add_child(hand)
+
+
+## Stand at an end's pitcher's box, facing the target stake.
+## Root placement is solved from the release point: at the
+## release arm angle the hand tip lands on release_base_pos.
+func place_at(end_sign: int, line_z: float) -> void:
+	var travel: float = -float(end_sign)
+	var rel_pos: Vector3 = release_base_pos(end_sign, line_z)
+	var shoulder_world := Vector3(
+		rel_pos.x - SHOULDER_LOCAL.x * float(end_sign),
+		0.0,
+		rel_pos.z - travel * ARM_LEN * sin(A_RELEASE))
+	position = Vector3(shoulder_world.x, 0.0, shoulder_world.z)
+	rotation = Vector3(0.0, 0.0 if travel < 0.0 else PI, 0.0)
+
+
+func hand_tip_transform() -> Transform3D:
+	var tip_local := Transform3D(Basis.IDENTITY, Vector3(0.0, -ARM_LEN, 0.0))
+	return _arm_pivot.global_transform * tip_local
+
+
+func is_throwing() -> bool:
+	return _throwing
+
+
+## Arm angle (rad about the shoulder X) for animation time t in
+## [0, THROW_DUR]. Windup slow, swing fast, follow-through settles.
+func _arm_angle(t: float) -> float:
+	var w_end: float = THROW_DUR * 0.52
+	var s_end: float = THROW_DUR * 0.76
+	if t < w_end:
+		var f: float = t / w_end
+		return lerpf(0.12, -1.85, f * f * (3.0 - 2.0 * f))
+	if t < s_end:
+		var f2: float = (t - w_end) / (s_end - w_end)
+		return lerpf(-1.85, 1.30, f2 * f2)
+	var f3: float = (t - s_end) / (THROW_DUR - s_end)
+	return lerpf(1.30, 0.85, f3 * f3 * (3.0 - 2.0 * f3))
+
+
+## Play one swing with the given shoe and sampled release. The
+## shoe rides the hand (frozen) until the release angle, where
+## on_release fires (the caller unfreezes it with the release);
+## on_done fires when the animation completes.
+func play_throw(shoe_node: Shoe, release: Dictionary,
+		on_release: Callable, on_done: Callable) -> void:
+	_shoe = shoe_node
+	_release = release
+	_on_release = on_release
+	_on_done = on_done
+	_anim_t = 0.0
+	_released = false
+	_throwing = true
+
+
+func _process(delta: float) -> void:
+	_idle_t += delta
+	if not _throwing:
+		# Idle: a barely-there sway so the character reads alive.
+		if _arm_pivot != null:
+			_arm_pivot.rotation.x = 0.12 + 0.03 * sin(_idle_t * 1.4)
+			_body_root.position.y = 0.008 * sin(_idle_t * 2.2)
+		return
+	_anim_t += delta * speed_scale
+	var ang: float = _arm_angle(minf(_anim_t, THROW_DUR))
+	_arm_pivot.rotation.x = ang
+	if _shoe != null and not _released:
+		var rel_basis: Basis = _release["basis"]
+		var local_spin := Basis(Vector3.RIGHT, ang - A_RELEASE)
+		var shoe_basis: Basis = global_transform.basis * local_spin * rel_basis
+		_shoe.global_transform = Transform3D(shoe_basis, hand_tip_transform().origin)
+	if not _released and ang >= A_RELEASE and _anim_t > THROW_DUR * 0.52:
+		_released = true
+		var cb: Callable = _on_release
+		_shoe = null
+		cb.call()
+	if _anim_t >= THROW_DUR:
+		_throwing = false
+		_shoe = null
+		var done: Callable = _on_done
+		done.call()

@@ -27,6 +27,8 @@ var parts: Dictionary = {} # zone name -> MeshInstance3D
 var zone_markers: Dictionary = {} # zone name -> MeshInstance3D (proof/debug)
 var _base_mats: Dictionary = {}
 var _hi_mats: Dictionary = {}
+var _calk_instances: Array = []
+var tint := Color(0.36, 0.38, 0.42) # shoe paint (default: bare steel)
 var _part_boxes: Array = [] # {pos, size} per collision part, shoe-local
 
 # --- Stake sweep guard (Fix Pass 9) ---
@@ -164,10 +166,31 @@ func _steel_mat(hi: bool) -> StandardMaterial3D:
 		m.emission = Color(1.0, 0.5, 0.1)
 		m.emission_energy_multiplier = 1.6
 	else:
-		m.albedo_color = Color(0.36, 0.38, 0.42)
+		m.albedo_color = tint
 		m.metallic = 0.85
 		m.roughness = 0.42
 	return m
+
+
+## Pair colours (Backyard Game v1): a side's shoes are painted -
+## the player's pair yellow, the AI's blue, per Chris's photo
+## feed. Recolours every part + calk in the pair colour (painted
+## metal: a little less metallic than bare steel); the orange
+## grab highlight is untouched and wins while shown.
+func apply_tint(c: Color) -> void:
+	tint = c
+	for zone: String in parts.keys():
+		var mi: MeshInstance3D = parts[zone]
+		var was_hi: bool = mi.material_override == _hi_mats[zone]
+		var m := StandardMaterial3D.new()
+		m.albedo_color = c
+		m.metallic = 0.55
+		m.roughness = 0.50
+		_base_mats[zone] = m
+		if not was_hi:
+			mi.material_override = m
+	for calk: Variant in _calk_instances:
+		(calk as MeshInstance3D).material_override = _steel_mat(false)
 
 
 func _build_part(zone: String, size: Vector3, pos: Vector3, _unused: float) -> void:
@@ -199,6 +222,7 @@ func _build_calk(pos: Vector3, yaw: float) -> void:
 	mi.rotation.y = yaw
 	mi.material_override = _steel_mat(false)
 	add_child(mi)
+	_calk_instances.append(mi)
 
 
 func _build_markers() -> void:

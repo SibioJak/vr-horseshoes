@@ -111,27 +111,38 @@ func _run() -> void:
 		var rep: Node3D = main.ctrl_rep[h]
 		check(rep.visible, "controller rep visible while tracked (%s)" % h)
 
-	# --- Proof A: court from the pitcher's view ---
+	# --- Proof A: the FULL court (Backyard Game v1) ---
+	# Elevated behind the home foul line: BOTH pits, both rail
+	# stands, the pairs hanging, and the AI in its box - the
+	# whole game in one frame.
 	var cam_a := Camera3D.new()
-	cam_a.fov = 85.0
-	cam_a.position = Vector3(0.15, 1.62, 1.25)
+	cam_a.fov = 55.0
+	cam_a.position = Vector3(4.8, 4.4, 5.8)
 	main.add_child(cam_a)
-	cam_a.look_at(Vector3(-0.30, 0.35, -5.0), Vector3.UP)
+	cam_a.look_at(Vector3(-0.4, 0.0, -6.6), Vector3.UP)
 	cam_a.current = true
 	await settle(6)
 	await snap(cam_a, "res://proofs/court_view.png")
 	cam_a.queue_free()
 
-	# --- Proof A2: board close-up (all text on the slab, legible) ---
-	# Seed a realistic last throw first, so the board renders its
-	# full six-line status block (the slab's worst case) - the
-	# values are proof dressing only, no throw is recorded.
-	main.throw_count = 3
-	main.last_hold_text = "TURN (SHANK_RIGHT)"
-	main.last_distance_in = 43.2
-	main.last_flip_rev = 0.03
-	main.last_turn_rev = 1.24
-	main.last_ringer = true
+	# --- Proof A2: board close-up, MID-GAME (Backyard Game v1) ---
+	# Seed a game in progress, so the board renders its game
+	# status block (score, inning, turn, last-inning result) -
+	# the values are proof dressing only, no throw is recorded.
+	main.mode = "GAME"
+	main.phase = "P_TURN"
+	main.score_you = 9
+	main.score_opp = 7
+	main.inning = 4
+	main.turn_side = "P"
+	main.turn_throws_left = 1
+	main.last_inning_text = "YOU +3"
+	main.throw_count = 13
+	main.last_hold_text = "FLIP (TOE)"
+	main.last_distance_in = 3.2
+	main.last_flip_rev = 1.01
+	main.last_turn_rev = 0.0
+	main.last_ringer = false
 	main._update_board()
 	var face_dir: Vector3 = main.board_root.global_transform.basis.z
 	face_dir.y = 0.0
