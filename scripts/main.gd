@@ -28,8 +28,7 @@ const FOUL_30_Z: float = -3.048 # 30 ft line: 9.144 m from the far stake
 const FOUL_Z: float = FOUL_40_Z
 const STANCE_HALF_WIDTH: float = 0.85
 const STANCE_HALF_DEPTH: float = 0.40
-const STAND_SIDE_X: float = 0.75
-const STAND_BEHIND_M: float = 0.50
+const STAND_SIDE_X: float = 1.00 # rack slot 0: 1 m beside the stance centre (Fix Pass 11)
 const STAND_SHOE_Y: float = 0.785
 const SLOT_STEP_X: float = 0.24 # pair slots along a rail stand
 const PLAYER_PAIR_COLOR := Color(0.92, 0.75, 0.16) # yellow (photo feed)
@@ -58,8 +57,10 @@ var stake_body_node: StaticBody3D = null # far stake (spawn wiring compat)
 var stake_axis_a: Vector3 = Vector3.ZERO # far stake collision axis endpoints (world)
 var stake_axis_b: Vector3 = Vector3.ZERO
 var stakes: Dictionary = {} # "FAR"|"HOME" -> {body, axis_a, axis_b, pos}
-var stand_tfs: Dictionary = {} # line_ft (30/40) -> rail slot-0 transform, HOME end (target: far stake)
-var stand_tfs_far: Dictionary = {} # line_ft (30/40) -> rail slot-0 transform, FAR end (target: home stake)
+var stand_tfs: Dictionary = {} # line_ft (30/40) -> PLAYER rack slot-0 transform, HOME end (target: far stake)
+var stand_tfs_far: Dictionary = {} # line_ft (30/40) -> PLAYER rack slot-0 transform, FAR end (target: home stake)
+var ai_stand_tfs: Dictionary = {} # line_ft (30/40) -> AI rack slot-0 transform, HOME end
+var ai_stand_tfs_far: Dictionary = {} # line_ft (30/40) -> AI rack slot-0 transform, FAR end
 var stand_tf: Transform3D # the rail slot the ACTIVE shoe currently belongs to
 var active_stand_line_ft: int = 40
 var stock_target_far: bool = true # stocked shoes aim at the far stake
@@ -209,47 +210,60 @@ static func line_z_for_ft_at(line_ft: int, p_target_far: bool) -> float:
 	return -12.192 + dist if p_target_far else -dist
 
 
-static func make_stand_tf(line_ft: int, p_target_far: bool) -> Transform3D:
-	# Rail slot rule (was the pedestal rule, Fix Pass 3): behind
-	# the line and to the side, NEVER inside the stance box
-	# (|x| <= 0.85, line z +/- 0.40) - the pass-1/2 pedestal sat
-	# where the pitcher's feet go. The shoe HANGS on the rail by
-	# its toe bridge: plane near-vertical, bridge up (Backyard
-	# Game v1, per Chris's photo feed).
-	var sx: float = 1.0 if p_target_far else -1.0
+## Which side of the lane a rack stands on, as a world-x sign.
+## The player's racks sit on HIS right as he faces the target
+## (+x at the home end, -x at the far end); the AI's racks
+## mirror to the opposite side, across the pit (Fix Pass 11).
+static func rack_side_sign(p_target_far: bool, is_ai: bool) -> float:
+	var player_side: float = 1.0 if p_target_far else -1.0
+	return -player_side if is_ai else player_side
+
+
+static func make_rack_tf(line_ft: int, p_target_far: bool, is_ai: bool) -> Transform3D:
+	# Rack slot 0 (Fix Pass 11, Chris's field order): BESIDE the
+	# stance at the foul line's own z - NOT behind the player -
+	# facing him, so he reaches over and grabs a shoe without
+	# turning around. The FP3 pedestal rule (0.5 m behind the
+	# line, 0.75 m to the side) survived into v1 as slot 0 of a
+	# shared rack; in game flow the rack sat directly behind
+	# him and every grab meant a turn. Slot 0 now hangs 1.0 m
+	# to the side AT the line: outside the stance box
+	# (|x| <= 0.85) yet a natural reach-over. The shoe still
+	# HANGS on the rail by its toe bridge: plane near-vertical,
+	# bridge up (Backyard Game v1, per Chris's photo feed).
 	var yaw: float = -30.0 if p_target_far else 150.0
-	var behind: float = STAND_BEHIND_M if p_target_far else -STAND_BEHIND_M
 	return Transform3D(
 		Basis.from_euler(Vector3(deg_to_rad(-78.0), deg_to_rad(yaw), 0.0)),
-		Vector3(sx * STAND_SIDE_X, STAND_SHOE_Y,
-			line_z_for_ft_at(line_ft, p_target_far) + behind))
+		Vector3(rack_side_sign(p_target_far, is_ai) * STAND_SIDE_X,
+			STAND_SHOE_Y, line_z_for_ft_at(line_ft, p_target_far)))
 
 
-# Rail slots hang side by side OUTWARD from slot 0 (the judged
-# pedestal spot): slot index steps away from the lane, so the
-# player's pair (slots 0-1) sits nearest the line and no slot
-# ever hangs over the pit.
-const SLOT_OFFSETS: Array = [0, 1, 2, 3] # slot index -> rail steps from slot 0
+## World transform of one slot on one owner's rack. Each rack
+## holds ONLY its owner's pair: slot 0 nearest the lane at
+## STAND_SIDE_X, slot 1 one step further OUT (away from the
+## lane), so both shoes hang clear of the stance box and the
+## pit edge. (Fix Pass 11: v1 ran slots 0-3 along ONE shared
+## rack - both pairs on a single stand. Chris: "all the shoes
+## spawn on one rack.")
+func rack_slot_tf(p_target_far: bool, line_ft: int, is_ai: bool, idx: int) -> Transform3D:
+	var base: Transform3D
+	if is_ai:
+		base = (ai_stand_tfs if p_target_far else ai_stand_tfs_far)[line_ft]
+	else:
+		base = (stand_tfs if p_target_far else stand_tfs_far)[line_ft]
+	var step: float = float(idx) * SLOT_STEP_X * rack_side_sign(p_target_far, is_ai)
+	return Transform3D(base.basis, base.origin + Vector3(step, 0.0, 0.0))
 
 
-## World transform of one rail slot. Slots 0/1 hold the player's
-## pair, 2/3 the AI's; slot 0 is the active shoe's home and sits
-## exactly on the old pedestal spot.
-func slot_tf(p_target_far: bool, line_ft: int, slot: int) -> Transform3D:
-	var base: Transform3D = (stand_tfs if p_target_far else stand_tfs_far)[line_ft]
-	var sx: float = 1.0 if p_target_far else -1.0
-	var off: float = float(SLOT_OFFSETS[slot]) * SLOT_STEP_X * sx
-	return Transform3D(base.basis, base.origin + Vector3(off, 0.0, 0.0))
+func _is_ai_shoe(shoe_node: Shoe) -> bool:
+	return ai_pair.has(shoe_node)
 
 
-func _slot_of(shoe_node: Shoe) -> int:
+func _pair_index_of(shoe_node: Shoe) -> int:
 	var pi: int = player_pair.find(shoe_node)
 	if pi >= 0:
 		return pi
-	var ai: int = ai_pair.find(shoe_node)
-	if ai >= 0:
-		return 2 + ai
-	return 0
+	return maxi(ai_pair.find(shoe_node), 0)
 
 
 func _stock_dict(p_target_far: bool) -> Dictionary:
@@ -257,15 +271,18 @@ func _stock_dict(p_target_far: bool) -> Dictionary:
 
 
 func _init_stands() -> void:
-	stand_tfs = {40: make_stand_tf(40, true), 30: make_stand_tf(30, true)}
-	stand_tfs_far = {40: make_stand_tf(40, false), 30: make_stand_tf(30, false)}
+	stand_tfs = {40: make_rack_tf(40, true, false), 30: make_rack_tf(30, true, false)}
+	stand_tfs_far = {40: make_rack_tf(40, false, false), 30: make_rack_tf(30, false, false)}
+	ai_stand_tfs = {40: make_rack_tf(40, true, true), 30: make_rack_tf(30, true, true)}
+	ai_stand_tfs_far = {40: make_rack_tf(40, false, true), 30: make_rack_tf(30, false, true)}
 	active_stand_line_ft = 40
 	stock_target_far = true
 	stand_tf = stand_tfs[active_stand_line_ft]
 
 
 func _refresh_stand_tf() -> void:
-	stand_tf = slot_tf(stock_target_far, active_stand_line_ft, _slot_of(shoe))
+	stand_tf = rack_slot_tf(stock_target_far, active_stand_line_ft,
+		false, _pair_index_of(shoe))
 
 
 func _set_active_stand(line_ft: int) -> void:
@@ -317,7 +334,8 @@ func _restock_to_player_line() -> void:
 	for s: Shoe in _all_shoes():
 		if String(shoe_status[s]) == "RAILED":
 			s.freeze = true
-			s.global_transform = slot_tf(want_far, want_line, _slot_of(s))
+			s.global_transform = rack_slot_tf(want_far, want_line,
+				_is_ai_shoe(s), _pair_index_of(s))
 			s.clear_highlights()
 
 
@@ -341,15 +359,17 @@ func _nearest_stand_line() -> int:
 	return best_line
 
 
-## A rail stand (Backyard Game v1, Chris's photo feed): two
-## posts, a horizontal rail the shoes hang on by their openings,
-## and a low shelf board. Slot 0 sits at base_pos; the rail runs
-## along X through all four slots.
+## One owner's rack (Backyard Game v1, Chris's photo feed):
+## two posts, a horizontal rail the pair hangs on by their
+## openings, and a low shelf board. Slot 0 sits at base_pos;
+## the rail runs OUTWARD (away from the lane) through slot 1.
+## (Fix Pass 11: v1 built ONE four-slot stand per stock point
+## holding both pairs - "all the shoes spawn on one rack.")
 func _build_rail_stand(base_pos: Vector3, sx: float) -> void:
 	var post_mat := _mat(Color(0.40, 0.29, 0.17))
 	var rail_mat := _mat(Color(0.48, 0.35, 0.21))
-	var x0: float = base_pos.x - 0.16 * sx
-	var x1: float = base_pos.x + float(SLOT_OFFSETS[3]) * SLOT_STEP_X * sx + 0.16 * sx
+	var x0: float = base_pos.x - 0.12 * sx
+	var x1: float = base_pos.x + (SLOT_STEP_X + 0.12) * sx
 	_box(self, Vector3(x0, 0.44, base_pos.z), Vector3(0.07, 0.88, 0.07), post_mat)
 	_box(self, Vector3(x1, 0.44, base_pos.z), Vector3(0.07, 0.88, 0.07), post_mat)
 	var mid_x: float = (x0 + x1) * 0.5
@@ -410,13 +430,17 @@ func _build_world() -> void:
 	for lz2: float in [line_z_for_ft_at(30, true), line_z_for_ft_at(30, false)]:
 		_box(self, Vector3(0.0, 0.006, lz2), Vector3(1.6, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
 
-	# One rail stand per stock point (both lines, both ends),
-	# placed by the stand rule: behind the line, to the side,
-	# clear of the stance box.
+	# One rack per OWNER per stock point (both lines, both
+	# ends), placed by the Fix Pass 11 rule: beside its owner's
+	# stance at the line's own z, clear of the stance box - the
+	# player's pair on his rack, the AI's pair on its own rack
+	# across the pit.
 	for tfar: bool in [true, false]:
 		for stand_line: int in [40, 30]:
-			var stf: Transform3D = (stand_tfs if tfar else stand_tfs_far)[stand_line]
-			_build_rail_stand(stf.origin, 1.0 if tfar else -1.0)
+			var ptf: Transform3D = (stand_tfs if tfar else stand_tfs_far)[stand_line]
+			_build_rail_stand(ptf.origin, rack_side_sign(tfar, false))
+			var atf: Transform3D = (ai_stand_tfs if tfar else ai_stand_tfs_far)[stand_line]
+			_build_rail_stand(atf.origin, rack_side_sign(tfar, true))
 
 	_build_scenery()
 
@@ -515,7 +539,7 @@ func target_stake_pos() -> Vector3:
 ## distance (mow stripes underfoot, fence at the yard edge, trees
 ## and a shed mid/far, sky + clouds above); nothing collides,
 ## nothing moves, and the judged court surfaces - pit, lines,
-## pedestals, stake - are untouched. Placement keeps the court
+## racks, stake - are untouched. Placement keeps the court
 ## apron (|x| <= 2.3, z -14.8..1.6) bare of stripes and keeps the
 ## board sightline from both foul lines clear; the smoke suite
 ## asserts the sightline clearance so dressing can never creep
@@ -912,15 +936,16 @@ func _make_shoe(pair_color: Color) -> Shoe:
 	return s
 
 ## Four shoes: the player's yellow pair and the AI's blue pair,
-## all stocked on the home end's 40 ft rail at boot (practice).
-## The active shoe is the player's first; the state machine
-## drives it exactly as the single test shoe was driven.
+## each stocked on its OWN rack at the home end's 40 ft line at
+## boot (practice). The active shoe is the player's first; the
+## state machine drives it exactly as the single test shoe was
+## driven.
 func _spawn_shoes() -> void:
 	player_pair = [_make_shoe(PLAYER_PAIR_COLOR), _make_shoe(PLAYER_PAIR_COLOR)]
 	ai_pair = [_make_shoe(AI_PAIR_COLOR), _make_shoe(AI_PAIR_COLOR)]
 	shoe = player_pair[0]
 	for s: Shoe in _all_shoes():
-		s.global_transform = slot_tf(true, 40, _slot_of(s))
+		s.global_transform = rack_slot_tf(true, 40, _is_ai_shoe(s), _pair_index_of(s))
 	state = "STAND"
 
 
@@ -1432,7 +1457,8 @@ func game_end_sign() -> int:
 func _gather_to_rail(p_target_far: bool, line_ft: int) -> void:
 	for s: Shoe in _all_shoes():
 		s.freeze = true
-		s.global_transform = slot_tf(p_target_far, line_ft, _slot_of(s))
+		s.global_transform = rack_slot_tf(p_target_far, line_ft,
+			_is_ai_shoe(s), _pair_index_of(s))
 		s.clear_highlights()
 		shoe_status[s] = "RAILED"
 	stock_target_far = p_target_far

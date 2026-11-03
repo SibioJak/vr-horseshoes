@@ -593,13 +593,13 @@ func test_ai_release() -> void:
 	check(v0.z < 0.0, "AI release: home-end throw travels toward -z")
 	var t_cross: float = (far_stake.z - p0.z) / v0.z
 	var y_cross: float = p0.y + v0.y * t_cross - 4.9 * t_cross * t_cross
-	check(absf(y_cross - 0.50) < 0.02,
-		"AI release: crosses the far stake plane at 0.50 m (got %.2f)" % y_cross)
+	check(absf(y_cross - AIPitcher.ARRIVE_H) < 0.02,
+		"AI release: crosses the far stake plane at ARRIVE_H (got %.2f)" % y_cross)
 	check(absf(p0.x + v0.x * t_cross) < 0.01,
 		"AI release: crosses the far stake plane on the centre line")
 	check((rel["ang"] as Vector3).x > 0.0
-		and absf((rel["ang"] as Vector3).length() - TAU / 1.15) < 0.01,
-		"AI release: one flip revolution per flight at the 40 ft cadence (the FP9 audit's proven +X flip for a -z throw)")
+		and absf((rel["ang"] as Vector3).length() - TAU / AIPitcher.FLIGHT_T) < 0.01,
+		"AI release: one flip revolution per flight at the FLIGHT_T cadence, about the travel frame's lateral axis")
 	var home_stake := Vector3(0.0, 0.05, 0.0)
 	var rel2: Dictionary = AIPitcher.base_release(
 		AIPitcher.release_base_pos(-1, -12.192), home_stake)
@@ -609,8 +609,8 @@ func test_ai_release() -> void:
 		"AI release: far-end throw mirrors (travels +z, spin flips sign)")
 	var t2: float = (home_stake.z - p1.z) / v1.z
 	var y2: float = p1.y + v1.y * t2 - 4.9 * t2 * t2
-	check(absf(y2 - 0.50) < 0.02,
-		"AI release: crosses the home stake plane at 0.50 m (got %.2f)" % y2)
+	check(absf(y2 - AIPitcher.ARRIVE_H) < 0.02,
+		"AI release: crosses the home stake plane at ARRIVE_H (got %.2f)" % y2)
 
 
 func _run() -> void:

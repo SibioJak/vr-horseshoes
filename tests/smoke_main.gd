@@ -112,6 +112,35 @@ func sightline_dist(p: Vector3) -> float:
 	return (a + ab * t).distance_to(q)
 
 
+## Fix Pass 11: one rack's layout assertions - slot 0 hangs at
+## its line's own z on its owner's side, 1.0 m from the stance
+## centre; both slots outside the stance box (|x| <= 0.85,
+## line z +/- 0.40) and within a reach-over grab.
+func check_rack(tfar: bool, line_ft: int, is_ai: bool) -> void:
+	var lz: float = main.line_z_for_ft_at(line_ft, tfar)
+	var side: float = main.rack_side_sign(tfar, is_ai)
+	var who: String = "AI" if is_ai else "player"
+	var end_name: String = "home" if tfar else "far"
+	for idx: int in [0, 1]:
+		var rp: Vector3 = main.rack_slot_tf(tfar, line_ft, is_ai, idx).origin
+		var in_stance: bool = absf(rp.x) <= main.STANCE_HALF_WIDTH \
+			and absf(rp.z - lz) <= main.STANCE_HALF_DEPTH
+		check(not in_stance,
+			"FP11: %s rack slot %d at the %s %d ft line is OUTSIDE the stance box (at %s)"
+			% [who, idx, end_name, line_ft, str(rp)])
+		var reach: float = Vector2(rp.x, rp.z).distance_to(Vector2(0.0, lz))
+		check(reach >= 0.90 and reach <= 1.35,
+			"FP11: %s rack slot %d at the %s %d ft line is a reach-over grab (%.2f m from stance centre)"
+			% [who, idx, end_name, line_ft, reach])
+	var rp0: Vector3 = main.rack_slot_tf(tfar, line_ft, is_ai, 0).origin
+	check(absf(rp0.z - lz) < 0.05,
+		"FP11: %s rack at the %s %d ft line stands AT the line, not behind the player (dz %.2f)"
+		% [who, end_name, line_ft, rp0.z - lz])
+	check(signf(rp0.x) == side and absf(absf(rp0.x) - 1.0) < 0.05,
+		"FP11: %s rack at the %s %d ft line sits on its owner's side (x %.2f)"
+		% [who, end_name, line_ft, rp0.x])
+
+
 ## Fix Pass 8: fire one shot at the stake through the production
 ## grab/release path and watch it the whole way: was the stake
 ## body hit, and how deep past the stake's axis plane did the
@@ -317,14 +346,23 @@ func _run() -> void:
 	check(main.player_pair.size() == 2 and main.ai_pair.size() == 2,
 		"two pairs of shoes: the player's and the AI's")
 	for s: Shoe in main._all_shoes():
-		var want_slot: Transform3D = main.slot_tf(true, 40, main._slot_of(s))
+		var want_slot: Transform3D = main.rack_slot_tf(true, 40,
+			main._is_ai_shoe(s), main._pair_index_of(s))
 		check(s.global_position.distance_to(want_slot.origin) < 0.01,
-			"shoe hangs on its rail slot at boot (slot %d)" % main._slot_of(s))
+			"shoe hangs on its owner's rack at boot (%s pair, slot %d)"
+			% ["AI" if main._is_ai_shoe(s) else "player", main._pair_index_of(s)])
 		check(String(main.shoe_status[s]) == "RAILED", "boot shoe is stocked (RAILED)")
+	# Fix Pass 11: the pairs stock on SEPARATE racks - v1 hung
+	# all four shoes on one shared rack (Chris's report).
+	check(main.player_pair[0].global_position.distance_to(
+			main.rack_slot_tf(true, 40, true, 0).origin) > 1.5
+		and main.ai_pair[0].global_position.distance_to(
+			main.rack_slot_tf(true, 40, false, 0).origin) > 1.5,
+		"FP11: each pair stocks on its OWN rack - never all four on one")
 	check(main.player_pair[0].tint == main.PLAYER_PAIR_COLOR
 		and main.ai_pair[0].tint == main.AI_PAIR_COLOR,
 		"pairs wear their colours: yellow player, blue AI")
-	var slot0_pos: Vector3 = main.slot_tf(true, 40, 0).origin
+	var slot0_pos: Vector3 = main.rack_slot_tf(true, 40, false, 0).origin
 	var rail_pieces: int = 0
 	for child: Node in main.get_children():
 		if child is MeshInstance3D and (child as MeshInstance3D).global_position.distance_to(slot0_pos) < 1.0:
@@ -333,6 +371,16 @@ func _run() -> void:
 		"rail stand furniture (posts, rail, shelf) stands at the home 40 ft stock point (%d pieces)" % rail_pieces)
 	check(main.ai_pitcher != null and main.ai_pitcher.is_inside_tree(),
 		"the AI opponent character stands at the home end")
+	# Fix Pass 11: the AI stands ACROSS the pit from the player -
+	# at boot (home end) rooted ~3 m from the stance centre, on
+	# the opposite side from the player's rack (+x). V1 rooted
+	# him ~0.7 m away on the player's own side ("in each other's
+	# grill").
+	var ai_home_d: float = Vector2(main.ai_pitcher.position.x,
+		main.ai_pitcher.position.z).distance_to(Vector2(0.0, main.FOUL_40_Z))
+	check(ai_home_d >= 2.5 and main.ai_pitcher.position.x < 0.0,
+		"FP11: the AI stands across the pit at the home end (%.2f m from the stance centre, x %.2f)"
+		% [ai_home_d, main.ai_pitcher.position.x])
 
 	# --- Board placement (pass-10 re-derivation of the pass-2 guard) ---
 	# Pass 1's board faced AWAY from the player; pass 2 moved it
@@ -436,52 +484,35 @@ func _run() -> void:
 			sky_ok = (child as WorldEnvironment).environment.background_mode == Environment.BG_SKY
 	check(sky_ok, "a real sky replaces the flat clear colour")
 
-	# --- Rail stands clear of the stance boxes (pass-3 checks,
-	# re-derived for Backyard Game v1) ---
+	# --- Rack layout beside the stances (Fix Pass 11 re-derivation
+	# of the pass-3 stance-box guards) ---
 	# FP2 measured the stand from the SPAWN point (0.61 m) and called
 	# it fine; Chris's photo showed it sitting on the foul line where
-	# his stance goes. The permanent assertion measures against
-	# the STANCE BOX at each line: |x| <= 0.85, line z +/- 0.40.
-	# A stand must sit outside that box, behind its line, and
-	# within ~0.9 m reach of a player standing at the line.
-	# V1 re-derivation: pedestals retired for rail stands, but the
-	# rail's FIRST slot hangs exactly where the pedestal top put
-	# the shoe - the placement Chris judged - so these checks now
-	# read the rail's slot-0 transforms, and a mirrored set covers
-	# the far end's stands (x flips sign, "behind" flips with it).
-	check(main.stand_tfs.size() == 2, "two home-end stands exist, one per foul line (%d)" % main.stand_tfs.size())
-	for line_ft: int in [40, 30]:
-		var ptf: Transform3D = main.stand_tfs[line_ft]
-		var pp: Vector3 = ptf.origin
-		var line_z: float = main.line_z_for_ft(line_ft)
-		var in_stance: bool = absf(pp.x) <= main.STANCE_HALF_WIDTH \
-			and absf(pp.z - line_z) <= main.STANCE_HALF_DEPTH
-		check(not in_stance,
-			"%d ft stand is OUTSIDE the stance box (at %s, line z %.3f)" % [line_ft, str(pp), line_z])
-		check(pp.z - line_z > 0.40 and pp.z - line_z < 0.60,
-			"%d ft stand sits ~0.5 m BEHIND its line (%.2f m)" % [line_ft, pp.z - line_z])
-		check(pp.x > 0.60 and pp.x < 0.90,
-			"%d ft stand sits ~0.75 m to the side (x %.2f)" % [line_ft, pp.x])
-		var reach: float = Vector2(pp.x, pp.z).distance_to(Vector2(0.0, line_z))
-		check(reach <= 0.92,
-			"%d ft stand is within reach of the line (%.2f m from line centre)" % [line_ft, reach])
-	check(main.active_stand_line_ft == 40, "the shoe starts homed to the 40 ft stand")
-	check(main.stand_tfs_far.size() == 2, "two far-end stands exist, mirrored (%d)" % main.stand_tfs_far.size())
-	for line_ft2: int in [40, 30]:
-		var ptf2: Transform3D = main.stand_tfs_far[line_ft2]
-		var pp2: Vector3 = ptf2.origin
-		var line_z2: float = main.line_z_for_ft_at(line_ft2, false)
-		var in_stance2: bool = absf(pp2.x) <= main.STANCE_HALF_WIDTH \
-			and absf(pp2.z - line_z2) <= main.STANCE_HALF_DEPTH
-		check(not in_stance2,
-			"far %d ft stand is OUTSIDE the stance box (at %s, line z %.3f)" % [line_ft2, str(pp2), line_z2])
-		check(pp2.z - line_z2 < -0.40 and pp2.z - line_z2 > -0.60,
-			"far %d ft stand sits ~0.5 m BEHIND its line (%.2f m)" % [line_ft2, pp2.z - line_z2])
-		check(pp2.x < -0.60 and pp2.x > -0.90,
-			"far %d ft stand sits ~0.75 m to the side (x %.2f)" % [line_ft2, pp2.x])
-		var reach2: float = Vector2(pp2.x, pp2.z).distance_to(Vector2(0.0, line_z2))
-		check(reach2 <= 0.92,
-			"far %d ft stand is within reach of the line (%.2f m from line centre)" % [line_ft2, reach2])
+	# his stance goes, and the pass-3 guards fixed that by measuring
+	# against the STANCE BOX at each line (|x| <= 0.85, line z
+	# +/- 0.40). V1 kept the pass-3 slot-0 spot (0.75 m to the side,
+	# 0.5 m BEHIND the line) for a shared four-slot rack.
+	# Chris's v1 field reports killed both halves of that: the rack
+	# sat directly behind him ("should be on right or left of line,
+	# facing player so you can just reach over, grab a shoe, without
+	# turning around"), both pairs hung on the one rack, and the AI
+	# stood on his side of the pit in his grill. The FP11 layout the
+	# helper below asserts, for every rack at both ends and lines:
+	# slot 0 hangs AT its line's z, 1.0 m to its owner's side (the
+	# player's racks on his right at both ends, the AI's mirrored
+	# across the pit); every slot is outside the stance box and a
+	# reach-over grab (0.90-1.35 m from the stance centre).
+	check(main.stand_tfs.size() == 2 and main.ai_stand_tfs.size() == 2,
+		"home end: a player rack and an AI rack per foul line (%d + %d)"
+		% [main.stand_tfs.size(), main.ai_stand_tfs.size()])
+	check(main.stand_tfs_far.size() == 2 and main.ai_stand_tfs_far.size() == 2,
+		"far end: a player rack and an AI rack per foul line, mirrored (%d + %d)"
+		% [main.stand_tfs_far.size(), main.ai_stand_tfs_far.size()])
+	for rack_end: bool in [true, false]:
+		for rack_line: int in [40, 30]:
+			check_rack(rack_end, rack_line, false)
+			check_rack(rack_end, rack_line, true)
+	check(main.active_stand_line_ft == 40, "the shoe starts homed to the 40 ft rack")
 
 	# --- Locomotion through the production path (test stick hooks) ---
 	# Pass-6 mapping (STANDARD twin-stick, Chris's field order): the
@@ -1030,6 +1061,14 @@ func _run() -> void:
 	main._complete_swap(true)
 	check(main.inning == 2 and main.inning_first == "AI",
 		"game: after a scoreless inning the first throw alternates")
+	# Fix Pass 11: the swap re-seats the AI across the pit at the
+	# far end too (there its box is on +x, opposite the player's
+	# far-end rack).
+	var ai_far_d: float = Vector2(main.ai_pitcher.position.x,
+		main.ai_pitcher.position.z).distance_to(Vector2(0.0, main.game_line_z()))
+	check(ai_far_d >= 2.5 and main.ai_pitcher.position.x > 0.0,
+		"FP11: after the swap the AI is across the pit at the far end too (%.2f m from the stance centre, x %.2f)"
+		% [ai_far_d, main.ai_pitcher.position.x])
 
 	# ============ Backyard Game v1: a full game ============
 	# Scripted player throws (production input path) + the AI's
@@ -1097,8 +1136,8 @@ func _run() -> void:
 		"game: the practice board readouts are back")
 	check(main.state == "STAND"
 		and main.shoe.global_position.distance_to(
-			main.slot_tf(main.stock_target_far, main.active_stand_line_ft,
-				main._slot_of(main.shoe)).origin) < 0.01,
+			main.rack_slot_tf(main.stock_target_far, main.active_stand_line_ft,
+				false, main._pair_index_of(main.shoe)).origin) < 0.01,
 		"game: practice after the game stocks the shoe on the rail as before")
 
 	main.origin.global_transform = Transform3D.IDENTITY

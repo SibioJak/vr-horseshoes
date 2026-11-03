@@ -9,10 +9,11 @@ extends SceneTree
 ## Feeds fake positional trackers under the FIELD-CENSUS names
 ## ("left_hand"/"right_hand", "default" pose - the Duel's settled
 ## binding) and saves:
-##   proofs/court_view.png - from the pitcher's head: pit + stake at
-##     40 ft centre, both foul lines, both pedestals clear of the
-##     stance boxes, the dressed backyard around it all (Fix Pass
-##     10 scenery), board beyond the pit at far left.
+##   proofs/court_view.png - the full court from behind the home
+##     foul line (Fix Pass 11): both pits down the lane, the
+##     player's rack beside his stance near-right, the AI across
+##     the home pit, the dressed backyard around it all (Fix
+##     Pass 10 scenery), board beyond the far pit at left.
 ##   proofs/board_closeup.png - the board face-on: every line of the
 ##     status + controls text on the slab and legible.
 ##   proofs/board_from_foul_line.png - from the 40 ft foul line at
@@ -111,15 +112,18 @@ func _run() -> void:
 		var rep: Node3D = main.ctrl_rep[h]
 		check(rep.visible, "controller rep visible while tracked (%s)" % h)
 
-	# --- Proof A: the FULL court (Backyard Game v1) ---
-	# Elevated behind the home foul line: BOTH pits, both rail
-	# stands, the pairs hanging, and the AI in its box - the
-	# whole game in one frame.
+	# --- Proof A: the FULL court (Backyard Game v1; Fix Pass 11
+	# framing) ---
+	# Elevated behind the home foul line, over the player's
+	# shoulder: his rack beside the stance at near-right, the AI
+	# across the home pit at left, both pits down the lane - the
+	# v1 separation in one frame (the AI used to stand in the
+	# player's grill on his own side).
 	var cam_a := Camera3D.new()
 	cam_a.fov = 55.0
-	cam_a.position = Vector3(4.8, 4.4, 5.8)
+	cam_a.position = Vector3(3.1, 3.3, 5.6)
 	main.add_child(cam_a)
-	cam_a.look_at(Vector3(-0.4, 0.0, -6.6), Vector3.UP)
+	cam_a.look_at(Vector3(-0.7, 0.0, -5.4), Vector3.UP)
 	cam_a.current = true
 	await settle(6)
 	await snap(cam_a, "res://proofs/court_view.png")

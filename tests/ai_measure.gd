@@ -31,25 +31,44 @@ func throw_once(shoe_node: Shoe) -> Dictionary:
 		rel = AIPitcher.base_release(from_pos, main.STAKE_POS)
 	else:
 		rel = AIPitcher.sample_release(rng, from_pos, main.STAKE_POS)
+	# The release flag rides in an Array so the pitcher's
+	# callback write is always visible to the wait below. A
+	# swing whose release window (~0.18 s of animation time)
+	# is jumped by one coarse _process delta on a loaded
+	# machine never fires - that is a harness miss, not a
+	# throw, so the SAME sampled release is replayed (up to
+	# 5 attempts) instead of being measured sitting in the
+	# hand. The release dict fully determines the flight, so
+	# replaying it cannot bias the distribution.
+	var fired_box: Array = [false]
 	var fired: bool = false
-	main.ai_pitcher.place_at(1, 0.0)
-	shoe_node.freeze = true
-	main.ai_pitcher.play_throw(shoe_node, rel, func() -> void:
-		main._wire_guard(shoe_node, "FAR")
-		shoe_node.reset_stake_guard()
-		shoe_node.freeze = false
-		shoe_node.global_transform = Transform3D(rel["basis"], rel["pos"])
-		shoe_node.linear_velocity = rel["vel"]
-		shoe_node.angular_velocity = rel["ang"]
-		fired = true
-	, func() -> void:
-		pass)
-	# Wait out the swing, then the flight, with the production
-	# settle discipline (0.6 s minimum, rest thresholds).
-	var frames_waited: int = 0
-	while not fired and frames_waited < 600:
-		await physics_frame
-		frames_waited += 1
+	for attempt: int in 5:
+		fired_box[0] = false
+		main.ai_pitcher.place_at(1, 0.0)
+		shoe_node.freeze = true
+		main.ai_pitcher.play_throw(shoe_node, rel, func() -> void:
+			main._wire_guard(shoe_node, "FAR")
+			shoe_node.reset_stake_guard()
+			shoe_node.freeze = false
+			shoe_node.global_transform = Transform3D(rel["basis"], rel["pos"])
+			shoe_node.linear_velocity = rel["vel"]
+			shoe_node.angular_velocity = rel["ang"]
+			fired_box[0] = true
+		, func() -> void:
+			pass)
+		# Wait out the swing, then the flight, with the production
+		# settle discipline (0.6 s minimum, rest thresholds).
+		var frames_waited: int = 0
+		while not bool(fired_box[0]) and frames_waited < 600:
+			await physics_frame
+			frames_waited += 1
+		fired = bool(fired_box[0])
+		if fired:
+			break
+	if not fired:
+		print("AI MEASURE: harness miss - release never fired in 5 attempts")
+		shoe_node.freeze = true
+		return {"dist_in": -1.0, "ringer": false, "missed": true}
 	var fly: int = 0
 	var still: int = 0
 	while fly < 600:
@@ -70,23 +89,39 @@ func throw_once(shoe_node: Shoe) -> Dictionary:
 	var ringer: bool = ThrowMath.is_ringer(
 		shoe_node.global_transform, stake_at,
 		Shoe.RINGER_INNER_HALF, Shoe.RINGER_Z_MIN, Shoe.RINGER_Z_MAX)
-	return {"dist_in": dist_in, "ringer": ringer}
+	return {"dist_in": dist_in, "ringer": ringer, "missed": false}
 
 
 func _run() -> void:
-	Engine.time_scale = 3.0
+	# Real-time pacing on purpose (see the speed_scale note
+	# below): speeding the clock up multiplies the pitcher's
+	# _process delta by the same factor, which is exactly
+	# what jumps its release window on a loaded machine.
+	Engine.time_scale = 1.0
 	rng.seed = 20261102
 	var packed: PackedScene = load("res://main.tscn")
 	main = packed.instantiate()
 	root.add_child(main)
 	await process_frame
 	await physics_frame
-	main.ai_pitcher.speed_scale = 4.0
+	# Harness pacing: the swing advances on _process deltas, so
+	# a faster swing (or a faster clock) is MORE likely to have
+	# its release window jumped on a loaded machine, not less.
+	# Live pacing (1.0) plus the retry in throw_once keeps the
+	# measurement honest at any load; the sampler and the
+	# production flight are untouched.
+	main.ai_pitcher.speed_scale = 1.0
 	var pair: Array = main.ai_pair
+	var misses: int = 0
 	for i: int in THROWS:
 		var shoe_node: Shoe = pair[i % 2]
 		var res: Dictionary = await throw_once(shoe_node)
-		results.append(res)
+		if bool(res.get("missed", false)):
+			misses += 1
+		else:
+			results.append(res)
+		if (i + 1) % 25 == 0:
+			print("AI MEASURE: progress %d/%d (misses %d)" % [i + 1, THROWS, misses])
 		# Park the thrown shoe clear of the lane for the next one.
 		shoe_node.global_transform = Transform3D(Basis.IDENTITY,
 			Vector3(3.0 if i % 2 == 0 else -3.0, 0.4, -6.0))
@@ -119,4 +154,5 @@ func _run() -> void:
 		dist_sum / float(results.size())])
 	print("AI MEASURE: self-play %.2f points per side per inning over %d innings" % [
 		pts_sum / float(maxi(innings, 1)) / 2.0, innings])
+	print("AI MEASURE: harness misses %d (excluded from the line)" % misses)
 	quit(0)

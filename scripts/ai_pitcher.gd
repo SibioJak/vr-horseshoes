@@ -19,32 +19,48 @@ extends Node3D
 ## the caller's on_release fires and physics takes the shoe.
 
 const GRAV: float = 9.8
-const FLIGHT_T: float = 1.15 # planned seconds, release to stake plane
-const ARRIVE_H: float = 0.50 # planned height crossing the stake plane
+const FLIGHT_T: float = 1.40 # planned seconds, release to stake plane
+const ARRIVE_H: float = 0.22 # planned height crossing the stake plane
 # Arrival phase, found by grid search over the production
-# physics (tests/ai_grid.gd during the v1 build): a flip whose
-# opening faces the stake AT the plane crossing arrives too
-# early in its rotation and clangs off; rotated ~75 deg further
-# at release, the shoe comes down OVER the stake and wraps -
-# ringers live in a ~60-90 deg corridor, 75 is its centre.
-const PHASE_DEG: float = 75.0
+# physics at live pacing (Fix Pass 11 retune, 2026-11-03):
+# the shoe must arrive LOW (crossing at 0.22 m, well under
+# the stake top) at the end of a slow 1.40 s flip, so it
+# drops OVER the stake and the solver arrests it in the
+# opening. Perfect throws ring across a ~45-82 deg phase
+# corridor at this profile; 59 sits in it with the sampled
+# spread centred.
+const PHASE_DEG: float = 59.0
 
 # --- Error model (measured with tests/ai_measure.gd) ---
-# Final line, 220 simulated throws in the real scene through
-# the production flight path (2026-11-02): 24.1% ringers,
-# 73.6% of shoes inside 6 in, mean landing 7.1 in, self-play
-# 1.65 points per side per inning - a club player, beatable.
-# (The base release's PHASE_DEG matters more than any of these:
-# at phase 0 the same spread rang 0.0%.)
-const ERR_SPEED_FRAC: float = 0.021 # fraction of release speed
-const ERR_AZIMUTH_DEG: float = 0.65 # horizontal direction, degrees
-const ERR_VY: float = 0.09 # added vertical velocity, m/s
-const ERR_POS_X: float = 0.045 # release point lateral jitter, m
-const ERR_POS_Y: float = 0.025 # release point height jitter, m
-const ERR_SPIN_FRAC: float = 0.07 # flip rate jitter, fraction
+# Retuned 2026-11-03 (Fix Pass 11). The v1 line quoted here
+# before (24.1% ringers) was measured under a sped-up clock
+# (Engine.time_scale 3), which stretches the physics step
+# 3x - at that step size the solver drops the shoe onto the
+# stake and the capture is nearly free. At live pacing the
+# v1 profile actually rang ~3.5%: its high, fast arrival
+# flies over the stake and clangs off. The constants above
+# and the spread below were re-derived at time_scale 1:
+# a lower, slower base the stake can arrest, and a tighter
+# spread, because the ringer window (31 mm half-width, a
+# ~40 deg phase corridor) is narrower than the old jitter.
+# Final line, 220 simulated throws through the production
+# flight path at live pacing (2026-11-03): 23.2% ringers,
+# 80.9% of shoes inside 6 in, mean landing 3.7 in, self-play
+# 0.96 points per side per inning - a club player, back in
+# the 20-30% band.
+const ERR_SPEED_FRAC: float = 0.008 # fraction of release speed
+const ERR_AZIMUTH_DEG: float = 0.24 # horizontal direction, degrees
+const ERR_VY: float = 0.025 # added vertical velocity, m/s
+const ERR_POS_X: float = 0.013 # release point lateral jitter, m
+const ERR_POS_Y: float = 0.010 # release point height jitter, m
+const ERR_SPIN_FRAC: float = 0.016 # flip rate jitter, fraction
 
 const ARM_LEN: float = 0.62
-const SHOULDER_LOCAL := Vector3(-0.30, 1.45, 0.0)
+# Fix Pass 11: the throwing arm is the LANE-side arm. The AI
+# now stands across the pit from the player (see
+# release_base_pos), so the shoulder local x flips sign vs v1:
+# +0.30 puts the shoulder toward the lane from either side.
+const SHOULDER_LOCAL := Vector3(0.30, 1.45, 0.0)
 const A_RELEASE: float = 1.15 # arm angle (rad) at the release instant
 const THROW_DUR: float = 1.9 # seconds for a full swing at speed 1
 
@@ -62,29 +78,54 @@ var _released: bool = false
 var _idle_t: float = 0.0
 
 
-## Where the AI's releases originate when it pitches from an end:
-## a step in front of that end's 40 ft foul line, near the lane.
+## Where the AI's releases originate when it pitches from an
+## end: a step in front of that end's 40 ft foul line, from the
+## pitcher's box on the OPPOSITE side of the pit from the
+## player's rack (Fix Pass 11 - v1 released from the player's
+## side, x 0.42, with the character rooted ~0.7 m from his
+## stance: "we're in each other's grill"). The release point
+## sits 2.7 m off the lane centre; place_at roots the body
+## 0.3 m further out, ~3 m from the player's stance.
 ## end_sign: +1 = home end (throws toward -z), -1 = far end.
+const RELEASE_SIDE_X: float = 2.7
+
+
 static func release_base_pos(end_sign: int, line_z: float) -> Vector3:
 	var travel: float = -float(end_sign)
-	return Vector3(0.42 * float(end_sign), 1.22, line_z + 0.35 * travel)
+	return Vector3(-RELEASE_SIDE_X * float(end_sign), 1.22, line_z + 0.35 * travel)
 
 
 ## The un-sampled "good flip": ballistic velocity that crosses
 ## the target stake's plane at ARRIVE_H after FLIGHT_T, with one
 ## full end-over-end revolution in the same time (the audit's
 ## proven flip profile: opening toward the target at release,
-## spin about world X, sign mirrored with travel direction).
+## spin about the flip axis of the travel frame).
+##
+## Fix Pass 11 retune: the frame is built ONCE for straight -Z
+## travel (v1's home-end construction) and then yawed onto the
+## ACTUAL travel direction. v1 applied that frame unyawed,
+## which was exact while the release sat near the lane
+## centreline; from across the pit the travel runs ~13 deg
+## diagonal, so the flip plane and the opening's facing are
+## yawed onto the travel vector with it. For a straight throw
+## the yaw is 0 (home) or PI (far, which is exactly how v1's
+## two cases were related). The profile constants themselves
+## (FLIGHT_T / ARRIVE_H / PHASE_DEG) are the retune described
+## at the error model above - the yaw alone did not restore
+## the arrival (the unyawed AND yawed v1 profiles both rang
+## 0/60 perfect throws at live pacing); the low, slow,
+## drop-on profile is what the stake can catch.
 static func base_release(from_pos: Vector3, target_stake: Vector3) -> Dictionary:
-	var travel: float = signf(target_stake.z - from_pos.z)
 	var vel := Vector3(
 		(target_stake.x - from_pos.x) / FLIGHT_T,
 		(ARRIVE_H - from_pos.y + 0.5 * GRAV * FLIGHT_T * FLIGHT_T) / FLIGHT_T,
 		(target_stake.z - from_pos.z) / FLIGHT_T)
-	var basis: Basis = Basis(Vector3(1.0, 0.0, 0.0), deg_to_rad(-travel * PHASE_DEG)) \
-		* (Basis(Vector3.UP, PI) if travel < 0.0 else Basis.IDENTITY)
+	var flat := Vector3(target_stake.x - from_pos.x, 0.0, target_stake.z - from_pos.z)
+	var yaw_basis := Basis(Vector3.UP, atan2(-flat.x, -flat.z))
+	var basis: Basis = yaw_basis * Basis(Vector3(1.0, 0.0, 0.0), deg_to_rad(PHASE_DEG)) \
+		* Basis(Vector3.UP, PI)
 	var rate: float = TAU / FLIGHT_T
-	var ang := Vector3(-travel * rate, 0.0, 0.0)
+	var ang: Vector3 = yaw_basis * Vector3(rate, 0.0, 0.0)
 	return {"pos": from_pos, "basis": basis, "vel": vel, "ang": ang}
 
 
@@ -160,8 +201,8 @@ func _ready() -> void:
 	cap.position = Vector3(0.0, 1.645, 0.0)
 	_body_root.add_child(cap)
 	_box(_body_root, Vector3(0.0, 1.615, -0.14), Vector3(0.20, 0.025, 0.13), cap_mat)
-	# Rest arm (far side): hangs still.
-	_box(_body_root, Vector3(0.31, 1.06, 0.0), Vector3(0.11, 0.58, 0.12), shirt)
+	# Rest arm (far side from the lane): hangs still.
+	_box(_body_root, Vector3(-0.31, 1.06, 0.0), Vector3(0.11, 0.58, 0.12), shirt)
 	# Throwing arm: pivot at the lane-side shoulder.
 	_arm_pivot = Node3D.new()
 	_arm_pivot.position = SHOULDER_LOCAL
@@ -177,9 +218,10 @@ func _ready() -> void:
 	_arm_pivot.add_child(hand)
 
 
-## Stand at an end's pitcher's box, facing the target stake.
-## Root placement is solved from the release point: at the
-## release arm angle the hand tip lands on release_base_pos.
+## Stand at an end's pitcher's box - across the pit from the
+## player (Fix Pass 11) - facing the target stake. Root
+## placement is solved from the release point: at the release
+## arm angle the hand tip lands on release_base_pos.
 func place_at(end_sign: int, line_z: float) -> void:
 	var travel: float = -float(end_sign)
 	var rel_pos: Vector3 = release_base_pos(end_sign, line_z)
