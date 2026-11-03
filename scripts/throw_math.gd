@@ -552,6 +552,19 @@ static func evaluate_release_at(samples: Array, release_basis: Basis, t_star: fl
 # hand's. This is a missing force restored, not aim assist:
 # with the term disabled the release spin is the input,
 # untouched.
+#
+# Fix Pass 17: the flight the revolutions are counted over is
+# the flight TO THE STAKE, not to the ground. Roy W. Smith,
+# "Science at the Stake" (1946): "The turns given a shoe are
+# indicated by the number of revolutions it makes in flight
+# from the player's hand to the stake." Chris ruled the count
+# follows the book (2026-11-03). The governor's clock is
+# therefore the ballistic crossing time of the target stake's
+# plane, capped by the ground-return time when the dirt comes
+# first (governor_flight_time below). Pass 16 counted to
+# ground return; on a 40 ft pitch that clock runs ~6% long,
+# which left governed arrivals a few hundredths of a rev
+# inside the stake-plane plan the technique audit judges.
 # ============================================================
 
 ## Share of the hand's deviation from nominal that survives the
@@ -581,18 +594,53 @@ static func predicted_flight_time(release_pos: Vector3, vel: Vector3, gravity: f
 	return maxf(0.0, (vel.y + sqrt(disc)) / gravity)
 
 
+## Predicted time for the thrown shoe to cross the TARGET
+## STAKE'S PLANE (the plane through the stake, perpendicular
+## to the court's long axis - z = stake_pos.z; the court's axis
+## is z everywhere in this build). Purely kinematic in z: the
+## time at which release_pos.z + vel.z*t reaches the plane.
+## Returns -1 when there is no forward crossing to count: the
+## release already sits at/past the plane, or the velocity does
+## not carry the shoe toward it.
+static func predicted_stake_plane_time(release_pos: Vector3, vel: Vector3, stake_pos: Vector3) -> float:
+	var dz: float = stake_pos.z - release_pos.z
+	if absf(dz) < 0.001 or absf(vel.z) < 0.001:
+		return -1.0
+	var t: float = dz / vel.z
+	return t if t > 0.0 else -1.0
+
+
+## The governor's flight clock (Fix Pass 17): the stake-plane
+## crossing time, CAPPED by the ground-return time - a
+## dirt-bound throw that lands before it ever reaches the plane
+## is counted over the flight it actually gets. Falls back to
+## the ground-return time whenever no forward crossing exists.
+## This is the single flight-time definition the mechanism and
+## its bench share, so the bench's standards hold by
+## construction on whichever branch a release takes.
+static func governor_flight_time(release_pos: Vector3, vel: Vector3, stake_pos: Vector3) -> float:
+	var t_ground: float = predicted_flight_time(release_pos, vel)
+	var t_stake: float = predicted_stake_plane_time(release_pos, vel, stake_pos)
+	if t_stake <= 0.0:
+		return t_ground
+	return minf(t_stake, t_ground)
+
+
 ## The finger-drag term itself. Takes the FP14 read's angular
 ## velocity (world axes), the release transform (its basis.x is
 ## the flip axis; its origin.y anchors the flight prediction),
-## the release velocity and the hold ("flip" / "turn"). Returns
+## the release velocity, the hold ("flip" / "turn") and the
+## TARGET STAKE's position - the stake the throw is aimed at,
+## whose plane ends the revolution count (Fix Pass 17). Returns
 ## {"ang", "hand_total", "applied_total", "nominal",
 ## "flight_time", "governed"}: the angular velocity to apply
 ## (the input, untouched, when disabled, when the hold is not a
 ## pitched style, or when no flight can be predicted), and the
 ## evidence the recorder keeps. Totals are SIGNED revolutions
 ## about the style axis in the recorder's own convention (flip:
-## the release basis.x component; turn: the world Y component).
-static func govern_spin(ang: Vector3, release_tf: Transform3D, vel: Vector3, hold: String, enabled: bool) -> Dictionary:
+## the release basis.x component; turn: the world Y component),
+## counted hand-to-stake per governor_flight_time.
+static func govern_spin(ang: Vector3, release_tf: Transform3D, vel: Vector3, hold: String, stake_pos: Vector3, enabled: bool) -> Dictionary:
 	var out: Dictionary = {
 		"ang": ang, "hand_total": 0.0, "applied_total": 0.0,
 		"nominal": 0.0, "flight_time": 0.0, "governed": false,
@@ -600,7 +648,7 @@ static func govern_spin(ang: Vector3, release_tf: Transform3D, vel: Vector3, hol
 	var is_flip: bool = hold == "flip"
 	if not is_flip and hold != "turn":
 		return out
-	var tof: float = predicted_flight_time(release_tf.origin, vel)
+	var tof: float = governor_flight_time(release_tf.origin, vel, stake_pos)
 	out["flight_time"] = tof
 	if tof < 0.05:
 		return out

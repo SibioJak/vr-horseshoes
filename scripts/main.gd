@@ -1338,7 +1338,7 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 	# never passes through here.
 	var est_ang: Vector3 = ang
 	var spin_ev: Dictionary = ThrowMath.govern_spin(
-		ang, release_tf, vel, hold_was, spin_governor_enabled)
+		ang, release_tf, vel, hold_was, target_stake_pos(), spin_governor_enabled)
 	ang = spin_ev["ang"]
 	held_hand = ""
 	sample_hand = ""
@@ -1366,7 +1366,10 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 			"velocity": vel, "angular_velocity": ang,
 			# Fix Pass 16 evidence: the estimator's raw spin and
 			# the drag term's account of itself (signed totals
-			# about the style axis, in revolutions).
+			# about the style axis, in revolutions). Fix Pass 17:
+			# the totals are counted HAND-TO-STAKE - revolutions
+			# over the flight to the target stake's plane, per
+			# Smith (1946) - not over the flight to the ground.
 			"estimator_angular_velocity": est_ang,
 			"spin_hand_total": float(spin_ev["hand_total"]),
 			"spin_applied_total": float(spin_ev["applied_total"]),

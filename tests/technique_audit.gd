@@ -57,11 +57,17 @@ extends SceneTree
 ## check compares the imparted omega against the ESTIMATOR's
 ## own snapshot in the release cache (the quantity it exists to
 ## isolate), and spin retention is measured against the governed
-## spin actually imparted. The fixture plans rev completion at
-## the stake-plane crossing; the governor totals over the full
-## flight to ground level, so governed arrivals sit a few
-## hundredths of a rev inside the plan - inside the +-0.15
-## tolerance this suite has always carried.
+## spin actually imparted.
+##
+## Fix Pass 17 note: pass 16 totalled revolutions over the full
+## flight to ground level while this fixture plans rev
+## completion at the stake-plane crossing; governed arrivals
+## sat a few hundredths of a rev inside the plan and the 1-3/4
+## opening check failed at 36 deg. The governor now counts
+## HAND-TO-STAKE (Smith 1946, Chris's ruling) - the same clock
+## this fixture plans on - so a scripted standard technique is
+## a fixed point of the drag term and arrivals return to the
+## pre-governor baseline class.
 ## "Arrival" = stake contact or stake-plane crossing; a first
 ## contact within 0.30 m short of the plane (sliding in) also
 ## counts - a landing well short does not.

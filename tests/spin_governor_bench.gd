@@ -13,9 +13,24 @@ extends SceneTree
 ## 1.75, nearest in the hand's direction), keeping a 0.30
 ## residual share of the hand's own deviation.
 ##
+## Fix Pass 17: the predicted flight is counted HAND-TO-STAKE
+## (Smith 1946, Chris's ruling): the shared governor clock is
+## the stake-plane crossing time, capped by ground return.
+## Part A's geometry lands before its plane, so the ground cap
+## runs there; part A2 builds releases whose stake crossing
+## comes first, proving the stake branch itself - standards
+## map to themselves on BOTH branches because the mechanism
+## and this bench share the one flight-time function.
+##
 ## A. STANDARDS INTACT: synthetic releases totalling exactly a
 ##    regulation count come out unchanged (within 0.02 rev),
 ##    off-axis spin components pass through untouched.
+## A2. STAKE CLOCK (Fix Pass 17): the same standards built on a
+##    geometry whose stake-plane crossing precedes ground
+##    return still map to themselves, the reported flight time
+##    IS the stake time, the residual rule runs on the stake
+##    clock, and a dirt-bound release whose ground return
+##    precedes the plane is counted over the ground cap.
 ## B. NEGATIVE CONTROL: governor disabled -> the release spin
 ##    is the input spin, component-exact, totals unaltered.
 ## C. FORMULA SHAPE: the residual rule on non-standard inputs,
@@ -46,6 +61,12 @@ var main: Node
 
 const THROWS_PATH: String = "/home/hatch/workspace/user/files/throws-14.jsonl"
 const REPLAY_TS_FLOOR: String = "2026-11-03T16:00:00"
+
+## The court's stakes, mirroring main's constants, and the
+## midpoint the target inference splits on (main's COURT_MID_Z).
+const FAR_STAKE_POS := Vector3(0.0, 0.05, -12.192)
+const HOME_STAKE_POS := Vector3(0.0, 0.05, 0.0)
+const COURT_MID_Z: float = -6.096
 
 
 func check(cond: bool, name: String) -> void:
@@ -86,9 +107,12 @@ func wait_state(want: String, timeout_sec: float) -> bool:
 
 
 ## A synthetic release with a chosen style-axis total, built on
-## a fixed geometry whose predicted flight time is 1.10 s.
-## "off" must be perpendicular to the style axis - it is the
-## off-axis contamination that has to pass through untouched.
+## a fixed geometry whose ground-return time is 1.10 s; its
+## stake plane sits past the landing, so the shared clock's
+## ground cap is what runs (the stake branch has its own
+## builder below). "off" must be perpendicular to the style
+## axis - it is the off-axis contamination that has to pass
+## through untouched.
 func synth_ev(hold: String, total: float, basis: Basis, off: Vector3, enabled: bool = true) -> Dictionary:
 	var tof: float = 1.10
 	var y0: float = 1.30
@@ -98,10 +122,31 @@ func synth_ev(hold: String, total: float, basis: Basis, off: Vector3, enabled: b
 	var axis: Vector3 = basis.x.normalized() if hold == "flip" else Vector3.UP
 	var rate: float = total * TAU / tof
 	var ang: Vector3 = axis * rate + off
-	var ev: Dictionary = ThrowMath.govern_spin(ang, Transform3D(basis, pos), vel, hold, enabled)
+	var ev: Dictionary = ThrowMath.govern_spin(ang, Transform3D(basis, pos), vel, hold, FAR_STAKE_POS, enabled)
 	ev["ang_in"] = ang
 	ev["axis"] = axis
 	ev["off"] = off
+	return ev
+
+
+## A synthetic release whose STAKE-PLANE crossing (1.20 s,
+## down-lane at the far stake from the 40 ft geometry) precedes
+## its ground return (1.27 s): the hand's total is built on the
+## stake clock, so a regulation count must map to itself with
+## the stake time reported as the flight time.
+func synth_ev_stake(hold: String, total: float, basis: Basis, off: Vector3) -> Dictionary:
+	var ts: float = 1.20
+	var pos := Vector3(0.0, 1.30, -0.30)
+	var vz: float = (FAR_STAKE_POS.z - pos.z) / ts
+	var vel := Vector3(0.0, 5.21, vz)
+	var axis: Vector3 = basis.x.normalized() if hold == "flip" else Vector3.UP
+	var rate: float = total * TAU / ts
+	var ang: Vector3 = axis * rate + off
+	var ev: Dictionary = ThrowMath.govern_spin(ang, Transform3D(basis, pos), vel, hold, FAR_STAKE_POS, true)
+	ev["ang_in"] = ang
+	ev["axis"] = axis
+	ev["off"] = off
+	ev["stake_time"] = ts
 	return ev
 
 
@@ -126,6 +171,34 @@ func part_a() -> void:
 	check_standard("turn", 1.25, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), "A turn +1.25")
 	check_standard("turn", 1.75, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), "A turn +1.75")
 	check_standard("turn", -1.25, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), "A turn -1.25")
+
+
+func part_a2() -> void:
+	var f: Dictionary = synth_ev_stake("flip", 1.00, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2))
+	check(absf(float(f["flight_time"]) - float(f["stake_time"])) <= 0.01,
+		"A2: the stake clock is the live clock (flight time %.3f s == stake crossing %.2f s, ground return later)"
+		% [float(f["flight_time"]), float(f["stake_time"])])
+	check(absf(float(f["applied_total"]) - 1.00) <= 0.02,
+		"A2 flip +1.00 on the stake clock comes out %.3f (within 0.02)" % float(f["applied_total"]))
+	var t: Dictionary = synth_ev_stake("turn", -1.25, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15))
+	check(absf(float(t["applied_total"]) + 1.25) <= 0.02,
+		"A2 turn -1.25 on the stake clock comes out %.3f (within 0.02)" % float(t["applied_total"]))
+	var f2: Dictionary = synth_ev_stake("flip", 2.00, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2))
+	check(absf(float(f2["applied_total"]) - 1.30) <= 0.01,
+		"A2: the residual rule runs on the stake clock - hand 2.00 -> %.3f" % float(f2["applied_total"]))
+	# The cap: a dirt-bound lob whose ground return (0.63 s)
+	# precedes its stake-plane crossing (1.32 s) is counted over
+	# the ground return - a standard built on the ground clock
+	# still maps to itself.
+	var pos := Vector3(0.0, 1.30, -0.30)
+	var vel := Vector3(0.0, 1.00, -9.0)
+	var t_ground: float = ThrowMath.predicted_flight_time(pos, vel)
+	var ang: Vector3 = Vector3(1.00 * TAU / t_ground, 0.0, 0.0)
+	var ev: Dictionary = ThrowMath.govern_spin(ang, Transform3D(Basis.IDENTITY, pos), vel, "flip", FAR_STAKE_POS, true)
+	check(absf(float(ev["flight_time"]) - t_ground) <= 0.01,
+		"A2: dirt-bound release is capped at ground return (flight time %.3f s)" % float(ev["flight_time"]))
+	check(absf(float(ev["applied_total"]) - 1.00) <= 0.02,
+		"A2: the 1.00 standard built on the ground cap comes out %.3f (within 0.02)" % float(ev["applied_total"]))
 
 
 func part_b() -> void:
@@ -191,8 +264,13 @@ func part_d() -> void:
 		var vel := Vector3(float(rv[0]), float(rv[1]), float(rv[2]))
 		var ra: Array = rec["release_angular_velocity"]
 		var ang := Vector3(float(ra[0]), float(ra[1]), float(ra[2]))
+		# Fix Pass 17: the count is hand-to-stake, so the replay
+		# names each throw's target the way the game infers it -
+		# the pit on the far side of the court's midpoint from
+		# the release.
+		var stake: Vector3 = FAR_STAKE_POS if pos.z > COURT_MID_Z else HOME_STAKE_POS
 		var ev: Dictionary = ThrowMath.govern_spin(
-			ang, Transform3D(Basis(quat), pos), vel, String(rec["hold"]), true)
+			ang, Transform3D(Basis(quat), pos), vel, String(rec["hold"]), stake, true)
 		raw_style.append(float(ev["hand_total"]))
 		governed.append(float(ev["applied_total"]))
 	f.close()
@@ -209,12 +287,12 @@ func part_d() -> void:
 		"D: governed total-rev SD %.2f is below the recorded %.2f" % [gov_sd, rec_sd])
 	var gmin: float = governed.min()
 	var gmax: float = governed.max()
-	print("  REPLAY: raw style SD %.2f -> governed SD %.2f, governed range %.2f..%.2f rev"
+	print("  REPLAY (Fix Pass 17 - totals counted hand-to-stake): raw style SD %.2f -> governed SD %.2f, governed range %.2f..%.2f rev"
 		% [raw_sd, gov_sd, gmin, gmax])
 	print("  NOTE: the brief's ~0.4 expectation assumed the governed axis carries the")
 	print("  scatter; in this session it does not - the 22 are turn holds whose tumble")
 	print("  lives on the flip axis (off-axis here, passed through by design). Actuals")
-	print("  stand as printed; the compression proof lives in parts A and C.")
+	print("  stand as printed; the compression proof lives in parts A, A2 and C.")
 
 
 func build_stream(hand_pos: Vector3, q_hand: Quaternion, vel: Vector3, omega: Vector3, seed_val: int) -> Array:
@@ -325,6 +403,7 @@ func _init() -> void:
 
 func _run() -> void:
 	part_a()
+	part_a2()
 	part_b()
 	part_c()
 	part_d()
