@@ -293,6 +293,99 @@ func scripted_game_throw() -> bool:
 	return false
 
 
+## Fix Pass 12: worst distance (m) of any shoe from the rail
+## slot the gather should have put it on, for the given target.
+func max_slot_error(tfar: bool) -> float:
+	var worst: float = 0.0
+	for s: Shoe in main._all_shoes():
+		var slot: Transform3D = main.rack_slot_tf(tfar, 40,
+			main._is_ai_shoe(s), main._pair_index_of(s))
+		worst = maxf(worst, s.global_position.distance_to(slot.origin))
+	return worst
+
+
+func all_railed() -> bool:
+	for s: Shoe in main._all_shoes():
+		if String(main.shoe_status[s]) != "RAILED":
+			return false
+	return true
+
+
+## Fix Pass 12: park a fresh game at the between-innings swap
+## prompt with a manufactured scoring inning (the win probes'
+## method - honest path to the prompt, no throws needed).
+func manufacture_swap() -> void:
+	main.origin.global_transform = Transform3D.IDENTITY
+	main.test_grip["L"] = 0.0
+	main.test_grip["R"] = 0.0
+	main.start_game()
+	main.inning_results = [
+		{"owner": "AI", "dist_in": 0.0, "ringer": true},
+		{"owner": "P", "dist_in": 30.0, "ringer": false},
+		{"owner": "P", "dist_in": 40.0, "ringer": false}]
+	main._score_inning()
+
+
+## Fix Pass 12: WALK the player to the other end on the
+## production sticks, the way a player does it - right stick to
+## face the new end if needed, then left stick forward at walk
+## speed down the actual court, ending a step past the new
+## end's foul line, in the racks area. NO origin teleports: if
+## the arrival test ever narrows back into a pinpoint, this
+## walk misses it, the phase stays SWAP, and the caller's
+## checks fail. (The v1/FP11 version of this check teleported
+## the origin into the arrival ring and called it walking;
+## the field walk it never simulated is the one that stranded
+## Chris's game.) The moment the swap fires mid-walk, the
+## gathered state is snapshotted - pairs on slots, AI seated -
+## before the next turn can touch anything.
+func walk_swap_to_other_end(timeout_sec: float) -> Dictionary:
+	var go_far: bool = bool(main.target_far) # new end = far end
+	var dir_z: float = -1.0 if go_far else 1.0
+	var line_z: float = main.line_z_for_ft_at(40, not go_far)
+	var stop_z: float = line_z + 0.40 * dir_z
+	var t0: int = Time.get_ticks_msec()
+	var limit_ms: int = int(timeout_sec * 1000.0)
+	# Face the new end with the right stick (production turn).
+	while float(Time.get_ticks_msec() - t0) < limit_ms:
+		var fwd: Vector3 = -main.cam.global_transform.basis.z
+		if fwd.z * dir_z > 0.5:
+			break
+		main.test_stick["R"] = Vector2(1.0, 0.0)
+		await create_timer(0.1).timeout
+	main.test_stick["R"] = Vector2.ZERO
+	# Walk forward on the left stick, a step past the line.
+	var fired: bool = false
+	var fire_z: float = 0.0
+	var slot_err: float = -1.0
+	var railed: bool = false
+	var ai_pos := Vector3.INF
+	while float(Time.get_ticks_msec() - t0) < limit_ms:
+		if not fired and String(main.phase) != "SWAP":
+			fired = true
+			fire_z = main.cam.global_position.z
+			slot_err = max_slot_error(bool(main.target_far))
+			railed = all_railed()
+			ai_pos = main.ai_pitcher.position
+		var cz: float = main.cam.global_position.z
+		if (cz - stop_z) * dir_z >= 0.0:
+			break
+		main.test_stick["L"] = Vector2(0.0, 1.0)
+		await create_timer(0.1).timeout
+	main.test_stick["L"] = Vector2.ZERO
+	await frames(6)
+	if not fired and String(main.phase) != "SWAP":
+		fired = true
+		fire_z = main.cam.global_position.z
+		slot_err = max_slot_error(bool(main.target_far))
+		railed = all_railed()
+		ai_pos = main.ai_pitcher.position
+	var end_z: float = main.cam.global_position.z
+	return {"fired": fired, "fire_z": fire_z,
+		"arrived": (end_z - stop_z) * dir_z >= -0.05,
+		"slot_err": slot_err, "railed": railed, "ai_pos": ai_pos}
+
+
 func _run() -> void:
 	var rec_path: String = "user://smoke_throws.jsonl"
 	if FileAccess.file_exists(rec_path):
@@ -1070,6 +1163,82 @@ func _run() -> void:
 		"FP11: after the swap the AI is across the pit at the far end too (%.2f m from the stance centre, x %.2f)"
 		% [ai_far_d, main.ai_pitcher.position.x])
 
+	# ============ Fix Pass 12: the swap can't strand ============
+	# The field break: inning 1 ended, Chris walked the whole
+	# court, and nothing ever happened - no stocked shoes, the
+	# AI never re-seated. The arrival test was a pair of thin
+	# radial rings around the target stake (see _at_new_end in
+	# main.gd), and the old smoke "walk" teleported the origin
+	# into the ring. These checks reach the prompt the way the
+	# field does and leave it the way the field does.
+	manufacture_swap()
+	check(main.phase == "SWAP", "FP12: a scored inning reaches the swap prompt")
+	# Reference seat: the B button swap (the path that always
+	# worked) - where the gather puts the shoes and the AI.
+	main.test_button["B"] = true
+	await frames(4)
+	main.test_button["B"] = false
+	await frames(4)
+	check(main.phase != "SWAP" and main.inning == 2,
+		"FP12: the B button completes the swap")
+	check(max_slot_error(false) < 0.01 and all_railed(),
+		"FP12: button swap stocks both pairs on the new end's racks (worst %.3f m)"
+		% max_slot_error(false))
+	var ref_ai_pos: Vector3 = main.ai_pitcher.position
+	# Arrival-area probe at the field's dead point: standing
+	# past the far pit, where the old ring read "not arrived"
+	# forever. (A probe of the arrival AREA - the walking
+	# itself is proven on the sticks just below.)
+	manufacture_swap()
+	var dead_cam := Transform3D(Basis.IDENTITY, Vector3(0.0, 1.6, -13.4))
+	main.origin.global_transform = dead_cam * main.cam.transform.inverse()
+	await create_timer(0.3).timeout
+	check(main.phase != "SWAP",
+		"FP12: standing past the far pit completes the swap - the old ring's dead zone is gone")
+	# Let the AI's first turn run quiet before resetting under it.
+	var quiet12: float = 0.0
+	while quiet12 < 15.0 and (main.ai_pitcher.is_throwing() or not main.ai_flight.is_empty()):
+		await create_timer(0.25).timeout
+		quiet12 += 0.25
+	# The real walk: production sticks, full court, to the racks.
+	manufacture_swap()
+	var wres: Dictionary = await walk_swap_to_other_end(25.0)
+	check(bool(wres["fired"]),
+		"FP12: the stick walk down the court completes the swap (fired at z %.2f)"
+		% float(wres["fire_z"]))
+	check(float(wres["fire_z"]) < main.COURT_MID_Z,
+		"FP12: the walk swap fires on AREA - past centre, not at a destination pinpoint (z %.2f)"
+		% float(wres["fire_z"]))
+	check(bool(wres["arrived"]),
+		"FP12: the walk physically reaches the new end's racks area")
+	check(float(wres["slot_err"]) >= 0.0 and float(wres["slot_err"]) < 0.01
+		and bool(wres["railed"]),
+		"FP12: the walk swap stocks both pairs per owner at the new end (worst %.3f m)"
+		% float(wres["slot_err"]))
+	var walk_ai_pos: Vector3 = wres["ai_pos"]
+	check(walk_ai_pos.distance_to(ref_ai_pos) < 0.05,
+		"FP12: the walk swap seats the AI in his new-end box, same as the button (at %s, not midcourt)"
+		% str(walk_ai_pos))
+	# Inning 2 plays out from the walked-to end.
+	var guard12: int = 0
+	while main.phase != "SWAP" and main.phase != "OVER" and guard12 < 6:
+		guard12 += 1
+		if main.phase == "P_TURN":
+			check(await scripted_game_throw(),
+				"FP12: inning 2 accepts the player's throws after the walk swap")
+		elif main.phase == "AI_TURN":
+			var waited12: float = 0.0
+			while main.phase == "AI_TURN" and waited12 < 40.0:
+				await create_timer(0.5).timeout
+				waited12 += 0.5
+			check(main.phase != "AI_TURN",
+				"FP12: the AI plays its inning-2 turn after the walk swap")
+		else:
+			break
+	check(main.phase == "SWAP" and main.inning == 2,
+		"FP12: inning 2 completes after the walk swap (inning %d, phase %s)"
+		% [main.inning, String(main.phase)])
+
 	# ============ Backyard Game v1: a full game ============
 	# Scripted player throws (production input path) + the AI's
 	# own turns drive a complete game to a winner. End swaps
@@ -1088,12 +1257,15 @@ func _run() -> void:
 				await frames(4)
 				swap_methods.append("button")
 			else:
-				var spot_z: float = 0.55 if not main.target_far else -12.742
-				var yaw2: float = 0.0 if not main.target_far else PI
-				var want_cam := Transform3D(Basis(Vector3.UP, yaw2),
-					Vector3(0.0, 1.6, spot_z))
-				main.origin.global_transform = want_cam * main.cam.transform.inverse()
-				await frames(6)
+				# Fix Pass 12: a REAL walk on the production
+				# sticks. v1 teleported the origin into the
+				# arrival ring and called it walking - which
+				# is exactly how the field strand shipped
+				# green.
+				var wres2: Dictionary = await walk_swap_to_other_end(25.0)
+				check(bool(wres2["fired"]) and bool(wres2["arrived"]),
+					"game: the walk swap was walked, not teleported (fired at z %.2f)"
+					% float(wres2["fire_z"]))
 				swap_methods.append("walk")
 			check(main.phase != "SWAP",
 				"game: end swap completed (%s)" % String(swap_methods[swap_methods.size() - 1]))

@@ -1348,14 +1348,11 @@ func _physics_process(delta: float) -> void:
 			if _wait_time > RETURN_WAIT_SEC:
 				_return_to_stand()
 	_track_ai_flights(delta)
-	if mode == "GAME" and phase == "SWAP":
-		# Walking there manually also works: arrival at the new
-		# throwing end (read against the NEW target stake) ends
-		# the swap without the button.
-		var want_key: String = "FAR" if not target_far else "HOME"
-		var want_pos: Vector3 = STAKE_POS if want_key == "FAR" else HOME_STAKE_POS
-		if ThrowMath.standing_line_ft(cam.global_position, want_pos) != 0:
-			_complete_swap(true)
+	if mode == "GAME" and phase == "SWAP" and _at_new_end():
+		# Walking there manually also works: arrival anywhere in
+		# the new end's half of the court ends the swap without
+		# the button (Fix Pass 12 - see _at_new_end).
+		_complete_swap(true)
 
 
 func _settle_throw() -> void:
@@ -1567,6 +1564,43 @@ func _score_inning() -> void:
 	else:
 		phase = "SWAP"
 	_update_board()
+
+
+const COURT_MID_Z: float = -6.096 # halfway between the two stakes
+const SWAP_PIT_RADIUS_M: float = 3.0 # "at the new end's pit" radius
+
+
+## Has the player reached the NEW throwing end? (Fix Pass 12.)
+## An AREA test, deliberately generous: past the court's centre
+## line toward the new end, or within a few metres of the new
+## end's pit - whichever he satisfies first. During SWAP,
+## target_far still names the inning just played, so the new
+## end is the OTHER one. The test runs every physics frame, so
+## a player who ambled down during the AI's throws and is
+## already standing there when the inning scores completes the
+## swap on the spot - there is no dead state.
+##
+## Defect history (the field break this replaces): v1 read
+## arrival with ThrowMath.standing_line_ft against the new
+## TARGET stake - a pair of thin radial RINGS (+/-0.75 m around
+## the exact 30/40 ft distances) with a dead annulus between
+## them (distances 9.9-11.4 m read "neither line") and dead
+## space everywhere past the far stake (> 12.94 m). A player
+## could walk the whole court, stand at the far pit inspecting
+## it, or come back to the racks from the board side, and read
+## "not arrived" forever: no gather, no stocked shoes, the AI
+## never re-seated (Chris, 2026-11-03: "once shoes are thrown
+## we all just stand around wondering what next, no new
+## shoes"). And the v1/FP11 smoke never caught it: its "walk"
+## check teleported the origin to a point hand-picked inside
+## the ring and called that walking. The FP12 smoke walks the
+## court on the stick for real.
+func _at_new_end() -> bool:
+	var cp: Vector3 = cam.global_position
+	var pit: Vector3 = STAKE_POS if target_far else HOME_STAKE_POS
+	if Vector2(cp.x - pit.x, cp.z - pit.z).length() <= SWAP_PIT_RADIUS_M:
+		return true
+	return cp.z < COURT_MID_Z if target_far else cp.z > COURT_MID_Z
 
 
 ## End the between-innings prompt: flip the throwing end,
