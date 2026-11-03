@@ -213,7 +213,17 @@ func fire_at_stake(release_pos: Vector3, vel: Vector3, omega: float) -> Dictiona
 		samples.append(ThrowMath.make_sample(now - dur + t,
 			release_pos + vel * (t - dur), q))
 	main.samples = samples
+	# Fix Pass 16: this fixture's choreographed spin IS its
+	# specification - the section's subject is the stake's
+	# collision and sweep guard, and the finger-drag term would
+	# rewrite the tumble toward the regulation total before the
+	# guard ever saw it. The governor's production behaviour is
+	# proven where the release is the subject
+	# (tests/spin_governor_bench.gd, the technique audit).
+	var gov_was: bool = main.spin_governor_enabled
+	main.spin_governor_enabled = false
 	main._release_shoe(samples)
+	main.spin_governor_enabled = gov_was
 	main.grab_state.reset()
 	main.test_grip["R"] = 0.0
 	var fired: bool = String(main.state) == "FLYING"
@@ -306,7 +316,17 @@ func scripted_game_throw() -> bool:
 	for i: int in 2:
 		await physics_frame
 	main.samples = build_stream(hand_pos, Quaternion.IDENTITY, vel, omega, 777)
+	# Fix Pass 16: the choreographed club flip stands in for a
+	# player in sections whose subject is game flow (and the
+	# FP15 game's level horizon), not release shaping - the
+	# finger-drag term stays off for the fixture's release and
+	# is restored immediately after. Its production behaviour
+	# is proven in tests/spin_governor_bench.gd and the
+	# technique audit, where the release IS the subject.
+	var gov_was: bool = main.spin_governor_enabled
+	main.spin_governor_enabled = false
 	main._release_shoe(main.samples)
+	main.spin_governor_enabled = gov_was
 	main.grab_state.reset()
 	main.test_grip["R"] = 0.0
 	if String(main.state) != "FLYING":
@@ -403,7 +423,18 @@ func scripted_shot(kind: String) -> bool:
 		samples.append(ThrowMath.make_sample(now + t_rel,
 			release_pos + vel * t_rel, Quaternion(axis, rate * t_rel)))
 	main.samples = samples
+	# Fix Pass 16: scripted_shot exists to put a shoe at an
+	# exact scoring state so the FP13 sections can judge
+	# SCORING and ATTRIBUTION; the constructed profile
+	# (AIPitcher.base_release) is the fixture's specification,
+	# so the finger-drag term stays off for its release and is
+	# restored immediately after. The governor's production
+	# behaviour is proven where the release is the subject
+	# (tests/spin_governor_bench.gd, the technique audit).
+	var gov_was2: bool = main.spin_governor_enabled
+	main.spin_governor_enabled = false
 	main._release_shoe(samples)
+	main.spin_governor_enabled = gov_was2
 	main.grab_state.reset()
 	main.test_grip["R"] = 0.0
 	if String(main.state) != "FLYING":

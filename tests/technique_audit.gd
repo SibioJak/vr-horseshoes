@@ -49,6 +49,19 @@ extends SceneTree
 ## (velocity 0.35 m/s under jitter; angular 0.30 rad/s on a clean
 ## quaternion stream); free-flight spin axis deviation (wobble)
 ## within 12 deg; spin retention at arrival >= 95% of imparted.
+##
+## Fix Pass 16 note: releases now pass through the finger-drag
+## term (ThrowMath.govern_spin) on their way to the shoe - this
+## suite judges the GOVERNED production path, as ordered. Two
+## readings follow the split the pass created: the angular-bias
+## check compares the imparted omega against the ESTIMATOR's
+## own snapshot in the release cache (the quantity it exists to
+## isolate), and spin retention is measured against the governed
+## spin actually imparted. The fixture plans rev completion at
+## the stake-plane crossing; the governor totals over the full
+## flight to ground level, so governed arrivals sit a few
+## hundredths of a rev inside the plan - inside the +-0.15
+## tolerance this suite has always carried.
 ## "Arrival" = stake contact or stake-plane crossing; a first
 ## contact within 0.30 m short of the plane (sliding in) also
 ## counts - a landing well short does not.
@@ -276,7 +289,13 @@ func run_case(hand: String, zone: String, line_ft: int,
 	main.samples = samples
 	main._release_shoe(samples)
 	res["v_est"] = main.release_cache.get("velocity", Vector3.ZERO)
-	res["w_est"] = main.release_cache.get("angular_velocity", Vector3.ZERO)
+	# Fix Pass 16: the cache's "angular_velocity" is now the
+	# GOVERNED release spin (what production actually imparts);
+	# the estimator's own read rides alongside as the estimator
+	# evidence, and the bias check below judges the estimator.
+	res["w_est"] = main.release_cache.get("estimator_angular_velocity",
+		main.release_cache.get("angular_velocity", Vector3.ZERO))
+	res["w_applied"] = main.release_cache.get("angular_velocity", Vector3.ZERO)
 	main.grab_state.reset()
 	main.test_grip[hand] = 0.0
 	res["fired"] = String(main.state) == "FLYING"
@@ -383,8 +402,13 @@ func judge_case(label: String, res: Dictionary, vel: Vector3, omega: Vector3,
 	check(wob <= 12.0,
 		"%s: no tennis-racket wobble - spin axis held within %.1f deg in free flight" % [label, wob])
 	var spin_kept: float = 0.0
-	if w_est.length() > 0.1:
-		spin_kept = float(arr.get("av_len", 0.0)) / w_est.length()
+	var w_applied: Vector3 = res.get("w_applied", Vector3.ZERO)
+	if w_applied.length() > 0.1:
+		# Retention is measured against what production actually
+		# imparted (Fix Pass 16: the governed spin), not the
+		# estimator's raw read - the drag term's rate change is
+		# a release decision, not flight loss.
+		spin_kept = float(arr.get("av_len", 0.0)) / w_applied.length()
 	check(spin_kept >= 0.95,
 		"%s: spin survives the flight - %.0f%% of imparted spin still on the shoe at arrival"
 		% [label, spin_kept * 100.0])
