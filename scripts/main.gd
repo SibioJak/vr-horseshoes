@@ -26,6 +26,8 @@ const STAND_SIDE_X: float = 0.75
 const STAND_BEHIND_M: float = 0.50
 const STAND_SHOE_Y: float = 0.785
 const CANDIDATE_RADIUS: float = 0.14
+const BOARD_POS := Vector3(-2.4, 0.0, -16.2) # Fix Pass 10: beyond the pit, left of the stake
+const BOARD_YAW_DEG: float = 10.0 # face turned back at the pitching end
 const THROW_MIN_SPEED: float = 0.9
 const SAMPLE_KEEP_SEC: float = 0.40
 const SETTLE_STILL_SEC: float = 0.25
@@ -46,8 +48,11 @@ var stand_tfs: Dictionary = {} # line_ft (30/40) -> pedestal shoe transform
 var stand_tf: Transform3D # the pedestal the shoe currently belongs to
 var active_stand_line_ft: int = 40
 var board_root: Node3D
+var board_slab_size := Vector3(3.0, 2.7, 0.05)
+var title_label: Label3D
 var status_label: Label3D
 var controls_label: Label3D
+var scenery_root: Node3D
 
 var state: String = "STAND" # STAND, HELD, FLYING, DROPPED, RETURNING
 var grab_state := GrabState.new()
@@ -68,6 +73,8 @@ var hand_speed: Dictionary = {"L": 0.0, "R": 0.0}
 var throw_count: int = 0
 var last_hold_text: String = "-"
 var last_distance_in: float = -1.0
+var last_flip_rev: float = 0.0
+var last_turn_rev: float = 0.0
 var last_ringer: bool = false
 
 var recorder: ThrowRecorder
@@ -225,8 +232,22 @@ func _build_world() -> void:
 	add_child(sun)
 	var we := WorldEnvironment.new()
 	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.45, 0.62, 0.78)
+	# Fix Pass 10: a real sky (procedural gradient + sun disc)
+	# replaces the flat clear colour - one of the static references
+	# the comfort dressing hangs on. Ambient stays the settled
+	# colour source so the judged court lighting does not move.
+	var sky_mat := ProceduralSkyMaterial.new()
+	sky_mat.sky_top_color = Color(0.22, 0.44, 0.78)
+	sky_mat.sky_horizon_color = Color(0.72, 0.81, 0.90)
+	sky_mat.sky_curve = 0.12
+	sky_mat.ground_bottom_color = Color(0.18, 0.24, 0.16)
+	sky_mat.ground_horizon_color = Color(0.72, 0.81, 0.90)
+	sky_mat.ground_curve = 0.08
+	sky_mat.sun_angle_max = 25.0
+	var sky := Sky.new()
+	sky.sky_material = sky_mat
+	env.background_mode = Environment.BG_SKY
+	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.75, 0.78, 0.72)
 	env.ambient_light_energy = 0.7
@@ -312,6 +333,199 @@ func _build_world() -> void:
 		var tf: Transform3D = stand_tfs[stand_line]
 		_build_pedestal(tf)
 
+	_build_scenery()
+
+
+## Fix Pass 10 scenery / comfort dressing: the first sketch of the
+## backyard. Chris gets queasy moving in the bare test court - his
+## diagnosis: "lack of anything in background, no objects, flat
+## plane." Everything here is a STATIC VISUAL REFERENCE at some
+## distance (mow stripes underfoot, fence at the yard edge, trees
+## and a shed mid/far, sky + clouds above); nothing collides,
+## nothing moves, and the judged court surfaces - pit, lines,
+## pedestals, stake - are untouched. Placement keeps the court
+## apron (|x| <= 2.3, z -14.8..1.6) bare of stripes and keeps the
+## board sightline from both foul lines clear; the smoke suite
+## asserts the sightline clearance so dressing can never creep
+## in front of the board.
+func _build_scenery() -> void:
+	scenery_root = Node3D.new()
+	scenery_root.name = "Scenery"
+	add_child(scenery_root)
+
+	# --- Mow stripes: light bands laid over the base green,
+	# running down the yard (away from the pitcher), skipping the
+	# court apron. Thin visual-only boxes, no collision.
+	var stripes := Node3D.new()
+	stripes.name = "Stripes"
+	scenery_root.add_child(stripes)
+	var stripe_mat := _mat(Color(0.40, 0.60, 0.30))
+	var band_w: float = 1.4
+	var band_i: int = 0
+	var band_x: float = -19.6 + band_w * 0.5
+	while band_x < 19.6:
+		if band_i % 2 == 0:
+			if absf(band_x) < 3.0:
+				# Band crosses the apron: two stubs, behind the
+				# foul lines and beyond the pit.
+				_box(stripes, Vector3(band_x, 0.002, 9.8), Vector3(band_w, 0.004, 16.4), stripe_mat)
+				_box(stripes, Vector3(band_x, 0.002, -22.4), Vector3(band_w, 0.004, 15.2), stripe_mat)
+			else:
+				_box(stripes, Vector3(band_x, 0.002, -6.0), Vector3(band_w, 0.004, 48.0), stripe_mat)
+		band_i += 1
+		band_x += band_w
+
+	# --- Perimeter fence: vertical wooden slats + two rails per
+	# run, at the yard edge (x +/-13, z -20 / +7) - the backyard
+	# fence from Chris's photo feed. One shared slat mesh.
+	var fence := Node3D.new()
+	fence.name = "Fence"
+	scenery_root.add_child(fence)
+	var slat_mesh := BoxMesh.new()
+	slat_mesh.size = Vector3(0.24, 1.75, 0.03)
+	var wood_a := _mat(Color(0.52, 0.40, 0.26))
+	var wood_b := _mat(Color(0.47, 0.36, 0.23))
+	var rail_mat := _mat(Color(0.44, 0.33, 0.21))
+	var post_mesh := BoxMesh.new()
+	post_mesh.size = Vector3(0.12, 1.85, 0.12)
+	# Runs: [start, end] pairs along the rectangle.
+	var runs: Array = [
+		[Vector2(-13.0, -20.0), Vector2(13.0, -20.0)],
+		[Vector2(-13.0, 7.0), Vector2(13.0, 7.0)],
+		[Vector2(-13.0, -20.0), Vector2(-13.0, 7.0)],
+		[Vector2(13.0, -20.0), Vector2(13.0, 7.0)],
+	]
+	for run: Array in runs:
+		var a: Vector2 = run[0]
+		var b: Vector2 = run[1]
+		var run_len: float = a.distance_to(b)
+		var dir2: Vector2 = (b - a) / run_len
+		var yaw: float = atan2(dir2.x, dir2.y) + PI * 0.5
+		var n_slats: int = int(run_len / 0.275)
+		for s: int in n_slats:
+			var c2: Vector2 = a + dir2 * (0.14 + float(s) * 0.275)
+			var slat := MeshInstance3D.new()
+			slat.mesh = slat_mesh
+			slat.material_override = wood_a if s % 2 == 0 else wood_b
+			slat.position = Vector3(c2.x, 0.875, c2.y)
+			slat.rotation_degrees = Vector3(0.0, rad_to_deg(yaw), 0.0)
+			fence.add_child(slat)
+		for rail_y: float in [0.50, 1.35]:
+			var rail := MeshInstance3D.new()
+			var rail_mesh := BoxMesh.new()
+			rail_mesh.size = Vector3(run_len, 0.09, 0.04)
+			rail.mesh = rail_mesh
+			rail.material_override = rail_mat
+			var mid2: Vector2 = (a + b) * 0.5
+			rail.position = Vector3(mid2.x, rail_y, mid2.y)
+			rail.rotation_degrees = Vector3(0.0, rad_to_deg(yaw), 0.0)
+			fence.add_child(rail)
+		var n_posts: int = int(run_len / 3.25)
+		for p: int in range(n_posts + 1):
+			var c2: Vector2 = a + dir2 * (float(p) * run_len / float(n_posts))
+			var post := MeshInstance3D.new()
+			post.mesh = post_mesh
+			post.material_override = rail_mat
+			post.position = Vector3(c2.x, 0.925, c2.y)
+			fence.add_child(post)
+
+	# --- Trees: trunk + canopy masses at varied distances.
+	var trunk_mat := _mat(Color(0.35, 0.25, 0.16))
+	var leaf_a := _mat(Color(0.22, 0.42, 0.18))
+	var leaf_b := _mat(Color(0.27, 0.48, 0.21))
+	var tree_spots: Array = [
+		[Vector3(-8.5, 0.0, -19.5), 1.15],
+		[Vector3(7.0, 0.0, -19.0), 1.0],
+		[Vector3(-11.5, 0.0, -9.0), 1.25],
+		[Vector3(11.0, 0.0, -5.0), 0.95],
+		[Vector3(-7.5, 0.0, 4.5), 1.05],
+		[Vector3(12.0, 0.0, 3.0), 1.2],
+	]
+	var tree_i: int = 0
+	for spot: Array in tree_spots:
+		tree_i += 1
+		var tp: Vector3 = spot[0]
+		var sc: float = spot[1]
+		var tree := Node3D.new()
+		tree.name = "Tree%d" % tree_i
+		tree.position = tp
+		scenery_root.add_child(tree)
+		var trunk := MeshInstance3D.new()
+		var trunk_mesh := CylinderMesh.new()
+		trunk_mesh.top_radius = 0.14 * sc
+		trunk_mesh.bottom_radius = 0.22 * sc
+		trunk_mesh.height = 2.2 * sc
+		trunk.mesh = trunk_mesh
+		trunk.material_override = trunk_mat
+		trunk.position = Vector3(0.0, 1.1 * sc, 0.0)
+		tree.add_child(trunk)
+		var blobs: Array = [
+			[Vector3(0.0, 3.1, 0.0) * sc, 1.6],
+			[Vector3(0.85, 2.55, 0.3) * sc, 1.1],
+			[Vector3(-0.8, 2.65, -0.35) * sc, 1.05],
+		]
+		var blob_i: int = 0
+		for blob: Array in blobs:
+			blob_i += 1
+			var bp2: Vector3 = blob[0]
+			var br: float = float(blob[1]) * sc
+			var can := MeshInstance3D.new()
+			var sm := SphereMesh.new()
+			sm.radius = br
+			sm.height = br * 2.0
+			sm.radial_segments = 12
+			sm.rings = 8
+			can.mesh = sm
+			can.material_override = leaf_a if blob_i % 2 == 1 else leaf_b
+			can.position = bp2
+			tree.add_child(can)
+
+	# --- Shed: simple box body + pitched roof + door, off to the
+	# right beyond the pit (Chris's photo feed has the white shed).
+	var shed := Node3D.new()
+	shed.name = "Shed"
+	shed.position = Vector3(9.5, 0.0, -13.0)
+	shed.rotation_degrees = Vector3(0.0, -12.0, 0.0)
+	scenery_root.add_child(shed)
+	var shed_mat := _mat(Color(0.62, 0.64, 0.66))
+	_box(shed, Vector3(0.0, 1.075, 0.0), Vector3(2.8, 2.15, 2.1), shed_mat)
+	var roof_mat := _mat(Color(0.30, 0.28, 0.28))
+	var roof_l := _box(shed, Vector3(-0.72, 2.42, 0.0), Vector3(1.75, 0.07, 2.4), roof_mat)
+	roof_l.rotation_degrees = Vector3(0.0, 0.0, 38.0)
+	var roof_r := _box(shed, Vector3(0.72, 2.42, 0.0), Vector3(1.75, 0.07, 2.4), roof_mat)
+	roof_r.rotation_degrees = Vector3(0.0, 0.0, -38.0)
+	_box(shed, Vector3(0.0, 0.95, 1.06), Vector3(0.8, 1.5, 0.04), _mat(Color(0.45, 0.47, 0.50)))
+
+	# --- Clouds: flattened bright puffs, unshaded, high and far.
+	var clouds := Node3D.new()
+	clouds.name = "Clouds"
+	scenery_root.add_child(clouds)
+	var cloud_mat := StandardMaterial3D.new()
+	cloud_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cloud_mat.albedo_color = Color(0.97, 0.98, 1.0)
+	var cloud_spots: Array = [
+		[Vector3(-14.0, 30.0, -34.0), Vector3(7.0, 1.1, 3.5)],
+		[Vector3(6.0, 34.0, -28.0), Vector3(9.0, 1.4, 4.0)],
+		[Vector3(16.0, 28.0, -12.0), Vector3(6.0, 1.0, 3.0)],
+		[Vector3(-20.0, 32.0, -2.0), Vector3(8.0, 1.2, 3.6)],
+		[Vector3(2.0, 36.0, -44.0), Vector3(11.0, 1.6, 4.5)],
+		[Vector3(12.0, 30.0, 10.0), Vector3(6.5, 1.0, 3.2)],
+	]
+	for cspot: Array in cloud_spots:
+		var cp: Vector3 = cspot[0]
+		var cs2: Vector3 = cspot[1]
+		var puff := MeshInstance3D.new()
+		var pm := SphereMesh.new()
+		pm.radius = 1.0
+		pm.height = 2.0
+		pm.radial_segments = 12
+		pm.rings = 8
+		puff.mesh = pm
+		puff.material_override = cloud_mat
+		puff.position = cp
+		puff.scale = cs2
+		clouds.add_child(puff)
+
 
 func _build_rig() -> void:
 	origin = XROrigin3D.new()
@@ -383,47 +597,56 @@ func _head_tracking_ok() -> bool:
 
 func _build_board() -> void:
 	board_root = Node3D.new()
-	# Duel placement pattern (Fix Pass 2): front-LEFT of the pitching
-	# spot, ~35 deg off the throw lane, ~2.1 m out, face turned back
-	# at the foul line. Pass 1 put it at z=-0.30 with the yaw sign
-	# flipped, so its face pointed AWAY from the player - Chris had
-	# to walk around behind it to read it. Never again: the smoke
-	# suite asserts forward hemisphere + facing from now on.
-	board_root.position = Vector3(-1.20, 0.0, -1.70)
-	board_root.rotation_degrees = Vector3(0.0, 35.0, 0.0)
+	# Fix Pass 10 placement (Chris's order): BEYOND the pit, LEFT
+	# of the stake from the pitcher's viewpoint, face turned back
+	# at the pitching end - after a throw he reads the results
+	# where he is already looking, instead of turning around to a
+	# board by the foul line. Pass 2 put the FP1 board front-left
+	# of the spot after pass 1's yaw sign pointed its face AWAY
+	# from the player (he had been reading its back); the smoke
+	# suite's facing assertion survives from that lesson and now
+	# guards THIS spot. The board is scoreboard-sized (3 m wide,
+	# slab top 3.2 m) because the stat lines must read from
+	# 13-16 m: ~0.21 m capitals, with the controls list in smaller
+	# type below for the one close-up read. Label Y positions are
+	# laid out on the font's TRUE line pitch (get_height = 1.375x
+	# font_size for the fallback font - a first cut that assumed
+	# 1.0x overlapped title into status in the close-up proof).
+	board_root.position = BOARD_POS
+	board_root.rotation_degrees = Vector3(0.0, BOARD_YAW_DEG, 0.0)
 	add_child(board_root)
 	var wood := _mat(Color(0.30, 0.21, 0.12))
-	_box(board_root, Vector3(-0.62, 0.95, -0.03), Vector3(0.07, 1.90, 0.07), wood)
-	_box(board_root, Vector3(0.62, 0.95, -0.03), Vector3(0.07, 1.90, 0.07), wood)
-	_box(board_root, Vector3(0.0, 1.30, -0.02), Vector3(1.50, 1.30, 0.04), wood)
-	var title := Label3D.new()
-	title.text = "HORSESHOES - TOSS TEST"
-	title.font_size = 56
-	title.pixel_size = 0.0019
-	title.modulate = Color(1.0, 0.93, 0.75)
-	title.outline_size = 10
-	title.outline_modulate = Color(0.1, 0.07, 0.03)
-	title.position = Vector3(0.0, 1.80, 0.01)
-	board_root.add_child(title)
+	_box(board_root, Vector3(-1.38, 1.75, -0.03), Vector3(0.09, 3.50, 0.09), wood)
+	_box(board_root, Vector3(1.38, 1.75, -0.03), Vector3(0.09, 3.50, 0.09), wood)
+	_box(board_root, Vector3(0.0, 1.85, -0.02), board_slab_size, wood)
+	title_label = Label3D.new()
+	title_label.text = "HORSESHOES - TOSS TEST"
+	title_label.font_size = 56
+	title_label.pixel_size = 0.0026
+	title_label.modulate = Color(1.0, 0.93, 0.75)
+	title_label.outline_size = 10
+	title_label.outline_modulate = Color(0.1, 0.07, 0.03)
+	title_label.position = Vector3(0.0, 3.04, 0.01)
+	board_root.add_child(title_label)
 	status_label = Label3D.new()
-	status_label.font_size = 56
-	status_label.pixel_size = 0.0018
+	status_label.font_size = 64
+	status_label.pixel_size = 0.0031
 	status_label.modulate = Color(0.95, 0.97, 0.90)
 	status_label.outline_size = 8
 	status_label.outline_modulate = Color(0.1, 0.07, 0.03)
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	status_label.position = Vector3(0.0, 1.55, 0.01)
+	status_label.position = Vector3(0.0, 2.02, 0.01)
 	board_root.add_child(status_label)
 	controls_label = Label3D.new()
 	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing, open hand (shoe returns)\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nRECENTER: menu long-press - seated/standing ok"
-	controls_label.font_size = 38
+	controls_label.font_size = 34
 	controls_label.pixel_size = 0.00105
 	controls_label.line_spacing = 2.0
 	controls_label.modulate = Color(0.88, 0.90, 0.82)
 	controls_label.outline_size = 6
 	controls_label.outline_modulate = Color(0.1, 0.07, 0.03)
 	controls_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	controls_label.position = Vector3(0.0, 0.99, 0.01)
+	controls_label.position = Vector3(0.0, 0.83, 0.01)
 	board_root.add_child(controls_label)
 
 
@@ -431,9 +654,18 @@ func _update_board() -> void:
 	if status_label == null:
 		return
 	var dist_text: String = "-"
+	var flip_text: String = "-"
+	var turn_text: String = "-"
 	if last_distance_in >= 0.0:
 		dist_text = "%.1f IN" % last_distance_in
-	var lines: String = "THROWS: %d\nHOLD: %s\nLAST: %s" % [throw_count, last_hold_text, dist_text]
+		# Fix Pass 10 rotation readout (Chris approved): the same
+		# flip_rot / turn_rot numbers the recorder writes to
+		# throws.jsonl for this throw, so he can watch his turn
+		# attempts actually turn (or not) from where he stands.
+		flip_text = "%.2f REV" % last_flip_rev
+		turn_text = "%.2f REV" % last_turn_rev
+	var lines: String = "THROWS: %d\nHOLD: %s\nLAST: %s\nFLIP: %s\nTURN: %s" % [
+		throw_count, last_hold_text, dist_text, flip_text, turn_text]
 	if last_ringer:
 		lines += "\nRINGER!"
 	status_label.text = lines
@@ -787,6 +1019,8 @@ func _settle_throw() -> void:
 	throw_count += 1
 	last_hold_text = "%s (%s)" % [String(release_cache["hold"]).to_upper(), String(release_cache["zone"]).to_upper()]
 	last_distance_in = dist_in
+	last_flip_rev = flip_rot
+	last_turn_rev = turn_rot
 	last_ringer = ringer
 	_update_board()
 	var vel: Vector3 = release_cache["velocity"]

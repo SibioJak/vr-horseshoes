@@ -11,9 +11,13 @@ extends SceneTree
 ## binding) and saves:
 ##   proofs/court_view.png - from the pitcher's head: pit + stake at
 ##     40 ft centre, both foul lines, both pedestals clear of the
-##     stance boxes, board legible left.
+##     stance boxes, the dressed backyard around it all (Fix Pass
+##     10 scenery), board beyond the pit at far left.
 ##   proofs/board_closeup.png - the board face-on: every line of the
 ##     status + controls text on the slab and legible.
+##   proofs/board_from_foul_line.png - from the 40 ft foul line at
+##     standing eye height (Fix Pass 10): the board beyond-left of
+##     the pit with its stat lines legible at ~16 m.
 ##   proofs/held_shoe.png  - the shoe latched in the right hand via a
 ##     real tracker grip input, grab-zone markers visible.
 ## These prove the rendered path + input path work together; they do
@@ -119,19 +123,46 @@ func _run() -> void:
 	cam_a.queue_free()
 
 	# --- Proof A2: board close-up (all text on the slab, legible) ---
+	# Seed a realistic last throw first, so the board renders its
+	# full six-line status block (the slab's worst case) - the
+	# values are proof dressing only, no throw is recorded.
+	main.throw_count = 3
+	main.last_hold_text = "TURN (SHANK_RIGHT)"
+	main.last_distance_in = 43.2
+	main.last_flip_rev = 0.03
+	main.last_turn_rev = 1.24
+	main.last_ringer = true
+	main._update_board()
 	var face_dir: Vector3 = main.board_root.global_transform.basis.z
 	face_dir.y = 0.0
 	face_dir = face_dir.normalized()
-	var board_center: Vector3 = main.board_root.global_position + Vector3(0.0, 1.28, 0.0)
+	var board_center: Vector3 = main.board_root.global_transform * Vector3(0.0, 1.85, 0.0)
 	var cam_close := Camera3D.new()
 	cam_close.fov = 55.0
-	cam_close.position = board_center + face_dir * 1.35
+	cam_close.position = board_center + face_dir * 4.2
 	main.add_child(cam_close)
 	cam_close.look_at(board_center, Vector3.UP)
 	cam_close.current = true
 	await settle(4)
 	await snap(cam_close, "res://proofs/board_closeup.png")
 	cam_close.queue_free()
+
+	# --- Proof D: the board from the 40 ft foul line (Fix Pass 10) ---
+	# Standing eye height behind the line, looking where the
+	# pitcher looks after a throw: the stat lines must read at
+	# this distance (~16 m) - that is the whole point of the move.
+	var cam_d := Camera3D.new()
+	cam_d.fov = 70.0
+	cam_d.position = Vector3(0.0, 1.62, 0.55)
+	main.add_child(cam_d)
+	cam_d.look_at(board_center, Vector3.UP)
+	cam_d.current = true
+	var foul_dist: float = cam_d.position.distance_to(main.board_root.global_position)
+	check(foul_dist > 15.0 and foul_dist < 17.5,
+		"foul-line proof really is at board-reading distance (%.1f m)" % foul_dist)
+	await settle(4)
+	await snap(cam_d, "res://proofs/board_from_foul_line.png")
+	cam_d.queue_free()
 
 	# --- Proof B: grab the shoe through the tracker grip input ---
 	var toe_c: Vector3 = main.shoe.zone_world_center("toe")

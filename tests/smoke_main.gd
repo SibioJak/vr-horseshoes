@@ -84,6 +84,34 @@ func _on_stake_test_body_entered(body: Node) -> void:
 	stake_contacts.append(body)
 
 
+## Fix Pass 10: parse a "KEY: <float> REV" line out of the board's
+## status text. Returns NAN when the line is absent or still the
+## pre-throw dash, so a missing readout fails comparisons loudly.
+func board_rev(text: String, key: String) -> float:
+	var at: int = text.find(key)
+	if at < 0:
+		return NAN
+	var rest: String = text.substr(at + key.length())
+	var end: int = rest.find(" REV")
+	if end < 0:
+		return NAN
+	var num: String = rest.substr(0, end).strip_edges()
+	if not num.is_valid_float():
+		return NAN
+	return num.to_float()
+
+
+## Fix Pass 10: horizontal distance from a point to the board
+## sightline segment (40 ft foul line spot -> board centre, XZ).
+func sightline_dist(p: Vector3) -> float:
+	var a := Vector2(0.0, 0.0)
+	var b := Vector2(main.BOARD_POS.x, main.BOARD_POS.z)
+	var q := Vector2(p.x, p.z)
+	var ab: Vector2 = b - a
+	var t: float = clampf((q - a).dot(ab) / ab.length_squared(), 0.0, 1.0)
+	return (a + ab * t).distance_to(q)
+
+
 ## Fix Pass 8: fire one shot at the stake through the production
 ## grab/release path and watch it the whole way: was the stake
 ## body hit, and how deep past the stake's axis plane did the
@@ -201,16 +229,22 @@ func _run() -> void:
 		"board notes the 30 ft short line (pass 3)")
 	check(main.status_label.text.contains("THROWS: 0"), "board starts at zero throws")
 
-	# --- Board placement (pass-2 regression guard) ---
-	# The pass-1 board faced AWAY from the player; he had to walk
-	# around behind it. Assert: forward hemisphere, off the lane,
-	# 1.8-2.6 m from the pitching spot, face turned back at the spot.
+	# --- Board placement (pass-10 re-derivation of the pass-2 guard) ---
+	# Pass 1's board faced AWAY from the player; pass 2 moved it
+	# front-left of the spot and the facing assertion dates from
+	# that lesson. Fix Pass 10 (Chris's order) moves the board
+	# BEYOND the pit, LEFT of the stake, face turned back at the
+	# pitching end - results are read where he is already looking.
+	# Assert: past the pit's far edge, left of the lane, ~16 m out,
+	# face pointing back at the pitching spot.
 	var bp: Vector3 = main.board_root.position
-	check(bp.z < 0.0, "board sits in the FORWARD hemisphere (z %.2f)" % bp.z)
+	var pit_far_z: float = main.STAKE_POS.z - main.PIT_SIZE.z * 0.5
+	check(bp.z < pit_far_z - 2.0,
+		"board sits BEYOND the pit (z %.2f, pit far edge %.2f)" % [bp.z, pit_far_z])
+	check(bp.x < -1.5, "board is LEFT of the stake/lane (x %.2f)" % bp.x)
 	var board_dist: float = Vector2(bp.x, bp.z).length()
-	check(board_dist > 1.8 and board_dist < 2.6,
-		"board is 1.8-2.6 m from the pitching spot (%.2f m)" % board_dist)
-	check(absf(bp.x) > 0.8, "board is clear of the throw lane (|x| %.2f)" % absf(bp.x))
+	check(board_dist > 15.0 and board_dist < 17.5,
+		"board is ~16 m from the pitching spot (%.2f m)" % board_dist)
 	var face_dir: Vector3 = main.board_root.global_transform.basis.z
 	face_dir.y = 0.0
 	face_dir = face_dir.normalized()
@@ -219,6 +253,75 @@ func _run() -> void:
 	to_spot = to_spot.normalized()
 	check(face_dir.dot(to_spot) > 0.9,
 		"board FACE points back at the pitching spot (dot %.3f)" % face_dir.dot(to_spot))
+	check(main.board_slab_size.x >= 2.8,
+		"board is scoreboard-sized for distance reading (slab %.1f m wide)" % main.board_slab_size.x)
+	# Every label's rendered text block must fit ON the slab
+	# (font metrics, not eyeballs): this is the standing guard
+	# that no line can silently outgrow the board again.
+	var fb_font: Font = ThemeDB.fallback_font
+	for lbl: Label3D in [main.title_label, main.status_label, main.controls_label]:
+		var text_lines: PackedStringArray = lbl.text.split("\n")
+		var w_max: float = 0.0
+		for ln: String in text_lines:
+			var lw: float = fb_font.get_string_size(ln, HORIZONTAL_ALIGNMENT_LEFT, -1.0, lbl.font_size).x * lbl.pixel_size
+			w_max = maxf(w_max, lw)
+		var n_lines: float = float(text_lines.size())
+		if lbl == main.status_label:
+			n_lines += 1.0 # worst case: the RINGER! line joins the block
+		# Line pitch is the font's TRUE height (1.375x font_size
+		# for the fallback font), not font_size itself - a first
+		# cut at 1.0x passed this check while the rendered board
+		# overlapped its own lines (pass-10 close-up proof).
+		var h_tot: float = n_lines * fb_font.get_height(lbl.font_size) * lbl.pixel_size \
+			+ (n_lines - 1.0) * lbl.line_spacing * lbl.pixel_size
+		check(w_max <= main.board_slab_size.x - 0.08 and h_tot <= main.board_slab_size.y - 0.08,
+			"board label '%s...' fits the slab (%.2f x %.2f m on %.1f x %.1f)"
+			% [text_lines[0], w_max, h_tot, main.board_slab_size.x, main.board_slab_size.y])
+	# The boot text never exercises the widest line the board can
+	# show - measure the worst-case status block (long TURN hold,
+	# three-digit count, RINGER! line) with the label's own font.
+	var worst: String = "THROWS: 999\nHOLD: TURN (SHANK_RIGHT)\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!"
+	var w_lines: PackedStringArray = worst.split("\n")
+	var w_worst: float = 0.0
+	for ln2: String in w_lines:
+		w_worst = maxf(w_worst, fb_font.get_string_size(ln2, HORIZONTAL_ALIGNMENT_LEFT, -1.0, main.status_label.font_size).x * main.status_label.pixel_size)
+	var h_worst: float = float(w_lines.size()) * fb_font.get_height(main.status_label.font_size) * main.status_label.pixel_size \
+		+ float(w_lines.size() - 1) * main.status_label.line_spacing * main.status_label.pixel_size
+	check(w_worst <= main.board_slab_size.x - 0.08 and h_worst <= main.board_slab_size.y - 0.08,
+		"worst-case status block fits the slab (%.2f x %.2f m)" % [w_worst, h_worst])
+
+	# --- Scenery dressing (Fix Pass 10 comfort) ---
+	# Static references at several distances against the flat
+	# void; the guards keep the dressing OUT of the court and off
+	# the board sightline from the foul lines.
+	check(main.scenery_root != null, "scenery dressing exists (pass 10)")
+	if main.scenery_root != null:
+		var stripes: Node = main.scenery_root.get_node_or_null("Stripes")
+		check(stripes != null and stripes.get_child_count() >= 10,
+			"mow stripes dress the ground (%d bands)" % (stripes.get_child_count() if stripes != null else 0))
+		var fence: Node = main.scenery_root.get_node_or_null("Fence")
+		check(fence != null and fence.get_child_count() > 300,
+			"perimeter fence rings the yard (%d pieces)" % (fence.get_child_count() if fence != null else 0))
+		var shed: Node = main.scenery_root.get_node_or_null("Shed")
+		check(shed != null, "the shed stands off to the side")
+		if shed != null:
+			check(sightline_dist((shed as Node3D).global_position) > 2.5,
+				"shed keeps clear of the board sightline (%.1f m)" % sightline_dist((shed as Node3D).global_position))
+		var n_trees: int = 0
+		for child: Node in main.scenery_root.get_children():
+			if child.name.begins_with("Tree"):
+				n_trees += 1
+				check(sightline_dist((child as Node3D).global_position) > 2.5,
+					"%s keeps clear of the board sightline (%.1f m)" % [child.name, sightline_dist((child as Node3D).global_position)])
+		check(n_trees >= 5, "trees stand at varied distances (%d)" % n_trees)
+		var clouds: Node = main.scenery_root.get_node_or_null("Clouds")
+		check(clouds != null and clouds.get_child_count() >= 4,
+			"clouds ride the sky (%d puffs)" % (clouds.get_child_count() if clouds != null else 0))
+	var sky_ok: bool = false
+	for child: Node in main.get_children():
+		if child is WorldEnvironment:
+			sky_ok = (child as WorldEnvironment).environment.background_mode == Environment.BG_SKY
+	check(sky_ok, "a real sky replaces the flat clear colour")
 
 	# --- Pedestals clear of the stance boxes (pass-3 replacement) ---
 	# FP2 measured the stand from the SPAWN point (0.61 m) and called
@@ -416,10 +519,18 @@ func _run() -> void:
 	var p0 := Vector3(0.25, 1.15, 0.30)
 	var hz: float = 90.0
 	var dur: float = 0.30
+	# Pass 10: the sample quats ROTATE at 5 rad/s, so the release
+	# carries real spin and the board's new FLIP/TURN readout has
+	# non-zero numbers to match against the recorder (below) -
+	# identity quats would prove 0 == 0. The spin axis is world
+	# Z: the right-hand TURN hold presents the shoe with its flip
+	# axis along Z (Shoe.hold_transform, yaw -90 deg), so Z spin
+	# is what the recorder's flip accounting will see.
 	for i: int in int(dur * hz) + 1:
 		var t: float = float(i) / hz
 		var pos: Vector3 = p0 + v0 * t + 0.5 * g * t * t
-		samples.append(ThrowMath.make_sample(now - dur + t, pos, Quaternion.IDENTITY))
+		var q := Quaternion(Vector3.BACK, 5.0 * t)
+		samples.append(ThrowMath.make_sample(now - dur + t, pos, q))
 	main.samples = samples
 	var expected_vel: Vector3 = ThrowMath.estimate_velocity_windowed(samples)
 	main._release_shoe(samples)
@@ -437,6 +548,10 @@ func _run() -> void:
 	check(main.throw_count == 1, "board counted exactly one throw (%d)" % main.throw_count)
 	check(main.status_label.text.contains("THROWS: 1"), "board shows THROWS: 1")
 	check(main.status_label.text.contains("TURN"), "board shows the TURN hold")
+	check(main.status_label.text.contains("FLIP:") and main.status_label.text.contains("TURN:")
+		and not is_nan(board_rev(main.status_label.text, "FLIP:"))
+		and not is_nan(board_rev(main.status_label.text, "TURN:")),
+		"board shows the FLIP / TURN rotation readout (pass 10)")
 
 	# Recorder file: a throw record with the full schema landed.
 	var f: FileAccess = FileAccess.open(rec_path, FileAccess.READ)
@@ -454,6 +569,22 @@ func _run() -> void:
 						"head_yaw_deg", "origin_yaw_deg", "line_ft"]:
 					check(td.has(key), "smoke throw record carries '%s'" % key)
 				check(String(td["hold"]) == "turn", "smoke throw record hold is turn")
+				# Pass 10: the board's FLIP / TURN readout must be
+				# THIS throw's recorder numbers - the same flip_rot /
+				# turn_rot values _settle_throw wrote to both.
+				if td.has("flip_rotations") and td.has("turn_rotations"):
+					var rec_flip: float = float(td["flip_rotations"])
+					var rec_turn: float = float(td["turn_rotations"])
+					var brd_flip: float = board_rev(main.status_label.text, "FLIP:")
+					var brd_turn: float = board_rev(main.status_label.text, "TURN:")
+					check(not is_nan(brd_flip) and absf(brd_flip - rec_flip) <= 0.011,
+						"board FLIP readout matches the throw record (board %.2f vs record %.4f rev)"
+						% [brd_flip, rec_flip])
+					check(not is_nan(brd_turn) and absf(brd_turn - rec_turn) <= 0.011,
+						"board TURN readout matches the throw record (board %.2f vs record %.4f rev)"
+						% [brd_turn, rec_turn])
+					check(absf(rec_flip) > 0.2,
+						"the scripted spin really rotated (record flip %.3f rev - the match above is not 0 == 0)" % rec_flip)
 				if td.has("line_ft"):
 					check(int(td["line_ft"]) == 40,
 						"smoke throw from the standard end records line_ft 40 (got %d)" % int(td["line_ft"]))

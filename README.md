@@ -9,7 +9,9 @@ on the toss; nothing else is in this build. Design skeleton:
 
 Pull the repo, open in Godot 4.7, press F5 (Quest 3 via Virtual
 Desktop/VDXR, same as the Duel). Stand or sit behind the white foul
-line. The board at your left lists every control.
+line. The scoreboard beyond the pit, left of the stake, lists
+every control and shows each throw's landing distance plus its
+flip and turn revolution counts.
 
 - **Grab:** reach to the shoe on the stand — the part under your hand
   glints (toe = FLIP hold, either side/shank = TURN hold) with a
@@ -57,5 +59,6 @@ stake with its rotation count and opening intact. It is the
 standing guard on Chris's rule that the physics must allow
 every technique, whatever it is.
 
-Rendered proofs land in `proofs/` (court_view.png, held_shoe.png).
+Rendered proofs land in `proofs/` (court_view.png, board_closeup.png,
+board_from_foul_line.png, held_shoe.png).
 Suites verify math and wiring — feel is judged in the headset only.
