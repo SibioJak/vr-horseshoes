@@ -48,6 +48,12 @@ const PHASE_DEG: float = 59.0
 # 80.9% of shoes inside 6 in, mean landing 3.7 in, self-play
 # 0.96 points per side per inning - a club player, back in
 # the 20-30% band.
+# Fix Pass 13 re-measure (2026-11-03): the box moved behind
+# the foul line, level with the player, 3.6 m across (see
+# box_root) - 220 throws at live pacing, NO spread change:
+# 23.6% ringers, 83.2% inside 6 in, mean landing 3.8 in,
+# self-play 1.06 points per side per inning. The line holds
+# from the new box.
 const ERR_SPEED_FRAC: float = 0.008 # fraction of release speed
 const ERR_AZIMUTH_DEG: float = 0.24 # horizontal direction, degrees
 const ERR_VY: float = 0.025 # added vertical velocity, m/s
@@ -78,21 +84,45 @@ var _released: bool = false
 var _idle_t: float = 0.0
 
 
-## Where the AI's releases originate when it pitches from an
-## end: a step in front of that end's 40 ft foul line, from the
-## pitcher's box on the OPPOSITE side of the pit from the
-## player's rack (Fix Pass 11 - v1 released from the player's
-## side, x 0.42, with the character rooted ~0.7 m from his
-## stance: "we're in each other's grill"). The release point
-## sits 2.7 m off the lane centre; place_at roots the body
-## 0.3 m further out, ~3 m from the player's stance.
+## Where the AI stands when it pitches from an end (Fix Pass
+## 13, Chris's layout call: SAME END, OPPOSITE SIDES, real
+## singles): his box sits BEHIND the foul line at the player's
+## own stance depth - the same 0.55 m behind the line the game
+## seats the player at (main's _move_player_to_end) - on the
+## side of the court opposite the player's rack, with 3.6 m of
+## lateral separation from the stance centre (pit width plus
+## both boxes). FP11 put him across the pit but UP BESIDE it -
+## rooted level with the pit clay, his release a step in FRONT
+## of the line - and he still read as standing on the player's
+## side of the game ("both players are still on same side").
+## The box root is the anchor now; the release point is
+## DERIVED from it (the hand tip at the release arm angle), so
+## the character can never drift away from his box again.
 ## end_sign: +1 = home end (throws toward -z), -1 = far end.
-const RELEASE_SIDE_X: float = 2.7
+const BOX_SIDE_X: float = 3.6
+const BOX_DEPTH: float = 0.55
 
 
-static func release_base_pos(end_sign: int, line_z: float) -> Vector3:
+static func box_root(end_sign: int, line_z: float) -> Vector3:
 	var travel: float = -float(end_sign)
-	return Vector3(-RELEASE_SIDE_X * float(end_sign), 1.22, line_z + 0.35 * travel)
+	return Vector3(-BOX_SIDE_X * float(end_sign), 0.0,
+		line_z - travel * BOX_DEPTH)
+
+
+## The swing's release point: the hand tip at the release arm
+## angle A_RELEASE, derived from the box root - shoulder
+## toward the lane at shoulder height, arm reaching
+## forward-down at that angle. At the release instant the
+## animated hand tip and this point coincide (the same
+## guarantee FP11's solve-the-root-from-the-release gave,
+## run the other way).
+static func release_base_pos(end_sign: int, line_z: float) -> Vector3:
+	var root: Vector3 = box_root(end_sign, line_z)
+	var travel: float = -float(end_sign)
+	return Vector3(
+		root.x + SHOULDER_LOCAL.x * float(end_sign),
+		SHOULDER_LOCAL.y - ARM_LEN * cos(A_RELEASE),
+		root.z + travel * ARM_LEN * sin(A_RELEASE))
 
 
 ## The un-sampled "good flip": ballistic velocity that crosses
@@ -218,18 +248,12 @@ func _ready() -> void:
 	_arm_pivot.add_child(hand)
 
 
-## Stand at an end's pitcher's box - across the pit from the
-## player (Fix Pass 11) - facing the target stake. Root
-## placement is solved from the release point: at the release
-## arm angle the hand tip lands on release_base_pos.
+## Stand in the end's box (Fix Pass 13: behind the foul line,
+## level with the player's stance depth, opposite side of the
+## court) facing the target stake down-lane.
 func place_at(end_sign: int, line_z: float) -> void:
 	var travel: float = -float(end_sign)
-	var rel_pos: Vector3 = release_base_pos(end_sign, line_z)
-	var shoulder_world := Vector3(
-		rel_pos.x - SHOULDER_LOCAL.x * float(end_sign),
-		0.0,
-		rel_pos.z - travel * ARM_LEN * sin(A_RELEASE))
-	position = Vector3(shoulder_world.x, 0.0, shoulder_world.z)
+	position = box_root(end_sign, line_z)
 	rotation = Vector3(0.0, 0.0 if travel < 0.0 else PI, 0.0)
 
 

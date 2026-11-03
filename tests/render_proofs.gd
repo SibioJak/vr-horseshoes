@@ -10,10 +10,12 @@ extends SceneTree
 ## ("left_hand"/"right_hand", "default" pose - the Duel's settled
 ## binding) and saves:
 ##   proofs/court_view.png - the full court from behind the home
-##     foul line (Fix Pass 11): both pits down the lane, the
-##     player's rack beside his stance near-right, the AI across
-##     the home pit, the dressed backyard around it all (Fix
-##     Pass 10 scenery), board beyond the far pit at left.
+##     foul line: both pits down the lane, the player's turned
+##     rack beside his stance near-right with its pair hanging
+##     face-on, the AI in his box across the home pit - behind
+##     the line, level with the player's stance (Fix Pass 13) -
+##     the dressed backyard around it all (Fix Pass 10 scenery),
+##     board beyond the far pit at left.
 ##   proofs/board_closeup.png - the board face-on: every line of the
 ##     status + controls text on the slab and legible.
 ##   proofs/board_from_foul_line.png - from the 40 ft foul line at
@@ -112,13 +114,13 @@ func _run() -> void:
 		var rep: Node3D = main.ctrl_rep[h]
 		check(rep.visible, "controller rep visible while tracked (%s)" % h)
 
-	# --- Proof A: the FULL court (Backyard Game v1; Fix Pass 11
+	# --- Proof A: the FULL court (Backyard Game v1; Fix Pass 13
 	# framing) ---
 	# Elevated behind the home foul line, over the player's
-	# shoulder: his rack beside the stance at near-right, the AI
-	# across the home pit at left, both pits down the lane - the
-	# v1 separation in one frame (the AI used to stand in the
-	# player's grill on his own side).
+	# shoulder: his turned rack beside the stance at near-right
+	# (pair hanging face-on), the AI across the home pit at
+	# left in his box - behind the line, level with the player,
+	# same end, opposite sides - both pits down the lane.
 	var cam_a := Camera3D.new()
 	cam_a.fov = 55.0
 	cam_a.position = Vector3(3.1, 3.3, 5.6)

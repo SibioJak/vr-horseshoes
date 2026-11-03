@@ -28,9 +28,9 @@ const FOUL_30_Z: float = -3.048 # 30 ft line: 9.144 m from the far stake
 const FOUL_Z: float = FOUL_40_Z
 const STANCE_HALF_WIDTH: float = 0.85
 const STANCE_HALF_DEPTH: float = 0.40
-const STAND_SIDE_X: float = 1.00 # rack slot 0: 1 m beside the stance centre (Fix Pass 11)
+const STAND_SIDE_X: float = 1.22 # rack slot 0 beside the stance centre (FP11: 1.0 m; Fix Pass 13: further out, 1.22 m)
 const STAND_SHOE_Y: float = 0.785
-const SLOT_STEP_X: float = 0.24 # pair slots along a rail stand
+const SLOT_STEP: float = 0.24 # pair slots along a rail stand (the rail runs down-lane since Fix Pass 13)
 const PLAYER_PAIR_COLOR := Color(0.92, 0.75, 0.16) # yellow (photo feed)
 const AI_PAIR_COLOR := Color(0.18, 0.36, 0.85) # blue (photo feed)
 const WIN_SCORE: int = 21
@@ -223,36 +223,60 @@ static func make_rack_tf(line_ft: int, p_target_far: bool, is_ai: bool) -> Trans
 	# Rack slot 0 (Fix Pass 11, Chris's field order): BESIDE the
 	# stance at the foul line's own z - NOT behind the player -
 	# facing him, so he reaches over and grabs a shoe without
-	# turning around. The FP3 pedestal rule (0.5 m behind the
-	# line, 0.75 m to the side) survived into v1 as slot 0 of a
-	# shared rack; in game flow the rack sat directly behind
-	# him and every grab meant a turn. Slot 0 now hangs 1.0 m
-	# to the side AT the line: outside the stance box
-	# (|x| <= 0.85) yet a natural reach-over. The shoe still
-	# HANGS on the rail by its toe bridge: plane near-vertical,
-	# bridge up (Backyard Game v1, per Chris's photo feed).
-	var yaw: float = -30.0 if p_target_far else 150.0
+	# turning around. (The FP3 pedestal rule - 0.5 m behind the
+	# line, 0.75 m to the side - survived into v1 as slot 0 of
+	# a shared rack; in game flow the rack sat directly behind
+	# him and every grab meant a turn.)
+	#
+	# Fix Pass 13 (Chris, from the headset: "the horseshoe
+	# holders need to be turned 90-degrees and moved further
+	# from line"): the rack is TURNED and moved OUT. FP11 hung
+	# the pair along a rail running across the court at 1.0 m,
+	# faces angled down-lane; standing at his stance beside
+	# that rack, Chris saw the shoes' edges and backs, one
+	# behind the other. Now the rail runs DOWN-LANE beside the
+	# stance and the pair steps down-lane along it (see
+	# rack_slot_tf), so the hanging shoes present FACE-ON to
+	# the player - the way the station in his photo feed faces
+	# its viewer - and slot 0 sits further out at 1.22 m from
+	# the stance centre, still a plain reach-over (outside the
+	# stance box, |x| <= 0.85, no turn, no walk). The shoe
+	# still HANGS on the rail by its toe bridge: plane
+	# near-vertical, bridge up.
+	#
+	# The yaw is solved per rack (owner's side x target end)
+	# so the face normal (the hang basis applied to +Y) points
+	# across the court at the stance with FP11's slight
+	# down-lane slant kept: the old normal's horizontal parts
+	# were 0.847 across / 0.489 down-lane, so sin(yaw) takes
+	# 0.866 x side and cos(yaw) takes -0.5 x travel - the same
+	# tipped hang, turned to face him.
+	var side: float = rack_side_sign(p_target_far, is_ai)
+	var travel: float = -1.0 if p_target_far else 1.0
+	var yaw: float = atan2(0.8660254 * side, -0.5 * travel)
 	return Transform3D(
-		Basis.from_euler(Vector3(deg_to_rad(-78.0), deg_to_rad(yaw), 0.0)),
-		Vector3(rack_side_sign(p_target_far, is_ai) * STAND_SIDE_X,
+		Basis.from_euler(Vector3(deg_to_rad(-78.0), yaw, 0.0)),
+		Vector3(side * STAND_SIDE_X,
 			STAND_SHOE_Y, line_z_for_ft_at(line_ft, p_target_far)))
 
 
 ## World transform of one slot on one owner's rack. Each rack
-## holds ONLY its owner's pair: slot 0 nearest the lane at
-## STAND_SIDE_X, slot 1 one step further OUT (away from the
-## lane), so both shoes hang clear of the stance box and the
-## pit edge. (Fix Pass 11: v1 ran slots 0-3 along ONE shared
-## rack - both pairs on a single stand. Chris: "all the shoes
-## spawn on one rack.")
+## holds ONLY its owner's pair (Fix Pass 11: v1 ran slots 0-3
+## along ONE shared rack - both pairs on a single stand.
+## Chris: "all the shoes spawn on one rack."). Slot 0 hangs
+## at STAND_SIDE_X beside the stance; since Fix Pass 13 slot
+## 1 steps one slot DOWN-LANE from it along the turned rail
+## (toward the target stake), so both shoes hang clear of
+## the stance box and the pit edge.
 func rack_slot_tf(p_target_far: bool, line_ft: int, is_ai: bool, idx: int) -> Transform3D:
 	var base: Transform3D
 	if is_ai:
 		base = (ai_stand_tfs if p_target_far else ai_stand_tfs_far)[line_ft]
 	else:
 		base = (stand_tfs if p_target_far else stand_tfs_far)[line_ft]
-	var step: float = float(idx) * SLOT_STEP_X * rack_side_sign(p_target_far, is_ai)
-	return Transform3D(base.basis, base.origin + Vector3(step, 0.0, 0.0))
+	var step_dir: float = -1.0 if p_target_far else 1.0
+	var step: float = float(idx) * SLOT_STEP * step_dir
+	return Transform3D(base.basis, base.origin + Vector3(0.0, 0.0, step))
 
 
 func _is_ai_shoe(shoe_node: Shoe) -> bool:
@@ -361,22 +385,28 @@ func _nearest_stand_line() -> int:
 
 ## One owner's rack (Backyard Game v1, Chris's photo feed):
 ## two posts, a horizontal rail the pair hangs on by their
-## openings, and a low shelf board. Slot 0 sits at base_pos;
-## the rail runs OUTWARD (away from the lane) through slot 1.
+## openings, and a low shelf board. Slot 0 sits at base_pos.
 ## (Fix Pass 11: v1 built ONE four-slot stand per stock point
 ## holding both pairs - "all the shoes spawn on one rack.")
-func _build_rail_stand(base_pos: Vector3, sx: float) -> void:
+## Fix Pass 13: the stand is built TURNED with the slots -
+## the posts flank the pair DOWN-LANE and the rail runs
+## down-lane through both slots, so the hanging pair reads
+## as one station facing its owner. step_dir: the down-lane
+## direction at this end (-1 toward the far stake, +1 toward
+## the home stake); sx: the rack's side sign (the shelf juts
+## a touch toward the lane, the station's front).
+func _build_rail_stand(base_pos: Vector3, sx: float, step_dir: float) -> void:
 	var post_mat := _mat(Color(0.40, 0.29, 0.17))
 	var rail_mat := _mat(Color(0.48, 0.35, 0.21))
-	var x0: float = base_pos.x - 0.12 * sx
-	var x1: float = base_pos.x + (SLOT_STEP_X + 0.12) * sx
-	_box(self, Vector3(x0, 0.44, base_pos.z), Vector3(0.07, 0.88, 0.07), post_mat)
-	_box(self, Vector3(x1, 0.44, base_pos.z), Vector3(0.07, 0.88, 0.07), post_mat)
-	var mid_x: float = (x0 + x1) * 0.5
-	_box(self, Vector3(mid_x, 0.885, base_pos.z),
-		Vector3(absf(x1 - x0) + 0.07, 0.045, 0.045), rail_mat)
-	_box(self, Vector3(mid_x, 0.30, base_pos.z + 0.02),
-		Vector3(absf(x1 - x0) + 0.07, 0.03, 0.30), post_mat)
+	var z0: float = base_pos.z - 0.12 * step_dir
+	var z1: float = base_pos.z + (SLOT_STEP + 0.12) * step_dir
+	_box(self, Vector3(base_pos.x, 0.44, z0), Vector3(0.07, 0.88, 0.07), post_mat)
+	_box(self, Vector3(base_pos.x, 0.44, z1), Vector3(0.07, 0.88, 0.07), post_mat)
+	var mid_z: float = (z0 + z1) * 0.5
+	_box(self, Vector3(base_pos.x, 0.885, mid_z),
+		Vector3(0.045, 0.045, absf(z1 - z0) + 0.07), rail_mat)
+	_box(self, Vector3(base_pos.x - 0.05 * sx, 0.30, mid_z),
+		Vector3(0.30, 0.03, absf(z1 - z0) + 0.07), post_mat)
 
 
 func _build_world() -> void:
@@ -434,13 +464,15 @@ func _build_world() -> void:
 	# ends), placed by the Fix Pass 11 rule: beside its owner's
 	# stance at the line's own z, clear of the stance box - the
 	# player's pair on his rack, the AI's pair on its own rack
-	# across the pit.
+	# across the pit. Fix Pass 13 turns each stand with its
+	# slots (rail down-lane, shoes face-on to the stance).
 	for tfar: bool in [true, false]:
 		for stand_line: int in [40, 30]:
+			var step_dir: float = -1.0 if tfar else 1.0
 			var ptf: Transform3D = (stand_tfs if tfar else stand_tfs_far)[stand_line]
-			_build_rail_stand(ptf.origin, rack_side_sign(tfar, false))
+			_build_rail_stand(ptf.origin, rack_side_sign(tfar, false), step_dir)
 			var atf: Transform3D = (ai_stand_tfs if tfar else ai_stand_tfs_far)[stand_line]
-			_build_rail_stand(atf.origin, rack_side_sign(tfar, true))
+			_build_rail_stand(atf.origin, rack_side_sign(tfar, true), step_dir)
 
 	_build_scenery()
 
