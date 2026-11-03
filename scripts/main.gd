@@ -90,6 +90,10 @@ var sample_hand: String = ""
 # section) - the flag exists so the bench can run the legacy grid
 # read as the negative control.
 var substep_release_enabled: bool = true
+# Fix Pass 16: the finger-drag term (see ThrowMath.govern_spin)
+# meters the release spin on the style axis toward the hold's
+# regulation total; the flag is the bench's negative control.
+var spin_governor_enabled: bool = true
 var _grip_hist: Array = [] # recent {"t", "g"} readings for the latched hand
 var _prev_hand_pos: Dictionary = {}
 var _prev_hand_t: Dictionary = {}
@@ -1326,6 +1330,16 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 	var zone_was: String = held_zone
 	var hold_was: String = held_hold
 	var slide_was: float = slide_offset
+	# Fix Pass 16: the finger-drag term. The estimator's spin is
+	# kept verbatim for the record's estimator evidence; what
+	# flies is the governed spin (style axis pulled toward the
+	# hold's regulation total - see ThrowMath.govern_spin).
+	# Player path only: the AI's release is computed exact and
+	# never passes through here.
+	var est_ang: Vector3 = ang
+	var spin_ev: Dictionary = ThrowMath.govern_spin(
+		ang, release_tf, vel, hold_was, spin_governor_enabled)
+	ang = spin_ev["ang"]
 	held_hand = ""
 	sample_hand = ""
 	shoe.clear_highlights()
@@ -1350,6 +1364,13 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 			"release_pos": release_tf.origin,
 			"release_quat": release_tf.basis.get_rotation_quaternion(),
 			"velocity": vel, "angular_velocity": ang,
+			# Fix Pass 16 evidence: the estimator's raw spin and
+			# the drag term's account of itself (signed totals
+			# about the style axis, in revolutions).
+			"estimator_angular_velocity": est_ang,
+			"spin_hand_total": float(spin_ev["hand_total"]),
+			"spin_applied_total": float(spin_ev["applied_total"]),
+			"spin_nominal": float(spin_ev["nominal"]),
 			# Fix Pass 14 evidence for the record: which read
 			# produced this release, where inside its poll step
 			# the let-go instant fell, and the grip readings
@@ -1502,6 +1523,9 @@ func _settle_throw() -> void:
 		"release_timing": String(release_cache.get("release_timing", "grid")),
 		"substep_offset_ms": float(release_cache.get("substep_offset_ms", 0.0)),
 		"grip_bracket": release_cache.get("grip_bracket", []),
+		"spin_hand_total": float(release_cache.get("spin_hand_total", 0.0)),
+		"spin_applied_total": float(release_cache.get("spin_applied_total", 0.0)),
+		"spin_nominal": float(release_cache.get("spin_nominal", 0.0)),
 		"first_contact_pos": ThrowRecorder.vec3_arr(first_contact_pos) if has_contact else [],
 		"settle_pos": ThrowRecorder.vec3_arr(shoe.global_position),
 		"settle_quat": ThrowRecorder.quat_arr(shoe.global_transform.basis.get_rotation_quaternion()),

@@ -528,6 +528,107 @@ static func evaluate_release_at(samples: Array, release_basis: Basis, t_star: fl
 	}
 
 
+# ============================================================
+# Fix Pass 16: the finger-drag term (spin governor).
+#
+# The disease (measured on Chris's throws-14): his shoes leave
+# with total rotation SD 1.17 rev - scatter wider than a full
+# turn, so the arrival phase is a lottery even on an aimed shoe.
+# The diagnosis Chris accepted: a real pitch's spin is the
+# wrist's spin MINUS a consistent finger-drag brake as the shoe
+# slides off the hand. A VR controller has no edge, no slide,
+# no drag - the build was missing a physical term, and the shoe
+# inherited raw wrist angular velocity, flicks and all.
+#
+# The cure restores the term, on the STYLE AXIS ONLY (the flip
+# axis for toe holds, world Y for shank holds - the same axes
+# the flight accounting integrates). It works in TOTAL
+# REVOLUTIONS over the predicted flight: the hand's total is
+# pulled toward the hold's regulation nominal, keeping a
+# residual share of the hand's own deviation, and the result is
+# converted back to an angular velocity over the same flight
+# time. Direction, speed, timing, release position and
+# orientation, and every off-axis spin component stay the
+# hand's. This is a missing force restored, not aim assist:
+# with the term disabled the release spin is the input,
+# untouched.
+# ============================================================
+
+## Share of the hand's deviation from nominal that survives the
+## drag. 0 would be a canned spin (the hand's rate erased);
+## 1 would be no drag at all. 0.30 keeps the pitcher's own
+## variation legible while the brake does its work.
+const SPIN_DRAG_RESIDUAL: float = 0.30
+
+## The game's gravity (project.godot does not override
+## physics/3d/default_gravity, so the engine default rules).
+const SPIN_GRAVITY: float = 9.8
+
+const SPIN_NOMINAL_FLIP: float = 1.00
+const SPIN_NOMINAL_TURNS: Array[float] = [0.75, 1.25, 1.75]
+
+
+## Predicted time of flight: from the release state, the time
+## until the shoe returns to ground level (y = 0). Solves
+## y0 + vy*t - g/2*t^2 = 0 for the positive root; 0 when the
+## state is degenerate (no upward solution).
+static func predicted_flight_time(release_pos: Vector3, vel: Vector3, gravity: float = SPIN_GRAVITY) -> float:
+	if gravity <= 0.0:
+		return 0.0
+	var disc: float = vel.y * vel.y + 2.0 * gravity * release_pos.y
+	if disc < 0.0:
+		return 0.0
+	return maxf(0.0, (vel.y + sqrt(disc)) / gravity)
+
+
+## The finger-drag term itself. Takes the FP14 read's angular
+## velocity (world axes), the release transform (its basis.x is
+## the flip axis; its origin.y anchors the flight prediction),
+## the release velocity and the hold ("flip" / "turn"). Returns
+## {"ang", "hand_total", "applied_total", "nominal",
+## "flight_time", "governed"}: the angular velocity to apply
+## (the input, untouched, when disabled, when the hold is not a
+## pitched style, or when no flight can be predicted), and the
+## evidence the recorder keeps. Totals are SIGNED revolutions
+## about the style axis in the recorder's own convention (flip:
+## the release basis.x component; turn: the world Y component).
+static func govern_spin(ang: Vector3, release_tf: Transform3D, vel: Vector3, hold: String, enabled: bool) -> Dictionary:
+	var out: Dictionary = {
+		"ang": ang, "hand_total": 0.0, "applied_total": 0.0,
+		"nominal": 0.0, "flight_time": 0.0, "governed": false,
+	}
+	var is_flip: bool = hold == "flip"
+	if not is_flip and hold != "turn":
+		return out
+	var tof: float = predicted_flight_time(release_tf.origin, vel)
+	out["flight_time"] = tof
+	if tof < 0.05:
+		return out
+	var axis: Vector3 = release_tf.basis.x.normalized() if is_flip else Vector3.UP
+	var rate: float = ang.dot(axis)
+	var hand_total: float = rate * tof / TAU
+	out["hand_total"] = hand_total
+	out["applied_total"] = hand_total
+	if not enabled:
+		return out
+	var nominal: float
+	if is_flip:
+		nominal = SPIN_NOMINAL_FLIP if hand_total >= 0.0 else -SPIN_NOMINAL_FLIP
+	else:
+		var sgn: float = 1.0 if hand_total >= 0.0 else -1.0
+		nominal = sgn * SPIN_NOMINAL_TURNS[0]
+		for cand: float in SPIN_NOMINAL_TURNS:
+			if absf(sgn * cand - hand_total) < absf(nominal - hand_total):
+				nominal = sgn * cand
+	out["nominal"] = nominal
+	var applied_total: float = nominal + (hand_total - nominal) * SPIN_DRAG_RESIDUAL
+	out["applied_total"] = applied_total
+	var applied_rate: float = applied_total * TAU / tof
+	out["ang"] = ang + axis * (applied_rate - rate)
+	out["governed"] = true
+	return out
+
+
 ## Ringer test, straight-edge approximated: with the shoe settled, the
 ## stake must sit inside the shoe's inner opening - between the inner
 ## toe edge and the heel tips, within the inner width (minus stake
