@@ -67,6 +67,7 @@ settle position, landing distance in inches, and ringer flags.
 
 ```
 ~/workspace/tools/godot/Godot_v4.7-stable_linux.x86_64 --headless --path . --script tests/run_tests.gd
+~/workspace/tools/godot/Godot_v4.7-stable_linux.x86_64 --headless --path . --script tests/substep_bench.gd
 ~/workspace/tools/godot/Godot_v4.7-stable_linux.x86_64 --headless --path . --script tests/smoke_main.gd
 ~/workspace/tools/godot/Godot_v4.7-stable_linux.x86_64 --headless --path . --script tests/technique_audit.gd
 ~/workspace/tools/godot/Godot_v4.7-stable_linux.x86_64 --headless --path . --script tests/ai_measure.gd
@@ -78,7 +79,16 @@ technique — flip, 3/4 / 1-1/4 / 1-3/4 turns, reverse turn —
 through the production release and proves it arrives at the
 stake with its rotation count and opening intact. It is the
 standing guard on the rule that the physics must allow every
-technique, whatever it is. The smoke suite plays a full game to
+technique, whatever it is. The sub-step bench (Fix Pass 14)
+proves the release is read at the grip's true let-go instant,
+interpolated between polls, not at the nearest tick: synthetic
+swings with known crossing instants (grid-placement error
+26–31 deg for the legacy peak read, ≤ 0.6 deg for the sub-step
+read), a negative control with the path disabled, a continuity
+probe over Chris's recorded throws, and the production path
+end to end. Throw records carry the evidence per throw:
+`release_timing` ("substep" / "grid" / "ai_exact"),
+`substep_offset_ms`, and the bracketing grip readings. The smoke suite plays a full game to
 21 headlessly (scripted player throws + AI turns, end swaps by
 button and by walking). `ai_measure.gd` is the AI tuning harness
 that produced the line quoted above.

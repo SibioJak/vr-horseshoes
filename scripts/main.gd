@@ -85,6 +85,12 @@ var candidate_zone: String = ""
 
 var samples: Array = [] # Dictionary samples for the held hand
 var sample_hand: String = ""
+# Fix Pass 14: the release is read at the grip's true let-go
+# instant, interpolated between polls (see ThrowMath's sub-step
+# section) - the flag exists so the bench can run the legacy grid
+# read as the negative control.
+var substep_release_enabled: bool = true
+var _grip_hist: Array = [] # recent {"t", "g"} readings for the latched hand
 var _prev_hand_pos: Dictionary = {}
 var _prev_hand_t: Dictionary = {}
 var hand_speed: Dictionary = {"L": 0.0, "R": 0.0}
@@ -1180,6 +1186,11 @@ func _process_grab() -> void:
 		in_grip = _grip_value(held_hand)
 		in_speed = float(hand_speed[held_hand])
 		in_trigger = _trigger_value(held_hand)
+		# Fix Pass 14: keep the grip stream (same clock as the
+		# hand samples) so a release can be located BETWEEN polls.
+		_grip_hist.append({"t": float(Time.get_ticks_msec()) / 1000.0, "g": in_grip})
+		while _grip_hist.size() > 6:
+			_grip_hist.pop_front()
 	elif candidate_hand != "":
 		in_hand = candidate_hand
 		in_zone = candidate_zone
@@ -1219,6 +1230,7 @@ func _do_latch(hand: String, zone: String) -> void:
 	shoe.global_transform = _hand_tf(hand) * rel_tf
 	state = "HELD"
 	samples.clear()
+	_grip_hist.clear()
 	sample_hand = hand
 	shoe.set_highlight(zone, true)
 	recorder.log_record({
@@ -1248,23 +1260,60 @@ func _do_slide_end() -> void:
 
 
 func _do_release() -> void:
-	_release_shoe(samples)
+	# Fix Pass 14: locate the true let-go instant between the last
+	# two grip polls - the previous reading above the let-go
+	# threshold, this one at or below it - and hand it to the
+	# release. Degenerate history (a grab released inside a single
+	# poll gap, the flag off) leaves t_star negative and the
+	# release falls back to the legacy grid read.
+	var t_star: float = -1.0
+	var timing: Dictionary = {}
+	if substep_release_enabled and _grip_hist.size() >= 2:
+		var prev: Dictionary = _grip_hist[_grip_hist.size() - 2]
+		var cur: Dictionary = _grip_hist[_grip_hist.size() - 1]
+		var tp: float = float(prev["t"])
+		var tc: float = float(cur["t"])
+		var gp: float = float(prev["g"])
+		var gc: float = float(cur["g"])
+		if gp > GrabState.GRIP_OFF and gc <= GrabState.GRIP_OFF and tc > tp:
+			t_star = ThrowMath.release_crossing_time(tp, gp, tc, gc, GrabState.GRIP_OFF)
+			timing = {
+				"offset_ms": (t_star - tp) * 1000.0,
+				"grip_bracket": [gp, gc],
+			}
+	_release_shoe(samples, t_star, timing)
 
 
 ## The throw itself. Release position/orientation are the shoe's
 ## CURRENT transform (cached by the follow code at the release event);
 ## velocity/angular velocity come from the windowed fit over the
 ## sample buffer - never a single-frame delta, never recomputed later.
-func _release_shoe(release_samples: Array) -> void:
-	# Origin-relative (Fix Pass 2): if the player is walking while he
-	# releases, the origin's share of the hand's world motion is
-	# removed first - the shoe gets the ARM's velocity, not the
-	# thumbstick's. Standing still this is the pass-1 estimate.
-	var vel: Vector3 = ThrowMath.estimate_velocity_origin_relative(
-		release_samples, origin.global_transform.basis)
-	var ang: Vector3 = ThrowMath.estimate_angular_velocity_windowed(release_samples)
+## Fix Pass 14: when t_star names the interpolated let-go instant
+## and the sample buffer actually covers it, position, orientation,
+## velocity and spin are ALL read at t_star from the fitted motion;
+## otherwise the legacy grid read runs unchanged (direct callers -
+## the suites, the technique audit - take that path).
+func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Dictionary = {}) -> void:
+	var use_sub: bool = false
+	if substep_release_enabled and t_star >= 0.0 and release_samples.size() >= 2:
+		var t_first: float = float(release_samples[0]["t"])
+		var last_smp: Dictionary = release_samples[release_samples.size() - 1]
+		var t_last: float = float(last_smp["t"])
+		# Coverage: t_star must sit inside the recorded motion
+		# (a hair past the last sample is fine - the fit window
+		# itself reads 30 ms past its anchor by design).
+		if t_star >= t_first - 0.002 and t_star <= t_last + 0.020:
+			use_sub = true
+	var evaluated: Dictionary = ThrowMath.evaluate_release_at(
+		release_samples, origin.global_transform.basis, t_star, use_sub)
+	var vel: Vector3 = evaluated["vel"]
+	var ang: Vector3 = evaluated["ang"]
 	var speed: float = vel.length()
 	var release_tf: Transform3D = shoe.global_transform
+	if use_sub:
+		var hand_pos: Vector3 = ThrowMath.position_at_time(release_samples, t_star)
+		var hand_quat: Quaternion = ThrowMath.orientation_at_time(release_samples, t_star)
+		release_tf = Transform3D(Basis(hand_quat), hand_pos) * rel_tf
 	var hand_was: String = held_hand
 	var zone_was: String = held_zone
 	var hold_was: String = held_hold
@@ -1288,6 +1337,13 @@ func _release_shoe(release_samples: Array) -> void:
 			"release_pos": release_tf.origin,
 			"release_quat": release_tf.basis.get_rotation_quaternion(),
 			"velocity": vel, "angular_velocity": ang,
+			# Fix Pass 14 evidence for the record: which read
+			# produced this release, where inside its poll step
+			# the let-go instant fell, and the grip readings
+			# that bracket it.
+			"release_timing": "substep" if use_sub else "grid",
+			"substep_offset_ms": float(timing.get("offset_ms", 0.0)) if use_sub else 0.0,
+			"grip_bracket": timing.get("grip_bracket", []) if use_sub else [],
 		}
 		flip_rot = 0.0
 		turn_rot = 0.0
@@ -1427,6 +1483,9 @@ func _settle_throw() -> void:
 		"release_quat": ThrowRecorder.quat_arr(rq),
 		"release_velocity": ThrowRecorder.vec3_arr(vel),
 		"release_angular_velocity": ThrowRecorder.vec3_arr(ang),
+		"release_timing": String(release_cache.get("release_timing", "grid")),
+		"substep_offset_ms": float(release_cache.get("substep_offset_ms", 0.0)),
+		"grip_bracket": release_cache.get("grip_bracket", []),
 		"first_contact_pos": ThrowRecorder.vec3_arr(first_contact_pos) if has_contact else [],
 		"settle_pos": ThrowRecorder.vec3_arr(shoe.global_position),
 		"settle_quat": ThrowRecorder.quat_arr(shoe.global_transform.basis.get_rotation_quaternion()),
@@ -1812,6 +1871,11 @@ func _settle_ai_shoe(s: Shoe) -> void:
 			(rel["basis"] as Basis).get_rotation_quaternion()),
 		"release_velocity": ThrowRecorder.vec3_arr(rel["vel"]),
 		"release_angular_velocity": ThrowRecorder.vec3_arr(rel["ang"]),
+		# The AI's release is computed, exact by construction -
+		# no grip stream exists to interpolate.
+		"release_timing": "ai_exact",
+		"substep_offset_ms": 0.0,
+		"grip_bracket": [],
 		"first_contact_pos": ThrowRecorder.vec3_arr(fl["first_contact_pos"]) if bool(fl["has_contact"]) else [],
 		"settle_pos": ThrowRecorder.vec3_arr(s.global_position),
 		"settle_quat": ThrowRecorder.quat_arr(s.global_transform.basis.get_rotation_quaternion()),

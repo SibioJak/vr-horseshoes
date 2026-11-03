@@ -143,15 +143,27 @@ static func estimate_velocity_windowed(samples: Array, window_sec: float = 0.150
 		var pa: Vector3 = a["pos"]
 		var pb: Vector3 = b["pos"]
 		return (pb - pa) / dt
-	# Normal equations for p(t) = c0 + c1*u + c2*u^2 with u = t - t_eval
-	# (centring keeps the sums conditioned); velocity = c1 at u = 0.
+	var coeffs: Dictionary = _quadratic_fit(sub, t_eval)
+	if coeffs.is_empty():
+		return Vector3.ZERO
+	var cx: Array = coeffs["cx"]
+	var cy: Array = coeffs["cy"]
+	var cz: Array = coeffs["cz"]
+	return Vector3(float(cx[1]), float(cy[1]), float(cz[1]))
+
+
+## The windowed quadratic fit itself, shared by every evaluation:
+## normal equations for p(t) = c0 + c1*u + c2*u^2 with u = t - t_ref
+## (centring keeps the sums conditioned), solved per axis. Returns
+## {"cx": [c0, c1, c2], "cy": [...], "cz": [...]} or {} if singular.
+static func _quadratic_fit(sub: Array, t_ref: float) -> Dictionary:
 	var s: Array[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
 	var tx: Array[float] = [0.0, 0.0, 0.0]
 	var ty: Array[float] = [0.0, 0.0, 0.0]
 	var tz: Array[float] = [0.0, 0.0, 0.0]
 	for raw: Variant in sub:
 		var smp: Dictionary = raw
-		var u: float = float(smp["t"]) - t_eval
+		var u: float = float(smp["t"]) - t_ref
 		var p: Vector3 = smp["pos"]
 		var pw: Array[float] = [1.0, u, u * u, u * u * u, u * u * u * u]
 		for k: int in 5:
@@ -169,8 +181,8 @@ static func estimate_velocity_windowed(samples: Array, window_sec: float = 0.150
 	var cy: Array = _solve3(m, [ty[0], ty[1], ty[2]])
 	var cz: Array = _solve3(m, [tz[0], tz[1], tz[2]])
 	if cx.is_empty() or cy.is_empty() or cz.is_empty():
-		return Vector3.ZERO
-	return Vector3(float(cx[1]), float(cy[1]), float(cz[1]))
+		return {}
+	return {"cx": cx, "cy": cy, "cz": cz}
 
 
 ## Small Gaussian elimination for the 3x3 fit system; [] if singular.
@@ -217,6 +229,14 @@ static func _solve3(m: Array, v: Array) -> Array:
 static func estimate_velocity_origin_relative(samples: Array, release_basis: Basis) -> Vector3:
 	if samples.is_empty():
 		return Vector3.ZERO
+	var rel: Array = _origin_relative_samples(samples, release_basis)
+	var v_frame: Vector3 = estimate_velocity_windowed(rel)
+	return release_basis * v_frame
+
+
+## The per-sample origin removal shared by both origin-relative
+## evaluations (see estimate_velocity_origin_relative for why).
+static func _origin_relative_samples(samples: Array, release_basis: Basis) -> Array:
 	var inv: Basis = release_basis.inverse()
 	var rel: Array = []
 	for raw: Variant in samples:
@@ -224,8 +244,7 @@ static func estimate_velocity_origin_relative(samples: Array, release_basis: Bas
 		var p: Vector3 = s["pos"]
 		var o: Vector3 = s.get("opos", Vector3.ZERO)
 		rel.append(make_sample(float(s["t"]), inv * (p - o), s["quat"]))
-	var v_frame: Vector3 = estimate_velocity_windowed(rel)
-	return release_basis * v_frame
+	return rel
 
 
 ## The naive last-two-frames estimate. Exists ONLY as the negative
@@ -276,6 +295,237 @@ static func estimate_angular_velocity_windowed(samples: Array, window_sec: float
 	if total_dt < 0.0001:
 		return Vector3.ZERO
 	return sum / total_dt
+
+
+# ============================================================
+# Fix Pass 14: sub-step release evaluation.
+#
+# The disease (measured on Chris's throws-12, see
+# analysis/quantization-2026-11-03.py): the release decision lands
+# on the sampling grid, but the hand's direction sweeps ~430 deg/s
+# on average - and ~800 deg/s locally - through the release zone,
+# so one grid step of timing slop moves the computed launch
+# elevation by a median 13.4 degrees. The fit itself is faithful;
+# the READ INSTANT is what the grid corrupts.
+#
+# The cure is measurement, not assistance: find the true instant
+# t* at which the grip analog crossed the let-go threshold
+# (interpolated between the bracketing grip readings) and evaluate
+# the SAME windowed quadratic fit at t* - velocity, angular
+# velocity and position all read at t* from the same fitted
+# motion. Nothing about the fit, the flight or the physics
+# changes; 1:1 and no-assist remain absolute.
+# ============================================================
+
+## The interpolated instant at which a falling grip value crossed
+## the let-go threshold, given the bracketing readings (t_prev,
+## g_prev) -> (t_now, g_now). Degenerate brackets (no crossing,
+## no time between readings) return t_now - the grid answer - so
+## a caller can always use the result.
+static func release_crossing_time(t_prev: float, g_prev: float, t_now: float, g_now: float, threshold: float) -> float:
+	if t_now <= t_prev or g_prev <= threshold or g_now > threshold:
+		return t_now
+	var drop: float = g_prev - g_now
+	if drop < 0.000001:
+		return t_now
+	var frac: float = clampf((g_prev - threshold) / drop, 0.0, 1.0)
+	return t_prev + frac * (t_now - t_prev)
+
+
+## The window for an arbitrary-instant read: peak-anchored exactly
+## like window_subset, but widened to cover t_eval so the read is
+## always an interpolation of the recorded motion, never an
+## extrapolation past the buffer's ends.
+static func eval_window_subset(samples: Array, t_eval: float, window_sec: float = 0.150) -> Array:
+	var out: Array = []
+	if samples.size() < 2:
+		return out
+	var pk: int = peak_speed_index(samples)
+	var t_peak: float = float(samples[pk]["t"])
+	var t_lo: float = minf(t_peak - window_sec, t_eval)
+	var t_hi: float = maxf(t_peak + 0.030, t_eval)
+	for raw: Variant in samples:
+		var s: Dictionary = raw
+		var t: float = float(s["t"])
+		if t >= t_lo and t <= t_hi:
+			out.append(s)
+	if out.size() < 2:
+		out = window_subset(samples, window_sec)
+	return out
+
+
+## The two samples bracketing t_eval in the buffer (clamped to the
+## ends), as [a, b]; empty when the buffer is empty.
+static func _bracketing_pair(samples: Array, t_eval: float) -> Array:
+	if samples.is_empty():
+		return []
+	var prev: Dictionary = samples[0]
+	for raw: Variant in samples:
+		var s: Dictionary = raw
+		var t: float = float(s["t"])
+		if t >= t_eval:
+			return [prev, s]
+		prev = s
+	return [prev, prev]
+
+
+## Release velocity read at an arbitrary instant: the same
+## windowed quadratic fit as estimate_velocity_windowed (same
+## window family, same peak centring), with the derivative
+## evaluated at t_eval instead of at the peak sample.
+static func velocity_at_time(samples: Array, t_eval: float, window_sec: float = 0.150) -> Vector3:
+	var sub: Array = eval_window_subset(samples, t_eval, window_sec)
+	if sub.size() < 2:
+		return Vector3.ZERO
+	if sub.size() < 3:
+		# Degenerate window: slope of the samples bracketing t_eval.
+		var pair: Array = _bracketing_pair(samples, t_eval)
+		if pair.size() < 2:
+			return Vector3.ZERO
+		var a: Dictionary = pair[0]
+		var b: Dictionary = pair[1]
+		var dt: float = float(b["t"]) - float(a["t"])
+		if dt < 0.0001:
+			return Vector3.ZERO
+		var pa: Vector3 = a["pos"]
+		var pb: Vector3 = b["pos"]
+		return (pb - pa) / dt
+	var pk: int = peak_speed_index(samples)
+	var t_ref: float = float(samples[pk]["t"])
+	var coeffs: Dictionary = _quadratic_fit(sub, t_ref)
+	if coeffs.is_empty():
+		return Vector3.ZERO
+	var cx: Array = coeffs["cx"]
+	var cy: Array = coeffs["cy"]
+	var cz: Array = coeffs["cz"]
+	var u: float = t_eval - t_ref
+	return Vector3(
+		float(cx[1]) + 2.0 * float(cx[2]) * u,
+		float(cy[1]) + 2.0 * float(cy[2]) * u,
+		float(cz[1]) + 2.0 * float(cz[2]) * u)
+
+
+## Hand position read at an arbitrary instant from the same fit.
+static func position_at_time(samples: Array, t_eval: float, window_sec: float = 0.150) -> Vector3:
+	var sub: Array = eval_window_subset(samples, t_eval, window_sec)
+	if sub.is_empty():
+		return Vector3.ZERO
+	if sub.size() < 3:
+		var pair: Array = _bracketing_pair(samples, t_eval)
+		if pair.size() < 2:
+			var only: Dictionary = sub[0]
+			var op: Vector3 = only["pos"]
+			return op
+		var a: Dictionary = pair[0]
+		var b: Dictionary = pair[1]
+		var dt: float = float(b["t"]) - float(a["t"])
+		var pa: Vector3 = a["pos"]
+		var pb: Vector3 = b["pos"]
+		if dt < 0.0001:
+			return pa
+		var f: float = clampf((t_eval - float(a["t"])) / dt, 0.0, 1.0)
+		return pa.lerp(pb, f)
+	var pk: int = peak_speed_index(samples)
+	var t_ref: float = float(samples[pk]["t"])
+	var coeffs: Dictionary = _quadratic_fit(sub, t_ref)
+	if coeffs.is_empty():
+		var last: Dictionary = sub[sub.size() - 1]
+		var lp: Vector3 = last["pos"]
+		return lp
+	var cx: Array = coeffs["cx"]
+	var cy: Array = coeffs["cy"]
+	var cz: Array = coeffs["cz"]
+	var u: float = t_eval - t_ref
+	return Vector3(
+		float(cx[0]) + float(cx[1]) * u + float(cx[2]) * u * u,
+		float(cy[0]) + float(cy[1]) * u + float(cy[2]) * u * u,
+		float(cz[0]) + float(cz[1]) * u + float(cz[2]) * u * u)
+
+
+## Origin-relative release velocity read at an arbitrary instant
+## (Fix Pass 2's removal, Fix Pass 14's read point).
+static func velocity_origin_relative_at_time(samples: Array, release_basis: Basis, t_eval: float, window_sec: float = 0.150) -> Vector3:
+	if samples.is_empty():
+		return Vector3.ZERO
+	var rel: Array = _origin_relative_samples(samples, release_basis)
+	var v_frame: Vector3 = velocity_at_time(rel, t_eval, window_sec)
+	return release_basis * v_frame
+
+
+## Hand orientation at an arbitrary instant: slerp between the
+## bracketing samples (clamped to the buffer's ends).
+static func orientation_at_time(samples: Array, t_eval: float) -> Quaternion:
+	if samples.is_empty():
+		return Quaternion.IDENTITY
+	var pair: Array = _bracketing_pair(samples, t_eval)
+	var a: Dictionary = pair[0]
+	var b: Dictionary = pair[1]
+	var qa: Quaternion = a["quat"]
+	var qb: Quaternion = b["quat"]
+	var dt: float = float(b["t"]) - float(a["t"])
+	if dt < 0.0001:
+		return qa
+	var f: float = clampf((t_eval - float(a["t"])) / dt, 0.0, 1.0)
+	return qa.slerp(qb, f)
+
+
+## Angular velocity at an arbitrary instant: the rotation from
+## half a local step before t_eval to half a step after it, read
+## off the slerped orientation stream - the instantaneous
+## counterpart of the windowed average above.
+static func angular_velocity_at_time(samples: Array, t_eval: float) -> Vector3:
+	if samples.size() < 2:
+		return Vector3.ZERO
+	var pair: Array = _bracketing_pair(samples, t_eval)
+	var a: Dictionary = pair[0]
+	var b: Dictionary = pair[1]
+	var step: float = float(b["t"]) - float(a["t"])
+	if step < 0.0001:
+		# t_eval sits past a buffer end: use the nearest real span.
+		var first: Dictionary = samples[0]
+		var second: Dictionary = samples[1]
+		step = float(second["t"]) - float(first["t"])
+		if step < 0.0001:
+			return Vector3.ZERO
+	var t_first: float = float(samples[0]["t"])
+	var t_last: float = float(samples[samples.size() - 1]["t"])
+	var ta: float = clampf(t_eval - 0.5 * step, t_first, t_last)
+	var tb: float = clampf(t_eval + 0.5 * step, t_first, t_last)
+	if tb - ta < 0.0001:
+		return Vector3.ZERO
+	var qa: Quaternion = orientation_at_time(samples, ta)
+	var qb: Quaternion = orientation_at_time(samples, tb)
+	var dq: Quaternion = qb * qa.inverse()
+	if dq.w < 0.0:
+		dq = -dq
+	var w: float = clampf(dq.w, -1.0, 1.0)
+	var angle: float = 2.0 * acos(w)
+	if angle < 0.00001:
+		return Vector3.ZERO
+	var s: float = sqrt(maxf(0.0, 1.0 - w * w))
+	var axis: Vector3
+	if s < 0.0005:
+		axis = Vector3(1.0, 0.0, 0.0)
+	else:
+		axis = Vector3(dq.x, dq.y, dq.z) / s
+	return axis * (angle / (tb - ta))
+
+
+## The release evaluation the game branches on (Fix Pass 14):
+## use_substep reads velocity and angular velocity at the true
+## let-go instant t_star; otherwise the legacy grid read (velocity
+## at the peak sample, windowed-average spin) - byte-for-byte the
+## pre-pass-14 behaviour, kept as the negative control.
+static func evaluate_release_at(samples: Array, release_basis: Basis, t_star: float, use_substep: bool) -> Dictionary:
+	if use_substep and t_star >= 0.0:
+		return {
+			"vel": velocity_origin_relative_at_time(samples, release_basis, t_star),
+			"ang": angular_velocity_at_time(samples, t_star),
+		}
+	return {
+		"vel": estimate_velocity_origin_relative(samples, release_basis),
+		"ang": estimate_angular_velocity_windowed(samples),
+	}
 
 
 ## Ringer test, straight-edge approximated: with the shoe settled, the
