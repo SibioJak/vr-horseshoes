@@ -105,6 +105,14 @@ var last_ringer: bool = false
 var recorder: ThrowRecorder
 var recorder_path: String = "user://throws.jsonl"
 var release_cache: Dictionary = {}
+# Fix Pass 15: the origin's basis is level BY CONSTRUCTION (every
+# reorientation is yaw-only - see Locomotion), and this guard is
+# the belt behind the braces: any pitch/roll that reaches the
+# origin by ANY path is stripped the same physics frame, and the
+# repair is counted so a recurrence is visible, never silent.
+# (tilt_guard_enabled exists for the smoke's negative control.)
+var tilt_guard_enabled: bool = true
+var origin_tilt_repairs: int = 0
 var flip_rot: float = 0.0
 var turn_rot: float = 0.0
 var has_contact: bool = false
@@ -1322,6 +1330,7 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 	sample_hand = ""
 	shoe.clear_highlights()
 	if speed >= THROW_MIN_SPEED:
+		var tilt_pr: Vector2 = _origin_pitch_roll()
 		release_cache = {
 			"hand": hand_was, "zone": zone_was, "hold": hold_was,
 			"slide_offset_m": slide_was,
@@ -1333,6 +1342,10 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 			# "he turned his head" from "the rig was rotated".
 			"head_yaw_deg": ThrowMath.yaw_deg(-cam.global_transform.basis.z),
 			"origin_yaw_deg": ThrowMath.yaw_deg(-origin.global_transform.basis.z),
+			# Fix Pass 15 diagnostic: the origin's pitch/roll at
+			# the release instant (see _origin_pitch_roll).
+			"origin_pitch_deg": tilt_pr.x,
+			"origin_roll_deg": tilt_pr.y,
 			"samples": release_samples.duplicate(true),
 			"release_pos": release_tf.origin,
 			"release_quat": release_tf.basis.get_rotation_quaternion(),
@@ -1389,6 +1402,7 @@ func _on_any_shoe_body_entered(_body: Node, shoe_node: Shoe) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	_guard_origin_level()
 	_restock_to_player_line()
 	if state == "HELD":
 		_add_sample()
@@ -1478,6 +1492,8 @@ func _settle_throw() -> void:
 		"origin_release_pos": ThrowRecorder.vec3_arr(origin_at_release),
 		"head_yaw_deg": float(release_cache["head_yaw_deg"]),
 		"origin_yaw_deg": float(release_cache["origin_yaw_deg"]),
+		"origin_pitch_deg": float(release_cache.get("origin_pitch_deg", 0.0)),
+		"origin_roll_deg": float(release_cache.get("origin_roll_deg", 0.0)),
 		"samples": ThrowRecorder.sample_arr(samples_copy),
 		"release_pos": ThrowRecorder.vec3_arr(rp),
 		"release_quat": ThrowRecorder.quat_arr(rq),
@@ -1715,13 +1731,49 @@ func _complete_swap(arrived: bool) -> void:
 	_update_board()
 
 
+## Fix Pass 15 self-healing guard, run every physics frame:
+## if the origin's basis carries ANY pitch/roll, strip it on
+## the spot (position and heading kept) and count the repair.
+## Level is already the construction everywhere - this exists
+## so a vertigo fault can never PERSIST because one path was
+## missed, the way the B-swap seat's tilt used to.
+func _guard_origin_level() -> void:
+	if not tilt_guard_enabled:
+		return
+	var tf: Transform3D = origin.global_transform
+	if Locomotion.tilt_deg(tf.basis) > 0.01:
+		origin.global_transform = Locomotion.level_transform(tf)
+		origin_tilt_repairs += 1
+
+
+## The origin's pitch/roll in degrees, 2 dp, for the throw
+## record (Fix Pass 15): pitch = the forward axis' height
+## (nose-up positive), roll = the right axis' height. On a
+## level rig both read 0.00; any recurrence of the slant is
+## on the record at the release instant, next to head_yaw /
+## origin_yaw, instead of living only in the player's stomach.
+func _origin_pitch_roll() -> Vector2:
+	var b: Basis = origin.global_transform.basis
+	return Vector2(
+		snappedf(rad_to_deg(asin(clampf(-b.z.y, -1.0, 1.0))), 0.01),
+		snappedf(rad_to_deg(asin(clampf(b.x.y, -1.0, 1.0))), 0.01))
+
+
 func _move_player_to_end() -> void:
 	var cx: float = clampf(cam.global_position.x, -0.6, 0.6)
 	var spot_z: float = game_line_z() + (0.55 if target_far else -0.55)
 	var yaw: float = 0.0 if target_far else PI
-	var want_cam := Transform3D(Basis(Vector3.UP, yaw),
-		Vector3(cx, cam.global_position.y, spot_z))
-	origin.global_transform = want_cam * cam.transform.inverse()
+	# Fix Pass 15: seat through Locomotion.seat_transform, which
+	# takes only the head's HEADING from its pose. The old seat,
+	# want_cam * cam.transform.inverse(), multiplied by the
+	# inverse of the head's full local rotation, so whatever
+	# pitch/roll the head held at the tap (looking down at the
+	# pit, ~10 deg) was written into the origin's basis and
+	# stayed there - the world slanted for the rest of the
+	# session. Reproduced headlessly pre-fix: a 12 deg pitched
+	# head at the B tap left the origin tilted 12.27 deg.
+	origin.global_transform = Locomotion.seat_transform(
+		cam.transform, Vector3(cx, cam.global_position.y, spot_z), yaw)
 
 
 ## The lane the AI is about to throw down: the corridor between
@@ -1853,6 +1905,7 @@ func _settle_ai_shoe(s: Shoe) -> void:
 	last_ringer = ringer
 	_update_board()
 	var rel: Dictionary = fl["release"]
+	var ai_tilt_pr: Vector2 = _origin_pitch_roll()
 	recorder.log_record({
 		"type": "throw",
 		"ts": Time.get_datetime_string_from_system(),
@@ -1865,6 +1918,8 @@ func _settle_ai_shoe(s: Shoe) -> void:
 		"origin_release_pos": ThrowRecorder.vec3_arr(origin.global_position),
 		"head_yaw_deg": ThrowMath.yaw_deg(-cam.global_transform.basis.z),
 		"origin_yaw_deg": ThrowMath.yaw_deg(-origin.global_transform.basis.z),
+		"origin_pitch_deg": ai_tilt_pr.x,
+		"origin_roll_deg": ai_tilt_pr.y,
 		"samples": [],
 		"release_pos": ThrowRecorder.vec3_arr(rel["pos"]),
 		"release_quat": ThrowRecorder.quat_arr(

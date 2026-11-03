@@ -595,6 +595,44 @@ func walk_swap_to_other_end(timeout_sec: float) -> Dictionary:
 		"slot_err": slot_err, "railed": railed, "ai_pos": ai_pos}
 
 
+## Fix Pass 15: tilt of a basis in degrees, measured HERE -
+## from the Y axis (for any rotation, the image of world-up
+## has y-component cos(tilt), and a pure yaw's is exactly 1)
+## - never with the code under test's own ruler, and never
+## with Quaternion.angle_to, whose float32 small-angle floor
+## (~0.04 deg) once had the guard chasing a phantom.
+func tilt_of(b: Basis) -> float:
+	return rad_to_deg(acos(clampf(b.y.y, -1.0, 1.0)))
+
+
+## Fix Pass 15: hold the head the way Chris holds it at the
+## swap prompt - pitched down at the pit, some yaw, a touch
+## of roll. Only the camera's LOCAL pose is set: the trackers
+## own this transform on the headset and nothing in
+## production writes it, which is the whole point - a head
+## pose must be something the origin READS (its heading),
+## never something that leaks into the origin's basis.
+func pitch_head(deg: float) -> void:
+	main.cam.transform = Transform3D(
+		Basis.from_euler(Vector3(deg_to_rad(-deg), 0.4, deg_to_rad(2.5))),
+		Vector3(0.05, 1.62, 0.02))
+
+
+## Fix Pass 15: the origin reads level (pitch/roll 0.00 deg).
+func check_origin_level(name: String) -> void:
+	var t: float = tilt_of(main.origin.global_transform.basis)
+	check(t < 0.005, "%s (origin tilt %.3f deg)" % [name, t])
+
+
+## Fix Pass 15: let any in-flight AI turn finish before a
+## section resets the game under it (the FP12 section's care).
+func wait_ai_quiet() -> void:
+	var waited: float = 0.0
+	while waited < 15.0 and (main.ai_pitcher.is_throwing() or not main.ai_flight.is_empty()):
+		await create_timer(0.25).timeout
+		waited += 0.25
+
+
 func _run() -> void:
 	var rec_path: String = "user://smoke_throws.jsonl"
 	if FileAccess.file_exists(rec_path):
@@ -1209,6 +1247,7 @@ func _run() -> void:
 		"hand": "R", "zone": "toe", "hold": "flip", "slide_offset_m": 0.0,
 		"line_ft": 40, "origin_pos": Vector3.ZERO,
 		"head_yaw_deg": 0.0, "origin_yaw_deg": 0.0,
+		"origin_pitch_deg": 0.0, "origin_roll_deg": 0.0,
 		"samples": [], "release_pos": rest_tf.origin,
 		"release_quat": Quaternion.IDENTITY,
 		"velocity": Vector3.ZERO, "angular_velocity": Vector3.ZERO,
@@ -1554,6 +1593,142 @@ func _run() -> void:
 		"FP13 audit (iii): the scripted full game ends YOU 21 - 0 OPP and the player wins ('%s')"
 		% main.winner_text)
 	main.ai_pitcher.speed_scale = 1.0
+
+	# ============ Fix Pass 15: the tilt ============
+	# Chris, in BOTH game sessions (the FP12-era game and the
+	# FP14 session): "at some point, the entire view of the
+	# game world slants downward like 10 degrees, total
+	# vertigo inducer." The guilty path was the B-swap seat:
+	# it multiplied by the inverse of the head's full local
+	# rotation, so a head held pitched down at the pit when B
+	# was tapped wrote its pitch into the origin's basis -
+	# where it stayed, invisible at the seat instant itself
+	# (the camera still read level), and slanting the whole
+	# world the moment he straightened up. Pre-fix harness
+	# reproduction through this very production path (head
+	# pitched 12 deg at the tap): origin tilt 12.27 deg after
+	# the swap; camera world tilt 12.26 deg once the head
+	# straightened. The old FP12 smoke never saw it because
+	# its head was never pitched.
+	#
+	# (0) NEGATIVE CONTROL, scene level: the old seat formula,
+	# computed here from the same pitched head pose the
+	# production seat is about to get, tilts by the head's
+	# pitch - so this harness can see the fault class.
+	pitch_head(12.0)
+	var legacy_seat: Transform3D = Transform3D(Basis(Vector3.UP, PI),
+		Vector3(0.05, 1.62, -0.55)) * main.cam.transform.inverse()
+	check(tilt_of(legacy_seat.basis) > 11.0,
+		"FP15 NC: the pre-FP15 seat formula tilts the origin by the head's pitch (%.2f deg)"
+		% tilt_of(legacy_seat.basis))
+	# (a) Turns at a held head pitch: the turn reads only the
+	# camera's POSITION, never its orientation - the origin
+	# cannot pitch, and the turn still turns at its rate.
+	var yaw15a: float = atan2(main.origin.global_transform.basis.z.x,
+		main.origin.global_transform.basis.z.z)
+	main.test_stick["R"] = Vector2(1.0, 0.0)
+	await create_timer(1.2).timeout
+	main.test_stick["R"] = Vector2.ZERO
+	await frames(3)
+	check_origin_level("FP15: 1.2 s of full-stick turns with the head pitched 12 deg leaves the origin level")
+	var yaw15b: float = atan2(main.origin.global_transform.basis.z.x,
+		main.origin.global_transform.basis.z.z)
+	check(absf(wrapf(yaw15b - yaw15a, -PI, PI)) > 0.5,
+		"FP15: the turns still turned with the head pitched (%.2f rad)"
+		% wrapf(yaw15b - yaw15a, -PI, PI))
+	# (b) THE GUILTY PATH: the B-tap swap, head pitched 12 deg.
+	manufacture_swap()
+	pitch_head(12.0)
+	check(main.phase == "SWAP", "FP15: the swap prompt is up")
+	main.test_button["B"] = true
+	await frames(4)
+	main.test_button["B"] = false
+	await frames(4)
+	check(main.phase != "SWAP" and main.inning == 2,
+		"FP15: the B swap still completes with the head pitched")
+	check_origin_level("FP15: the B-tap swap seats a LEVEL origin, head pitched 12 deg")
+	# The seat still lands where it always did: a step behind
+	# the new end's foul line, facing the target stake.
+	var seat_spot_z: float = main.game_line_z() + (0.55 if main.target_far else -0.55)
+	check(absf(main.cam.global_position.z - seat_spot_z) < 0.03,
+		"FP15: the seat lands a step behind the new line (z %.2f, spot %.2f)"
+		% [main.cam.global_position.z, seat_spot_z])
+	var cam_yaw15: float = atan2(main.cam.global_transform.basis.z.x,
+		main.cam.global_transform.basis.z.z)
+	var want_cam_yaw15: float = 0.0 if main.target_far else PI
+	check(absf(wrapf(cam_yaw15 - want_cam_yaw15, -PI, PI)) < 0.02,
+		"FP15: the seated camera faces the target (yaw %.3f, want %.3f)"
+		% [cam_yaw15, want_cam_yaw15])
+	# (c) The guard: a tilt arriving by ANY path is stripped
+	# within a physics frame and the repair counted; with the
+	# guard off the same tilt PERSISTS (the negative control
+	# that the guard is the stripper).
+	var repairs0: int = main.origin_tilt_repairs
+	var cur_yaw15: float = atan2(main.origin.global_transform.basis.z.x,
+		main.origin.global_transform.basis.z.z)
+	main.origin.global_transform = Transform3D(
+		Basis.from_euler(Vector3(deg_to_rad(-9.0), cur_yaw15, deg_to_rad(1.5))),
+		main.origin.global_position)
+	await physics_frame
+	await physics_frame
+	check(tilt_of(main.origin.global_transform.basis) < 0.005
+		and main.origin_tilt_repairs > repairs0,
+		"FP15: the guard strips a foreign tilt within a frame and counts it (%d repairs)"
+		% main.origin_tilt_repairs)
+	main.tilt_guard_enabled = false
+	main.origin.global_transform = Transform3D(
+		Basis.from_euler(Vector3(deg_to_rad(-9.0), cur_yaw15, deg_to_rad(1.5))),
+		main.origin.global_position)
+	await physics_frame
+	await physics_frame
+	await physics_frame
+	check(tilt_of(main.origin.global_transform.basis) > 5.0,
+		"FP15 NC: with the guard off, a foreign tilt PERSISTS (%.2f deg)"
+		% tilt_of(main.origin.global_transform.basis))
+	main.tilt_guard_enabled = true
+	await physics_frame
+	await physics_frame
+	check_origin_level("FP15: the guard heals it again when re-enabled")
+	# (d) The WALKED swap, head pitched 13 deg the whole way
+	# down the court (the FP12 walk, head down at the shoes).
+	await wait_ai_quiet()
+	manufacture_swap()
+	pitch_head(13.0)
+	var wres15: Dictionary = await walk_swap_to_other_end(25.0)
+	check(bool(wres15["fired"]) and bool(wres15["arrived"]),
+		"FP15: the walked swap completes with the head pitched 13 deg")
+	check_origin_level("FP15: the walked swap leaves the origin level")
+	# (e) A FULL GAME with the head pitched 12 deg at every
+	# B-tap swap (the FP13 audit game's shape): level after
+	# every operation and at game end.
+	await wait_ai_quiet()
+	# Start from the home stance: the walked swap above left
+	# the player standing AT the far end, where every swap
+	# would complete by ARRIVAL on the spot and the seat -
+	# the path this section exists to test - would never run.
+	main.origin.global_transform = Transform3D.IDENTITY
+	pitch_head(12.0)
+	main.start_game()
+	var tilt_ok15: bool = true
+	var guard15: int = 0
+	while main.phase != "OVER" and guard15 < 10:
+		guard15 += 1
+		if not await play_scripted_inning(["ringer", "dud"], ["dud", "dud"]):
+			tilt_ok15 = false
+			break
+		if tilt_of(main.origin.global_transform.basis) >= 0.005:
+			tilt_ok15 = false
+		if String(main.phase) == "SWAP":
+			main.test_button["B"] = true
+			await frames(4)
+			main.test_button["B"] = false
+			await frames(4)
+			if tilt_of(main.origin.global_transform.basis) >= 0.005:
+				tilt_ok15 = false
+	check(tilt_ok15 and main.phase == "OVER" and main.score_you == 21,
+		"FP15: a full game, head pitched 12 deg at every swap, stays level and ends 21-0")
+	check_origin_level("FP15: origin level at game end")
+	main.cam.transform = Transform3D.IDENTITY
 
 	# ============ Backyard Game v1: a full game ============
 	# Scripted player throws (production input path) + the AI's

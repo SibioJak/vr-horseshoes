@@ -193,6 +193,7 @@ func test_recorder_schema() -> void:
 		"type": "throw", "ts": "test", "throw_index": 1, "hand": "R",
 		"hold": "flip", "zone": "toe", "slide_offset_m": 0.0, "line_ft": 40,
 		"origin_release_pos": [0.0, 0.0, 0.0],
+		"origin_pitch_deg": 0.0, "origin_roll_deg": 0.0,
 		"samples": ThrowRecorder.sample_arr(samples),
 		"release_pos": [0.0, 1.2, 0.0], "release_quat": [0.0, 0.0, 0.0, 1.0],
 		"release_velocity": [0.0, 2.0, -3.0], "release_angular_velocity": [0.0, 0.0, 0.0],
@@ -213,7 +214,7 @@ func test_recorder_schema() -> void:
 		if parsed is Dictionary:
 			var recd: Dictionary = parsed
 			var required: Array[String] = ["type", "hand", "hold", "zone", "samples",
-				"origin_release_pos", "line_ft",
+				"origin_release_pos", "line_ft", "origin_pitch_deg", "origin_roll_deg",
 				"release_velocity", "release_angular_velocity", "first_contact_pos",
 				"settle_pos", "landing_distance_in", "ringer", "flip_rotations", "turn_rotations"]
 			for key: String in required:
@@ -436,6 +437,79 @@ func test_rotate_about() -> void:
 		"rotate-about: origin-space points keep their distance from the camera XZ (no drift)")
 
 
+func test_level_origin() -> void:
+	# Fix Pass 15: the origin may only ever be YAWED - pitch and
+	# roll belong to the head, never to the rig. (Field fault:
+	# seat while looking down at the pit and the world slanted
+	# ~10 deg for the rest of the session.)
+	check(absf(Locomotion.yaw_of(Basis.IDENTITY)) < 0.0001,
+		"level: identity basis has yaw 0")
+	check(absf(Locomotion.yaw_of(Basis(Vector3.UP, 0.7)) - 0.7) < 0.0001,
+		"level: yaw_of reads back a pure yaw")
+	# The head as Chris holds it at the B tap: pitched down 12,
+	# yawed, a touch of roll. Its HEADING is still recoverable.
+	var held := Basis.from_euler(Vector3(deg_to_rad(-12.0), 0.4, deg_to_rad(2.5)))
+	check(absf(Locomotion.yaw_of(held) - 0.4) < 0.01,
+		"level: a pitched/rolled head still yields its heading (got %.3f rad)" % Locomotion.yaw_of(held))
+	check(Locomotion.tilt_deg(Basis.IDENTITY) < 0.001, "level: identity is level")
+	check(Locomotion.tilt_deg(Basis(Vector3.UP, 2.2)) < 0.001, "level: a pure yaw is level")
+	check(Locomotion.tilt_deg(Basis(Vector3.UP, 0.7)) < 0.0001,
+		"level: tilt_deg reads yaw 0.7 as exactly level too (Quaternion.angle_to's float floor read 0.0396 deg here)")
+	check(Locomotion.tilt_deg(held) > 11.5 and Locomotion.tilt_deg(held) < 13.0,
+		"level: tilt_deg sees the held head's ~12.3 deg tilt (got %.2f)" % Locomotion.tilt_deg(held))
+	# level_transform: strips the tilt, keeps position + heading.
+	var tf := Transform3D(held, Vector3(1.0, 0.0, -3.0))
+	var lv: Transform3D = Locomotion.level_transform(tf)
+	check(Locomotion.tilt_deg(lv.basis) < 0.001,
+		"level: level_transform strips pitch/roll")
+	check(lv.origin == tf.origin and absf(Locomotion.yaw_of(lv.basis) - 0.4) < 0.01,
+		"level: level_transform keeps the position and the heading")
+	# NEGATIVE CONTROL - the old seat formula, numerically: fed
+	# this head pose it writes the head's tilt into the origin.
+	# (The same reproduction, driven through production code,
+	# is in the smoke's FP15 section.)
+	var cam_local := Transform3D(held, Vector3(0.05, 1.62, 0.02))
+	var want_pos := Vector3(0.05, 1.62, -0.55)
+	var legacy: Transform3D = Transform3D(Basis(Vector3.UP, PI), want_pos) * cam_local.inverse()
+	check(Locomotion.tilt_deg(legacy.basis) > 11.0,
+		"NEGATIVE CONTROL: the pre-FP15 seat formula pitches the origin by the head's tilt (got %.2f deg)"
+		% Locomotion.tilt_deg(legacy.basis))
+	# The seat: same inputs - level origin, the camera lands on
+	# the spot facing the wanted yaw, at both ends.
+	for want_yaw: float in [0.0, PI]:
+		var seat: Transform3D = Locomotion.seat_transform(cam_local, want_pos, want_yaw)
+		check(Locomotion.tilt_deg(seat.basis) < 0.001,
+			"level: the seat's origin is level (want_yaw %.2f)" % want_yaw)
+		var cam_world: Transform3D = seat * cam_local
+		check(cam_world.origin.distance_to(want_pos) < 0.0001,
+			"level: the seat lands the camera on the spot (want_yaw %.2f, off %.5f m)"
+			% [want_yaw, cam_world.origin.distance_to(want_pos)])
+		check(absf(wrapf(Locomotion.yaw_of(cam_world.basis) - want_yaw, -PI, PI)) < 0.01,
+			"level: the seated camera faces the wanted yaw (want %.2f, got %.2f)"
+			% [want_yaw, Locomotion.yaw_of(cam_world.basis)])
+	# The turn door sheds tilt too: a (hypothetically) pitched
+	# frame turned about the camera comes out level, its origin
+	# riding the same pivot circle the composed form produced.
+	var pivot := Vector3(0.35, 1.6, 0.25)
+	var turned: Transform3D = Locomotion.rotate_about(tf, pivot, deg_to_rad(-30.0))
+	check(Locomotion.tilt_deg(turned.basis) < 0.001,
+		"level: rotate_about returns a level basis even from a pitched input")
+	var expect_origin: Vector3 = pivot + Basis(Vector3.UP, deg_to_rad(-30.0)) * (tf.origin - pivot)
+	check(turned.origin.distance_to(expect_origin) < 0.0001,
+		"level: rotate_about keeps the pivot-circle origin path from a pitched input")
+	# And from a LEVEL input - the only input production can
+	# hand it - it is the old composed rotation exactly: the
+	# judged turn rate, pivot and feel cannot move.
+	var level_in := Transform3D(Basis(Vector3.UP, 0.9), Vector3(1.0, 0.0, -3.0))
+	var t2: Transform3D = Locomotion.rotate_about(level_in, pivot, deg_to_rad(-30.0))
+	var legacy2: Basis = Basis(Vector3.UP, deg_to_rad(-30.0)) * level_in.basis
+	check(t2.basis.get_rotation_quaternion().angle_to(legacy2.get_rotation_quaternion()) < 0.0001,
+		"level: from a level input rotate_about is the pre-FP15 rotation, bit for bit")
+	var local_at_pivot: Vector3 = level_in.affine_inverse() * pivot
+	check((t2 * local_at_pivot).distance_to(pivot) < 0.0001,
+		"level: rotate_about still never translates the camera")
+
+
 ## Samples where the ORIGIN slides forward at 1.5 m/s (-Z) while the
 ## hand rides it: hand world pos = origin pos + local(t). With
 ## local(t) constant the arm is perfectly still in origin space.
@@ -624,6 +698,7 @@ func _run() -> void:
 	test_locomotion_math()
 	test_smooth_turn()
 	test_rotate_about()
+	test_level_origin()
 	test_origin_relative_velocity()
 	test_yaw_deg()
 	test_api_guard()

@@ -91,10 +91,70 @@ static func clamp_origin(pos: Vector3) -> Vector3:
 ## Rotate a transform about a world pivot (the camera's position)
 ## around the vertical axis. The pivot's world image is invariant -
 ## turning in place never translates the player.
+##
+## Fix Pass 15: the result's basis is built as a pure yaw
+## (yaw_of(tf.basis) + angle), NOT composed as Ry(angle) * tf.basis.
+## For a level input the two are identical, but the composed form
+## PRESERVES any pitch/roll that ever entered the basis - this
+## form sheds it. Every origin reorientation in the game walks
+## through a yaw-only construction like this one (see
+## seat_transform); pitch and roll can never be written into
+## the origin, only read out of the head.
 static func rotate_about(tf: Transform3D, pivot_world: Vector3, angle_rad: float) -> Transform3D:
 	var r := Basis(Vector3.UP, angle_rad)
 	var new_origin: Vector3 = pivot_world + r * (tf.origin - pivot_world)
-	return Transform3D(r * tf.basis, new_origin)
+	return Transform3D(Basis(Vector3.UP, yaw_of(tf.basis) + angle_rad), new_origin)
+
+
+## Heading of a basis in radians: where its -Z points, projected
+## on the ground plane. yaw_of(Basis(Vector3.UP, a)) == a, and a
+## pitched/rolled basis still yields its heading - this is how a
+## yaw is EXTRACTED from a head pose without importing its tilt.
+static func yaw_of(b: Basis) -> float:
+	return atan2(b.z.x, b.z.z)
+
+
+## The yaw-only basis with the same heading as b: pitch and roll
+## identically zero, by construction.
+static func level_basis(b: Basis) -> Basis:
+	return Basis(Vector3.UP, yaw_of(b))
+
+
+## tf with its basis levelled - position and heading kept, any
+## pitch/roll stripped. The self-healing guard's repair tool.
+static func level_transform(tf: Transform3D) -> Transform3D:
+	return Transform3D(level_basis(tf.basis), tf.origin)
+
+
+## How far a basis sits from level, in degrees. Computed from
+## the Y axis alone: for the yaw/tilt decomposition of any
+## rotation, the image of world-up has y-component cos(tilt),
+## so a pure yaw reads EXACTLY 0 (its Y column is (0, 1, 0)
+## bit-for-bit). Do NOT measure this with
+## Quaternion.angle_to: on float32 quaternions its small-angle
+## floor is ~0.04 deg - a level Basis(UP, 0.7) "measures"
+## 0.0396 deg through it, which once had the level guard
+## "repairing" a level rig every physics frame forever.
+static func tilt_deg(b: Basis) -> float:
+	return rad_to_deg(acos(clampf(b.y.y, -1.0, 1.0)))
+
+
+## THE seat (Fix Pass 15): the origin transform that lands the
+## camera at want_pos facing want_yaw with a LEVEL origin, no
+## matter how the head is held at the seating instant. Only the
+## head's HEADING is taken from its pose (yaw_of); its pitch and
+## roll are never read. Replaces the old seat,
+## want_cam * cam.transform.inverse(), whose inverse carried
+## the head's full rotation into the origin basis: seat while
+## looking down ~10 deg at the pit and the origin kept that
+## pitch forever after - the whole world slanted the moment
+## the player straightened up (Chris, 2026-11-03: "the entire
+## view of the game world slants downward like 10 degrees,
+## total vertigo inducer", in both game sessions - every B-tap
+## swap was a roll of that dice).
+static func seat_transform(cam_local: Transform3D, want_pos: Vector3, want_yaw: float) -> Transform3D:
+	var b := Basis(Vector3.UP, want_yaw - yaw_of(cam_local.basis))
+	return Transform3D(b, want_pos - b * cam_local.origin)
 
 
 ## Smooth-turn rate for one frame of right-stick X input; returns
