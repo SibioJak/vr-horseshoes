@@ -9,13 +9,15 @@ extends SceneTree
 ## Feeds fake positional trackers under the FIELD-CENSUS names
 ## ("left_hand"/"right_hand", "default" pose - the Duel's settled
 ## binding) and saves:
-##   proofs/court_view.png - the full court from behind the home
-##     foul line: both pits down the lane, the player's turned
-##     station beside his stance near-right with its pair hanging
+##   proofs/court_view.png - the full court ON-AXIS (Fix Pass 18):
+##     camera on the court centre line behind the home pit, level,
+##     looking straight down the lane - both pits stacked on the
+##     axis, the player's station near-right with its pair hanging
 ##     face-on, the AI in his box across the home pit - behind
 ##     the line, level with the player's stance (Fix Pass 13) -
-##     the dressed backyard around it all (Fix Pass 10 scenery),
-##     board beyond the far pit at left.
+##     the landscaped lane rows (Fix Pass 18), the dressed backyard
+##     around it all (Fix Pass 10 scenery), board beyond the far
+##     pit at left.
 ##   proofs/board_closeup.png - the board face-on: every line of the
 ##     status + controls text on the slab and legible.
 ##   proofs/board_from_foul_line.png - from the 40 ft foul line at
@@ -114,18 +116,24 @@ func _run() -> void:
 		var rep: Node3D = main.ctrl_rep[h]
 		check(rep.visible, "controller rep visible while tracked (%s)" % h)
 
-	# --- Proof A: the FULL court (Backyard Game v1; Fix Pass 13
-	# framing) ---
-	# Elevated behind the home foul line, over the player's
-	# shoulder: his turned rack beside the stance at near-right
-	# (pair hanging face-on), the AI across the home pit at
-	# left in his box - behind the line, level with the player,
-	# same end, opposite sides - both pits down the lane.
+	# --- Proof A: the FULL court, ON-AXIS (Fix Pass 18) ---
+	# The camera stands ON the court centre line behind the
+	# home pit, level, looking straight down the lane, so both
+	# pits stack on the axis in frame. The FP13 three-quarter
+	# framing (off-axis at (3.1, 3.3, 5.6), yawed across the
+	# lane) composed a lie: in Chris's annotated copy the two
+	# pits read as offset into different lanes, while the FP18
+	# audit measured every pit element's centre at x = 0.0000
+	# in the world (stakes, sand bodies, surrounds, timber
+	# frames, at both ends). The honest proof stands where the
+	# axis is visible: the player's station near-right with its
+	# pair face-on, the AI in his box across the home pit, the
+	# landscaped rows lining the lane, board beyond the far pit.
 	var cam_a := Camera3D.new()
 	cam_a.fov = 55.0
-	cam_a.position = Vector3(3.1, 3.3, 5.6)
+	cam_a.position = Vector3(0.0, 2.9, 5.4)
 	main.add_child(cam_a)
-	cam_a.look_at(Vector3(-0.7, 0.0, -5.4), Vector3.UP)
+	cam_a.look_at(Vector3(0.0, 0.0, -6.098), Vector3.UP)
 	cam_a.current = true
 	await settle(6)
 	await snap(cam_a, "res://proofs/court_view.png")
