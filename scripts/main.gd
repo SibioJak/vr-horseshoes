@@ -195,6 +195,19 @@ func _box(parent: Node, pos: Vector3, size: Vector3, mat: Material) -> MeshInsta
 	return mi
 
 
+func _cyl(parent: Node, pos: Vector3, radius: float, height: float, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var cm := CylinderMesh.new()
+	cm.top_radius = radius
+	cm.bottom_radius = radius
+	cm.height = height
+	mi.mesh = cm
+	mi.position = pos
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
+
+
 func _static_box(pos: Vector3, size: Vector3, mat: Material, phys: PhysicsMaterial) -> StaticBody3D:
 	var body := StaticBody3D.new()
 	if phys != null:
@@ -401,30 +414,83 @@ func _nearest_stand_line() -> int:
 	return best_line
 
 
-## One owner's rack (Backyard Game v1, Chris's photo feed):
-## two posts, a horizontal rail the pair hangs on by their
-## openings, and a low shelf board. Slot 0 sits at base_pos.
-## (Fix Pass 11: v1 built ONE four-slot stand per stock point
-## holding both pairs - "all the shoes spawn on one rack.")
-## Fix Pass 13: the stand is built TURNED with the slots -
-## the posts flank the pair DOWN-LANE and the rail runs
-## down-lane through both slots, so the hanging pair reads
-## as one station facing its owner. step_dir: the down-lane
-## direction at this end (-1 toward the far stake, +1 toward
-## the home stake); sx: the rack's side sign (the shelf juts
-## a touch toward the lane, the station's front).
-func _build_rail_stand(base_pos: Vector3, sx: float, step_dir: float) -> void:
-	var post_mat := _mat(Color(0.40, 0.29, 0.17))
-	var rail_mat := _mat(Color(0.48, 0.35, 0.21))
-	var z0: float = base_pos.z - 0.12 * step_dir
-	var z1: float = base_pos.z + (SLOT_STEP + 0.12) * step_dir
-	_box(self, Vector3(base_pos.x, 0.44, z0), Vector3(0.07, 0.88, 0.07), post_mat)
-	_box(self, Vector3(base_pos.x, 0.44, z1), Vector3(0.07, 0.88, 0.07), post_mat)
-	var mid_z: float = (z0 + z1) * 0.5
+## One owner's STATION (Backyard Game v1 photo feed; Backyard
+## v2 Stage 1 rebuilds it as furniture in the "BUBBA" photo's
+## family): a chunky stacked-timber body whose owner's pair
+## hangs on the rail beam in front of its face, a top shelf
+## with a bottle and a cup, generic roundel stickers on the
+## face, a bottle opener on the pit-side end and the cleaning
+## file hanging on the other end. The FUNCTION is the FP13
+## rail stand's, untouched: slot 0 at base_pos, slot 1 one
+## step down-lane, the pair presenting face-on to the stance;
+## only the furniture around the slots changed. step_dir:
+## the down-lane direction at this end (-1 toward the far
+## stake, +1 toward the home stake); sx: the station's side
+## sign (the body stands behind the slots, away from the
+## stance; the shelf and face look back at the owner).
+func _build_station(base_pos: Vector3, sx: float, step_dir: float) -> void:
+	var timber := _mat(Color(0.52, 0.40, 0.26))
+	var timber_alt := _mat(Color(0.46, 0.34, 0.22))
+	var mid_z: float = base_pos.z + SLOT_STEP * 0.5 * step_dir
+	var body_x: float = base_pos.x + 0.30 * sx
+	# Stacked-timber body: five boards with a hand-stacked
+	# whisper of z jitter, alternating weathered shades.
+	for i: int in 5:
+		var slab_mat: Material = timber if i % 2 == 0 else timber_alt
+		_box(self, Vector3(body_x, 0.0935 + 0.187 * float(i),
+			mid_z + (0.008 if i % 2 == 0 else -0.008)),
+			Vector3(0.36, 0.187, 0.86), slab_mat)
+	# Top shelf, overhanging the body toward the stance but
+	# clearing the hanging pair's bridges below it.
+	_box(self, Vector3(base_pos.x + 0.27 * sx, 0.96, mid_z),
+		Vector3(0.50, 0.05, 0.96), _mat(Color(0.55, 0.43, 0.28)))
+	# The rail beam the pair hangs on (the FP13 rail, in
+	# timber), carried on two arms from the body's face.
 	_box(self, Vector3(base_pos.x, 0.885, mid_z),
-		Vector3(0.045, 0.045, absf(z1 - z0) + 0.07), rail_mat)
-	_box(self, Vector3(base_pos.x - 0.05 * sx, 0.30, mid_z),
-		Vector3(0.30, 0.03, absf(z1 - z0) + 0.07), post_mat)
+		Vector3(0.07, 0.07, SLOT_STEP + 0.30), timber_alt)
+	for arm_z: float in [base_pos.z - 0.06 * step_dir,
+			base_pos.z + (SLOT_STEP + 0.06) * step_dir]:
+		_box(self, Vector3(base_pos.x + 0.09 * sx, 0.885, arm_z),
+			Vector3(0.14, 0.05, 0.06), timber)
+	# Shelf props: a bottle and a cup, backyard clutter.
+	_cyl(self, Vector3(base_pos.x + 0.30 * sx, 1.065, mid_z - 0.28),
+		0.032, 0.16, _mat(Color(0.13, 0.25, 0.16)))
+	_cyl(self, Vector3(base_pos.x + 0.30 * sx, 1.18, mid_z - 0.28),
+		0.011, 0.07, _mat(Color(0.13, 0.25, 0.16)))
+	_cyl(self, Vector3(base_pos.x + 0.22 * sx, 1.03, mid_z + 0.30),
+		0.040, 0.09, _mat(Color(0.62, 0.32, 0.22)))
+	# Roundel stickers on the face (generic two-tone discs -
+	# no brands), scattered like the photo's.
+	var face_x: float = base_pos.x + 0.115 * sx
+	var sticker_specs: Array = [
+		[0.58, -0.24, Color(0.72, 0.22, 0.16), Color(0.92, 0.88, 0.78)],
+		[0.63, 0.03, Color(0.16, 0.45, 0.48), Color(0.92, 0.88, 0.78)],
+		[0.52, 0.27, Color(0.85, 0.62, 0.18), Color(0.25, 0.24, 0.24)],
+	]
+	for spec: Array in sticker_specs:
+		var disc: MeshInstance3D = _cyl(self,
+			Vector3(face_x, float(spec[0]), mid_z + float(spec[1])),
+			0.045, 0.008, _mat(spec[2]))
+		disc.rotation.z = PI * 0.5
+		var inner: MeshInstance3D = _cyl(self,
+			Vector3(face_x - 0.003 * sx, float(spec[0]), mid_z + float(spec[1])),
+			0.026, 0.010, _mat(spec[3]))
+		inner.rotation.z = PI * 0.5
+	# Bottle opener on the pit-side end: a dark steel plate
+	# with its lip, the BUBBA station's left-end detail.
+	var end_z: float = mid_z + 0.43 * step_dir
+	var steel := _mat(Color(0.23, 0.23, 0.25))
+	_box(self, Vector3(body_x, 0.62, end_z + 0.008 * step_dir),
+		Vector3(0.10, 0.13, 0.015), steel)
+	_box(self, Vector3(body_x, 0.545, end_z + 0.016 * step_dir),
+		Vector3(0.06, 0.03, 0.03), steel)
+	# The cleaning file on the far end: black handle over a
+	# long thin blade, hanging flat against the end boards.
+	var file_z: float = mid_z - 0.43 * step_dir
+	_box(self, Vector3(body_x, 0.72, file_z - 0.012 * step_dir),
+		Vector3(0.035, 0.10, 0.02), _mat(Color(0.10, 0.10, 0.11)))
+	_box(self, Vector3(body_x, 0.50, file_z - 0.006 * step_dir),
+		Vector3(0.016, 0.32, 0.008), _mat(Color(0.55, 0.56, 0.58)))
 
 
 func _build_world() -> void:
@@ -478,19 +544,21 @@ func _build_world() -> void:
 	for lz2: float in [line_z_for_ft_at(30, true), line_z_for_ft_at(30, false)]:
 		_box(self, Vector3(0.0, 0.006, lz2), Vector3(1.6, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
 
-	# One rack per OWNER per stock point (both lines, both
+	# One station per OWNER per stock point (both lines, both
 	# ends), placed by the Fix Pass 11 rule: beside its owner's
 	# stance at the line's own z, clear of the stance box - the
-	# player's pair on his rack, the AI's pair on its own rack
+	# player's pair on his station, the AI's pair on its own
 	# across the pit. Fix Pass 13 turns each stand with its
-	# slots (rail down-lane, shoes face-on to the stance).
+	# slots (rail down-lane, shoes face-on to the stance);
+	# Backyard v2 Stage 1 dresses that stand as the timber
+	# station furniture.
 	for tfar: bool in [true, false]:
 		for stand_line: int in [40, 30]:
 			var step_dir: float = -1.0 if tfar else 1.0
 			var ptf: Transform3D = (stand_tfs if tfar else stand_tfs_far)[stand_line]
-			_build_rail_stand(ptf.origin, rack_side_sign(tfar, false), step_dir)
+			_build_station(ptf.origin, rack_side_sign(tfar, false), step_dir)
 			var atf: Transform3D = (ai_stand_tfs if tfar else ai_stand_tfs_far)[stand_line]
-			_build_rail_stand(atf.origin, rack_side_sign(tfar, true), step_dir)
+			_build_station(atf.origin, rack_side_sign(tfar, true), step_dir)
 
 	_build_scenery()
 

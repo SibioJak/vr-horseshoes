@@ -11,7 +11,7 @@ extends SceneTree
 ## binding) and saves:
 ##   proofs/court_view.png - the full court from behind the home
 ##     foul line: both pits down the lane, the player's turned
-##     rack beside his stance near-right with its pair hanging
+##     station beside his stance near-right with its pair hanging
 ##     face-on, the AI in his box across the home pit - behind
 ##     the line, level with the player's stance (Fix Pass 13) -
 ##     the dressed backyard around it all (Fix Pass 10 scenery),

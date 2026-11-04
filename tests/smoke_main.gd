@@ -739,7 +739,7 @@ func _run() -> void:
 		if child is MeshInstance3D and (child as MeshInstance3D).global_position.distance_to(slot0_pos) < 1.0:
 			rail_pieces += 1
 	check(rail_pieces >= 4,
-		"rail stand furniture (posts, rail, shelf) stands at the home 40 ft stock point (%d pieces)" % rail_pieces)
+		"station furniture (timber body, rail, shelf) stands at the home 40 ft stock point (%d pieces)" % rail_pieces)
 	check(main.ai_pitcher != null and main.ai_pitcher.is_inside_tree(),
 		"the AI opponent character stands at the home end")
 	# Fix Pass 13: the AI's box at the home end - behind the
