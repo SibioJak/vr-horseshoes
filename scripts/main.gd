@@ -18,17 +18,28 @@ extends Node3D
 ## "fix" these names to /user/hand/... paths - no such trackers exist
 ## on this rig.
 
-const STAKE_POS := Vector3(0.0, 0.05, -12.192) # far pit surface point, 40 ft from the home foul line (z=0)
-const HOME_STAKE_POS := Vector3(0.0, 0.05, 0.0) # home pit stake: exactly 12.192 m from the far stake
+const STAKE_POS := Vector3(0.0, 0.0, -12.192) # the ONE pit's surface point (Fix Pass 19: sand at grade, y=0)
 const STAKE_VISUAL_RADIUS: float = 0.0127 # the 1 in steel Chris sees
 const STAKE_COLLISION_RADIUS: float = 0.0157 # visual + 3 mm (Fix Pass 8, see _build_pit)
 const PIT_SIZE := Vector3(0.914, 0.05, 1.829) # 36 in x 72 in
-const FOUL_40_Z: float = 0.0
-const FOUL_30_Z: float = -3.048 # 30 ft line: 9.144 m from the far stake
-const FOUL_Z: float = FOUL_40_Z
+# Fix Pass 19: TRUE foul lines at the pitching end - each stands
+# 3 ft in front of where the pitching end's own stake would sit,
+# so the 40 ft class pitches from the 37 ft line (z -0.914) and
+# the 30 ft class from the 27 ft line (z -3.962). Before FP19
+# the "40 ft line" sat ON the home stake's plane (z 0) and the
+# short line a flat 9.144 m from the target - neither was a real
+# foul line.
+const FOUL_40_Z: float = -0.914 # the 37 ft line: 40 ft class
+const FOUL_30_Z: float = -3.962 # the 27 ft line: 30 ft class
 const STANCE_HALF_WIDTH: float = 0.85
 const STANCE_HALF_DEPTH: float = 0.40
-const STAND_SIDE_X: float = 1.22 # rack slot 0 beside the stance centre (FP11: 1.0 m; Fix Pass 13: further out, 1.22 m)
+# Fix Pass 19 pitching spots: the player pitches from his side
+# of the lane, the AI from the opposite side, ~1.6 m apart -
+# real one-pit play, both pitchers at the line end. Each owner's
+# station stands a reach-over outboard of his own spot.
+const PLAYER_SPOT_X: float = 0.8
+const AI_SPOT_X: float = -0.8
+const STAND_SIDE_X: float = 1.22 # station slot 0 outboard of the owner's spot (FP11: 1.0 m; FP13: 1.22 m; FP19: measured from the spot)
 const STAND_SHOE_Y: float = 0.785
 const SLOT_STEP: float = 0.24 # pair slots along a rail stand (the rail runs down-lane since Fix Pass 13)
 const PLAYER_PAIR_COLOR := Color(0.92, 0.75, 0.16) # yellow (photo feed)
@@ -57,13 +68,10 @@ var stake_body_node: StaticBody3D = null # far stake (spawn wiring compat)
 var stake_axis_a: Vector3 = Vector3.ZERO # far stake collision axis endpoints (world)
 var stake_axis_b: Vector3 = Vector3.ZERO
 var stakes: Dictionary = {} # "FAR"|"HOME" -> {body, axis_a, axis_b, pos}
-var stand_tfs: Dictionary = {} # line_ft (30/40) -> PLAYER rack slot-0 transform, HOME end (target: far stake)
-var stand_tfs_far: Dictionary = {} # line_ft (30/40) -> PLAYER rack slot-0 transform, FAR end (target: home stake)
-var ai_stand_tfs: Dictionary = {} # 40 ft ONLY -> AI rack slot-0 transform, HOME end (FP18: no AI practice points)
-var ai_stand_tfs_far: Dictionary = {} # 40 ft ONLY -> AI rack slot-0 transform, FAR end
+var stand_tfs: Dictionary = {} # line_ft (30/40) -> PLAYER slot-0 transform at the pitching end (FP19: one end only)
+var ai_stand_tfs: Dictionary = {} # 40 ft ONLY -> AI slot-0 transform at the pitching end (FP18: no AI practice points)
 var stand_tf: Transform3D # the rail slot the ACTIVE shoe currently belongs to
 var active_stand_line_ft: int = 40
-var stock_target_far: bool = true # stocked shoes aim at the far stake
 var ai_pitcher: AIPitcher
 var ai_rng := RandomNumberGenerator.new()
 var board_root: Node3D
@@ -232,25 +240,24 @@ static func line_z_for_ft(line_ft: int) -> float:
 	return FOUL_30_Z if line_ft == 30 else FOUL_40_Z
 
 
-## Foul line z for a line pitched AT the given target stake:
-## the lines mirror at both ends, distances preserved (the 40 ft
-## line is the OPPOSITE stake's plane; the 30 ft line is 9.144 m
-## from the target stake).
-static func line_z_for_ft_at(line_ft: int, p_target_far: bool) -> float:
-	var dist: float = 9.144 if line_ft == 30 else 12.192
-	return -12.192 + dist if p_target_far else -dist
+## Which side of the lane an owner's station stands on, as a
+## world-x sign: outboard of his pitching spot - the player's
+## on his right (+x), the AI's on its left (-x). (Fix Pass 19:
+## both owners pitch from the one pitching end, so the side no
+## longer depends on a target end.)
+static func station_side(is_ai: bool) -> float:
+	return -1.0 if is_ai else 1.0
 
 
-## Which side of the lane a rack stands on, as a world-x sign.
-## The player's racks sit on HIS right as he faces the target
-## (+x at the home end, -x at the far end); the AI's racks
-## mirror to the opposite side, across the pit (Fix Pass 11).
-static func rack_side_sign(p_target_far: bool, is_ai: bool) -> float:
-	var player_side: float = 1.0 if p_target_far else -1.0
-	return -player_side if is_ai else player_side
+## The owner's nominal pitching spot at a foul line: the
+## player on his side of the lane, the AI on the opposite
+## side, ~1.6 m apart (Fix Pass 19).
+static func spot_pos(line_ft: int, is_ai: bool) -> Vector3:
+	return Vector3(AI_SPOT_X if is_ai else PLAYER_SPOT_X, 0.0,
+		line_z_for_ft(line_ft))
 
 
-static func make_rack_tf(line_ft: int, p_target_far: bool, is_ai: bool) -> Transform3D:
+static func make_rack_tf(line_ft: int, is_ai: bool) -> Transform3D:
 	# Rack slot 0 (Fix Pass 11, Chris's field order): BESIDE the
 	# stance at the foul line's own z - NOT behind the player -
 	# facing him, so he reaches over and grabs a shoe without
@@ -275,38 +282,46 @@ static func make_rack_tf(line_ft: int, p_target_far: bool, is_ai: bool) -> Trans
 	# still HANGS on the rail by its toe bridge: plane
 	# near-vertical, bridge up.
 	#
-	# The yaw is solved per rack (owner's side x target end)
-	# so the face normal (the hang basis applied to +Y) points
-	# across the court at the stance with FP11's slight
-	# down-lane slant kept: the old normal's horizontal parts
-	# were 0.847 across / 0.489 down-lane, so sin(yaw) takes
-	# 0.866 x side and cos(yaw) takes -0.5 x travel - the same
-	# tipped hang, turned to face him.
-	var side: float = rack_side_sign(p_target_far, is_ai)
-	var travel: float = -1.0 if p_target_far else 1.0
-	var yaw: float = atan2(0.8660254 * side, -0.5 * travel)
+	# Fix Pass 19: the stance the law is measured from is now
+	# the owner's own pitching SPOT at the one pitching end
+	# (the player at +0.8, the AI at -0.8 - see spot_pos), and
+	# the travel direction is always down-lane (-z). Slot 0
+	# sits 1.22 m outboard of the spot, at the line's own z;
+	# the hang's yaw solve below is the FP13 one with travel
+	# pinned to -1.
+	#
+	# The yaw is solved per rack (owner's side) so the face
+	# normal (the hang basis applied to +Y) points across the
+	# court at the stance with FP11's slight down-lane slant
+	# kept: the old normal's horizontal parts were 0.847
+	# across / 0.489 down-lane, so sin(yaw) takes 0.866 x side
+	# and cos(yaw) takes -0.5 x travel - the same tipped hang,
+	# turned to face him.
+	var side: float = station_side(is_ai)
+	var spot: Vector3 = spot_pos(line_ft, is_ai)
+	var yaw: float = atan2(0.8660254 * side, 0.5)
 	return Transform3D(
 		Basis.from_euler(Vector3(deg_to_rad(-78.0), yaw, 0.0)),
-		Vector3(side * STAND_SIDE_X,
-			STAND_SHOE_Y, line_z_for_ft_at(line_ft, p_target_far)))
+		Vector3(spot.x + side * STAND_SIDE_X,
+			STAND_SHOE_Y, spot.z))
 
 
 ## World transform of one slot on one owner's rack. Each rack
 ## holds ONLY its owner's pair (Fix Pass 11: v1 ran slots 0-3
 ## along ONE shared rack - both pairs on a single stand.
 ## Chris: "all the shoes spawn on one rack."). Slot 0 hangs
-## at STAND_SIDE_X beside the stance; since Fix Pass 13 slot
-## 1 steps one slot DOWN-LANE from it along the turned rail
-## (toward the target stake), so both shoes hang clear of
-## the stance box and the pit edge.
-func rack_slot_tf(p_target_far: bool, line_ft: int, is_ai: bool, idx: int) -> Transform3D:
+## at STAND_SIDE_X outboard of the owner's pitching spot;
+## since Fix Pass 13 slot 1 steps one slot DOWN-LANE from it
+## along the turned rail (toward the target stake - always
+## -z since Fix Pass 19's one-way court), so both shoes hang
+## clear of the stance box and the swing corridor.
+func rack_slot_tf(line_ft: int, is_ai: bool, idx: int) -> Transform3D:
 	var base: Transform3D
 	if is_ai:
-		base = (ai_stand_tfs if p_target_far else ai_stand_tfs_far)[line_ft]
+		base = ai_stand_tfs[line_ft]
 	else:
-		base = (stand_tfs if p_target_far else stand_tfs_far)[line_ft]
-	var step_dir: float = -1.0 if p_target_far else 1.0
-	var step: float = float(idx) * SLOT_STEP * step_dir
+		base = stand_tfs[line_ft]
+	var step: float = float(idx) * SLOT_STEP * -1.0
 	return Transform3D(base.basis, base.origin + Vector3(0.0, 0.0, step))
 
 
@@ -321,27 +336,20 @@ func _pair_index_of(shoe_node: Shoe) -> int:
 	return maxi(ai_pair.find(shoe_node), 0)
 
 
-func _stock_dict(p_target_far: bool) -> Dictionary:
-	return stand_tfs if p_target_far else stand_tfs_far
-
-
 func _init_stands() -> void:
-	stand_tfs = {40: make_rack_tf(40, true, false), 30: make_rack_tf(30, true, false)}
-	stand_tfs_far = {40: make_rack_tf(40, false, false), 30: make_rack_tf(30, false, false)}
+	stand_tfs = {40: make_rack_tf(40, false), 30: make_rack_tf(30, false)}
 	# Fix Pass 18: the AI has NO practice stock points - it never
-	# practices. Its pair stocks only at the 40 ft game stations
-	# (one per end). Any gather/restock that names a 30 ft line
-	# sends the AI pair to the same end's 40 ft station instead
-	# (see _gather_to_rail and _restock_to_player_line).
-	ai_stand_tfs = {40: make_rack_tf(40, true, true)}
-	ai_stand_tfs_far = {40: make_rack_tf(40, false, true)}
+	# practices. Its pair stocks only at the 40 ft game station.
+	# Any gather/restock that names a 30 ft line sends the AI
+	# pair to the 40 ft station instead (see _gather_to_rail
+	# and _restock_to_player_line).
+	ai_stand_tfs = {40: make_rack_tf(40, true)}
 	active_stand_line_ft = 40
-	stock_target_far = true
 	stand_tf = stand_tfs[active_stand_line_ft]
 
 
 func _refresh_stand_tf() -> void:
-	stand_tf = rack_slot_tf(stock_target_far, active_stand_line_ft,
+	stand_tf = rack_slot_tf(active_stand_line_ft,
 		false, _pair_index_of(shoe))
 
 
@@ -352,14 +360,17 @@ func _set_active_stand(line_ft: int) -> void:
 
 ## "The shoe waits where you are" (Fix Pass 7, generalised in
 ## Backyard Game v1). While a shoe sits stocked (RAILED), its
-## home follows the PLAYER: standing at a foul line - at EITHER
-## end of the full court now - relocates every stocked shoe to
-## that line's rail stand, pairs and all. Instant and silent:
-## the shoes are frozen at rest, so this is a clean teleport,
-## never a visible flight. Runs only in PRACTICE with the
-## active shoe at rest (state STAND) - a held, flying or
-## still-settling shoe is never touched, a game in progress
-## places its own shoes, and at neither line nothing moves.
+## home follows the PLAYER: standing at a foul line relocates
+## every stocked shoe to that line's stock point, pairs and
+## all. Instant and silent: the shoes are frozen at rest, so
+## this is a clean teleport, never a visible flight. Runs
+## only in PRACTICE with the active shoe at rest (state
+## STAND) - a held, flying or still-settling shoe is never
+## touched, a game in progress places its own shoes, and at
+## neither line nothing moves. Fix Pass 19 re-anchors it to
+## the one pitching end: the pair homes to the station (the
+## 37 ft line) or the peg post (the 27 ft line) by which line
+## the player is pitching from.
 ##
 ## Defect history: before Fix Pass 7 the home was set ONLY at
 ## latch time, from the shoe's own position (_nearest_stand_line).
@@ -373,31 +384,17 @@ func _set_active_stand(line_ft: int) -> void:
 func _restock_to_player_line() -> void:
 	if mode != "PRACTICE" or state != "STAND":
 		return
-	var cam_pos: Vector3 = cam.global_position
-	var want_far: bool = stock_target_far
-	var want_line: int = 0
-	var line_far: int = ThrowMath.standing_line_ft(cam_pos, STAKE_POS)
-	if line_far != 0:
-		want_far = true
-		want_line = line_far
-	else:
-		var line_home: int = ThrowMath.standing_line_ft(cam_pos, HOME_STAKE_POS)
-		if line_home != 0:
-			want_far = false
-			want_line = line_home
-	if want_line == 0:
+	var want_line: int = ThrowMath.standing_line_ft(cam.global_position, STAKE_POS)
+	if want_line == 0 or want_line == active_stand_line_ft:
 		return
-	if want_far == stock_target_far and want_line == active_stand_line_ft:
-		return
-	stock_target_far = want_far
 	_set_active_stand(want_line)
 	for s: Shoe in _all_shoes():
 		if String(shoe_status[s]) == "RAILED":
 			s.freeze = true
 			# Fix Pass 18: the AI pair has no 30 ft home - it
-			# waits at the same end's 40 ft game station.
+			# waits at the 40 ft game station.
 			var s_line: int = 40 if _is_ai_shoe(s) else want_line
-			s.global_transform = rack_slot_tf(want_far, s_line,
+			s.global_transform = rack_slot_tf(s_line,
 				_is_ai_shoe(s), _pair_index_of(s))
 			s.clear_highlights()
 
@@ -410,11 +407,10 @@ func _all_shoes() -> Array:
 
 
 func _nearest_stand_line() -> int:
-	var dict: Dictionary = _stock_dict(stock_target_far)
 	var best_line: int = active_stand_line_ft
 	var best_dist: float = INF
 	for line_ft: int in [40, 30]:
-		var tf: Transform3D = dict[line_ft]
+		var tf: Transform3D = stand_tfs[line_ft]
 		var d: float = shoe.global_position.distance_to(tf.origin)
 		if d < best_dist:
 			best_dist = d
@@ -563,55 +559,48 @@ func _build_world() -> void:
 	ground_phys.bounce = 0.35
 	_static_box(Vector3(0.0, -0.05, -6.0), Vector3(40.0, 0.1, 48.0), _mat(Color(0.32, 0.52, 0.26)), ground_phys)
 
-	# Two regulation pits, stakes exactly 12.192 m apart, built
-	# by the one code path so the contact behaviour Chris judged
-	# (solid core, sweep-guard geometry) is identical at both ends.
+	# Fix Pass 19: ONE pit - the real backyard form (Chris's
+	# call, verified against NHPA geometry): one timber sand
+	# pit at the far end, a pitching end with true foul lines,
+	# and one-way play. The two-pit build is gone from this
+	# scene; _build_pit stays a reusable builder that takes a
+	# stake position and a key, because the park venue will
+	# need a two-pit court later.
 	_build_pit(STAKE_POS, "FAR")
-	_build_pit(HOME_STAKE_POS, "HOME")
 
-	# Foul lines at BOTH ends: each end's 40 ft line is the
-	# opposite stake's plane, its 30 ft line 9.144 m from the
-	# target stake. The 40 ft strips pass through the home pit's
-	# sand (the stake plane does), so they are drawn as side
-	# segments flanking the pit instead of a buried centre strip.
-	for lz: float in [line_z_for_ft_at(40, true), line_z_for_ft_at(40, false)]:
-		_box(self, Vector3(-0.72, 0.006, lz), Vector3(0.55, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
-		_box(self, Vector3(0.72, 0.006, lz), Vector3(0.55, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
-	for lz2: float in [line_z_for_ft_at(30, true), line_z_for_ft_at(30, false)]:
-		_box(self, Vector3(0.0, 0.006, lz2), Vector3(1.6, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
+	# True foul lines, painted across the lane at the pitching
+	# end only (Fix Pass 19): the 37 ft line for 40 ft play
+	# and the 27 ft line for the 30 ft class. Before FP19 both
+	# ends carried strips - the "40 ft" ones on the stakes'
+	# own planes, passing through the pits.
+	_box(self, Vector3(0.0, 0.006, FOUL_40_Z), Vector3(1.8, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
+	_box(self, Vector3(0.0, 0.006, FOUL_30_Z), Vector3(1.6, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
 
-	# One station per OWNER per END, at the 40 ft game lines
-	# only (both ends), placed by the Fix Pass 11 rule: beside
-	# its owner's stance at the line's own z, clear of the
-	# stance box - the player's pair on his station, the AI's
-	# pair on its own across the pit. Fix Pass 13 turns each
-	# stand with its slots (rail down-lane, shoes face-on to
-	# the stance); Backyard v2 Stage 1 dresses that stand as
-	# the timber station furniture.
-	# Fix Pass 18 (Chris's Stage 1 verdict): the four mid-court
-	# PRACTICE shelves are gone - "get rid of the duplicate
-	# shelves along the side." The AI never practices, so it
-	# has no practice stock point at all; the player's 30 ft
-	# home is one slim peg post per line (see _build_peg_post),
-	# and the lane sides where the shelves stood get landscaped
-	# rows instead (see _build_scenery).
-	for tfar: bool in [true, false]:
-		var step_dir: float = -1.0 if tfar else 1.0
-		var ptf: Transform3D = (stand_tfs if tfar else stand_tfs_far)[40]
-		_build_station(ptf.origin, rack_side_sign(tfar, false), step_dir)
-		var atf: Transform3D = (ai_stand_tfs if tfar else ai_stand_tfs_far)[40]
-		_build_station(atf.origin, rack_side_sign(tfar, true), step_dir)
-		var post_tf: Transform3D = (stand_tfs if tfar else stand_tfs_far)[30]
-		_build_peg_post(post_tf.origin, rack_side_sign(tfar, false), step_dir)
+	# The pitching end's furniture (Fix Pass 19): one BUBBA
+	# station per owner flanking the pitching area at the
+	# 37 ft line - the player's on his right, the AI's on its
+	# left, each a reach-over outboard of its owner's pitching
+	# spot (the FP13 law, translated to the spots) - and ONE
+	# slim peg post at the 27 ft line for the player's
+	# practice pair (the FP18 pattern). The far end has no
+	# stations any more: nobody pitches from there.
+	_build_station(stand_tfs[40].origin, station_side(false), -1.0)
+	_build_station(ai_stand_tfs[40].origin, station_side(true), -1.0)
+	_build_peg_post(stand_tfs[30].origin, station_side(false), -1.0)
 
 	_build_scenery()
 
 
-## One pit + stake, built once per end (Backyard Game v1).
-## Everything inside - the sand, the timber frame, the 1 in stake on its
-## leaning pivot, the +3 mm collision core (Fix Pass 8) and the
-## sweep-guard axis the shoe reads (Fix Pass 9) - is the judged
-## construction; the second end inherits it verbatim.
+## One pit + stake (Backyard Game v1's builder, kept
+## reusable for the park's two-pit court: it takes a stake
+## position and a key, and builds the whole judged
+## construction - sand, timber frame, the 1 in stake on its
+## leaning pivot, the +3 mm collision core (Fix Pass 8) and
+## the sweep-guard axis the shoe reads (Fix Pass 9). The
+## key names the end: "FAR" leans the stake toward +z and
+## opens the pit's front to +z (the pitching side); a second
+## pit built with the mirrored key would lean and open the
+## other way.
 func _build_pit(stake_pos: Vector3, key: String) -> void:
 	# Sand pit (Backyard v2 Stage 1, Chris's timber-pit photo):
 	# sand digs and dies - no bounce at all, full friction taken
@@ -619,54 +608,71 @@ func _build_pit(stake_pos: Vector3, key: String) -> void:
 	# absorbent on top. Measured against the old clay (friction
 	# 1.0, bounce 0.04) with tests/sand_measure.gd at real
 	# pacing; the numbers are in the pass report. The pit BODY
-	# keeps the judged clay box's exact position and size - the
-	# scoring footprint (36x72 in) and the stake do not move.
+	# keeps the judged clay box's exact footprint - the
+	# scoring area (36x72 in) and the stake do not move.
+	# Fix Pass 19: the body SINKS so its top sits at grade
+	# (2 mm proud, only to keep its face off the ground's) -
+	# a shoe sliding in off the grass meets no lip anywhere,
+	# the front included (see the threshold below).
 	var sand_phys := PhysicsMaterial.new()
 	sand_phys.friction = 1.0
 	sand_phys.rough = true
 	sand_phys.bounce = 0.0
 	sand_phys.absorbent = true
-	var pit_pos := Vector3(stake_pos.x, 0.025, stake_pos.z)
+	var pit_pos := Vector3(stake_pos.x, stake_pos.y - 0.023, stake_pos.z)
 	var sand_mat := StandardMaterial3D.new()
 	sand_mat.albedo_color = Color(0.76, 0.66, 0.47)
 	sand_mat.roughness = 1.0
 	_static_box(pit_pos, PIT_SIZE, sand_mat, sand_phys)
-	# Worked sand surround: a thin sheet of spilled, trodden
-	# sand around the timber box (visual only - the ground
-	# underneath keeps its judged physics).
+	# The box zone's apron (Fix Pass 19): regulation puts the
+	# pit inside a 6 ft x 6 ft pitcher's box with platforms
+	# flanking it LEVEL with the pit top. Here that whole zone
+	# is one flat sheet of worn apron at grade - standing
+	# beside this pit reads as standing on the ground, because
+	# it is the ground. (It replaces Stage 1's big spilled-sand
+	# surround, which read as part of the pit and put the
+	# "standing in a pit" feeling under the player's feet at
+	# the old home end.)
 	_box(self, Vector3(stake_pos.x, 0.004, stake_pos.z),
-		Vector3(PIT_SIZE.x + 1.40, 0.008, PIT_SIZE.z + 1.70),
-		_mat(Color(0.71, 0.60, 0.43)))
-	# Timber frame: two courses of weathered railroad ties on
-	# the pit border - inner faces flush with the scoring
-	# footprint, side ties full length, end ties butt between
-	# them. Visual only, like the frame boards they replace:
-	# no gameplay dimension moves.
+		Vector3(1.83, 0.008, 1.83), _mat(Color(0.60, 0.57, 0.38)))
+	# Timber frame, SUNK TO GRADE (Fix Pass 19): two courses
+	# of weathered railroad ties on the pit border, the lower
+	# course buried (its top at grade), one course standing
+	# above it - the frame reads as edging set into the
+	# ground, not a planter box. Inner faces flush with the
+	# scoring footprint; no gameplay dimension moves. The
+	# sides and the back carry COLLISION (a shoe hitting the
+	# back timber and stopping is real); the front - the
+	# pitcher-facing side - has NO board across (Chris's
+	# explicit order): only a low threshold whose top is at
+	# sand level, visual only, so arrivals slide in unimpeded
+	# in physics as well as looks.
+	var front_sign: float = 1.0 if key == "FAR" else -1.0
 	var tie_dark := _mat(Color(0.33, 0.26, 0.19))
 	var tie_grey := _mat(Color(0.41, 0.35, 0.28))
 	var tie_w: float = 0.24
 	var tie_h: float = 0.14
 	var side_x: float = PIT_SIZE.x * 0.5 + tie_w * 0.5
 	var end_z: float = PIT_SIZE.z * 0.5 + tie_w * 0.5
-	for course: int in 2:
-		var cy: float = tie_h * (float(course) + 0.5)
-		var course_mat: Material = tie_dark if course == 0 else tie_grey
-		var alt_mat: Material = tie_grey if course == 0 else tie_dark
-		var side_l: MeshInstance3D = _box(self,
-			Vector3(-side_x, cy, stake_pos.z),
-			Vector3(tie_w, tie_h, PIT_SIZE.z + tie_w * 2.0), course_mat)
-		var side_r: MeshInstance3D = _box(self,
-			Vector3(side_x, cy, stake_pos.z),
-			Vector3(tie_w, tie_h, PIT_SIZE.z + tie_w * 2.0), alt_mat)
-		_box(self, Vector3(0.0, cy, stake_pos.z - end_z),
-			Vector3(PIT_SIZE.x, tie_h, tie_w), alt_mat)
-		_box(self, Vector3(0.0, cy, stake_pos.z + end_z),
-			Vector3(PIT_SIZE.x, tie_h, tie_w), course_mat)
-		if course == 1:
-			# Hand-laid, not machined: a whisper of yaw on the
-			# top course's long ties.
-			side_l.rotation.y = 0.006
-			side_r.rotation.y = -0.005
+	# Side ties: the buried course is underground and unseen -
+	# only the standing course is built, as a static body so
+	# its mesh and its collision are the same timber.
+	for sx: float in [-1.0, 1.0]:
+		var side_body: StaticBody3D = _static_box(
+			Vector3(sx * side_x, tie_h * 0.5, stake_pos.z),
+			Vector3(tie_w, tie_h, PIT_SIZE.z + tie_w * 2.0),
+			tie_grey if sx < 0.0 else tie_dark, null)
+		# Hand-laid, not machined: a whisper of yaw.
+		side_body.rotation.y = 0.006 if sx < 0.0 else -0.005
+	# Back tie: same construction, across the pit's far end.
+	_static_box(Vector3(0.0, tie_h * 0.5,
+			stake_pos.z - front_sign * end_z),
+		Vector3(PIT_SIZE.x, tie_h, tie_w), tie_dark, null)
+	# The front threshold: a flat board sunk to sand level
+	# across the pit's mouth - an edge line in the grass,
+	# nothing for a shoe to hit.
+	_box(self, Vector3(0.0, -0.028, stake_pos.z + front_sign * end_z),
+		Vector3(PIT_SIZE.x, 0.06, tie_w), tie_grey)
 
 	# Stake: 1 in steel, top 14.5 in above the pit, leaning ~8 deg
 	# toward the pitcher who throws at it. The far stake leans
@@ -726,14 +732,14 @@ func _build_pit(stake_pos: Vector3, key: String) -> void:
 		stake_axis_b = axis_b
 
 
-## The stake currently being thrown at, as a stakes-dict key.
+## The stake being thrown at - since Fix Pass 19 there is
+## exactly one, at the far end of the one-way court.
 func target_stake_key() -> String:
-	var far: bool = target_far if mode == "GAME" else stock_target_far
-	return "FAR" if far else "HOME"
+	return "FAR"
 
 
 func target_stake_pos() -> Vector3:
-	return STAKE_POS if target_stake_key() == "FAR" else HOME_STAKE_POS
+	return STAKE_POS
 
 
 ## Fix Pass 10 scenery / comfort dressing: the first sketch of the
@@ -1211,7 +1217,7 @@ func _spawn_shoes() -> void:
 	ai_pair = [_make_shoe(AI_PAIR_COLOR), _make_shoe(AI_PAIR_COLOR)]
 	shoe = player_pair[0]
 	for s: Shoe in _all_shoes():
-		s.global_transform = rack_slot_tf(true, 40, _is_ai_shoe(s), _pair_index_of(s))
+		s.global_transform = rack_slot_tf(40, _is_ai_shoe(s), _pair_index_of(s))
 	state = "STAND"
 
 
@@ -1792,27 +1798,30 @@ var last_scorer: String = "" # side that scored the last inning
 
 
 func game_line_z() -> float:
-	return line_z_for_ft_at(40, target_far)
+	return line_z_for_ft(40)
 
 
 func game_end_sign() -> int:
-	return 1 if target_far else -1
+	# Fix Pass 19: one-way play - the pitching end is the only
+	# end, and it throws toward -z. (Retired with the swap in
+	# the flow rework; the AI rework derives its box from the
+	# line alone.)
+	return 1
 
 
 ## Clean reset: every shoe frozen onto its rail slot at the
 ## given stock point, the player's first shoe active.
-func _gather_to_rail(p_target_far: bool, line_ft: int) -> void:
+func _gather_to_rail(line_ft: int) -> void:
 	for s: Shoe in _all_shoes():
 		s.freeze = true
 		# Fix Pass 18: an AI shoe gathers to the 40 ft game
-		# station of the named end whatever line is requested -
-		# it has no practice stock point to gather to.
+		# station whatever line is requested - it has no
+		# practice stock point to gather to.
 		var s_line: int = 40 if _is_ai_shoe(s) else line_ft
-		s.global_transform = rack_slot_tf(p_target_far, s_line,
+		s.global_transform = rack_slot_tf(s_line,
 			_is_ai_shoe(s), _pair_index_of(s))
 		s.clear_highlights()
 		shoe_status[s] = "RAILED"
-	stock_target_far = p_target_far
 	active_stand_line_ft = line_ft
 	shoe = player_pair[0]
 	_refresh_stand_tf()
@@ -1835,7 +1844,7 @@ func start_game() -> void:
 	last_inning_text = ""
 	winner_text = ""
 	inning_results.clear()
-	_gather_to_rail(true, 40)
+	_gather_to_rail(40)
 	ai_pitcher.place_at(1, game_line_z())
 	_begin_turn("P")
 	_update_board()
@@ -1846,20 +1855,16 @@ func _enter_practice() -> void:
 	phase = ""
 	inning = 0
 	inning_results.clear()
-	# Stock the pairs at the end the player is standing at (the
-	# FP7 rule decides; default to wherever stock already lives).
-	var cam_pos: Vector3 = cam.global_position
-	var lf: int = ThrowMath.standing_line_ft(cam_pos, STAKE_POS)
-	var hf: int = ThrowMath.standing_line_ft(cam_pos, HOME_STAKE_POS)
+	# Stock the pairs at the line the player is standing at
+	# (the FP7 rule decides; default to wherever stock
+	# already lives).
+	var lf: int = ThrowMath.standing_line_ft(cam.global_position, STAKE_POS)
 	if lf != 0:
-		_gather_to_rail(true, lf)
-	elif hf != 0:
-		_gather_to_rail(false, hf)
+		_gather_to_rail(lf)
 	else:
-		_gather_to_rail(stock_target_far, active_stand_line_ft)
+		_gather_to_rail(active_stand_line_ft)
 	grab_armed = true
-	ai_pitcher.place_at(1 if stock_target_far else -1,
-		line_z_for_ft_at(40, stock_target_far))
+	ai_pitcher.place_at(1, game_line_z())
 	_update_board()
 
 
@@ -1951,7 +1956,7 @@ const SWAP_PIT_RADIUS_M: float = 3.0 # "at the new end's pit" radius
 ## court on the stick for real.
 func _at_new_end() -> bool:
 	var cp: Vector3 = cam.global_position
-	var pit: Vector3 = STAKE_POS if target_far else HOME_STAKE_POS
+	var pit: Vector3 = STAKE_POS
 	if Vector2(cp.x - pit.x, cp.z - pit.z).length() <= SWAP_PIT_RADIUS_M:
 		return true
 	return cp.z < COURT_MID_Z if target_far else cp.z > COURT_MID_Z
@@ -1970,7 +1975,7 @@ func _complete_swap(arrived: bool) -> void:
 		inning_first = last_scorer
 	else:
 		inning_first = "AI" if inning_first == "P" else "P"
-	_gather_to_rail(target_far, 40)
+	_gather_to_rail(40)
 	ai_pitcher.place_at(game_end_sign(), game_line_z())
 	if not arrived:
 		_move_player_to_end()

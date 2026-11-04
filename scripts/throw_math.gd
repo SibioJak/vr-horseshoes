@@ -13,8 +13,14 @@ extends RefCounted
 ## estimate_velocity_origin_relative().
 
 const METERS_TO_INCHES: float = 39.3701
-const SHORT_LINE_DISTANCE_M: float = 9.144 # 30 ft from the stake
-const STANDARD_LINE_DISTANCE_M: float = 12.192 # 40 ft from the stake
+# Fix Pass 19: the foul lines are TRUE lines now - they stand
+# 3 ft in front of the pitching-end stake position, so a line's
+# distance from the TARGET stake is 37 ft (11.278 m) for the
+# 40 ft class and 27 ft (8.230 m) for the 30 ft class. Before
+# FP19 the backyard's "lines" sat ON the removed home stake's
+# plane, a full 12.192 / 9.144 m from the target.
+const SHORT_LINE_DISTANCE_M: float = 8.230 # the 27 ft foul line, from the target stake
+const STANDARD_LINE_DISTANCE_M: float = 11.278 # the 37 ft foul line, from the target stake
 
 
 static func make_sample(t: float, pos: Vector3, quat: Quaternion, opos: Vector3 = Vector3.ZERO) -> Dictionary:
@@ -35,9 +41,10 @@ static func yaw_deg(fwd: Vector3) -> float:
 
 
 ## Which foul line a release belongs to, from the release point's
-## horizontal distance to the stake: nearer the 30 ft (9.144 m) line
-## distance classifies as 30, nearer the 40 ft (12.192 m) distance as
-## 40. Height is ignored - a release is high by definition, and its
+## horizontal distance to the stake: nearer the 30 ft class line
+## distance (8.230 m - the 27 ft foul line) classifies as 30,
+## nearer the 40 ft class distance (11.278 m - the 37 ft foul
+## line) as 40. Height is ignored - a release is high by definition, and its
 ## height must not push a short-line throw into the standard class.
 static func line_ft_for_release(release_pos: Vector3, stake_pos: Vector3) -> int:
 	var d: float = Vector2(release_pos.x - stake_pos.x, release_pos.z - stake_pos.z).length()

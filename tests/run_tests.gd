@@ -142,12 +142,15 @@ func test_ringer_geometry() -> void:
 func test_line_classification() -> void:
 	# Fix Pass 3: every throw record carries the foul line it was
 	# pitched from, classified by the release point's horizontal
-	# distance to the stake (nearer 9.144 m = 30, nearer 12.192 = 40).
+	# distance to the stake (nearer 8.230 m = 30, nearer
+	# 11.278 m = 40). Fix Pass 19: the lines are the TRUE foul
+	# lines - the 27 ft line stands at z -3.962 (8.230 m from
+	# the stake) and the 37 ft line at z -0.914 (11.278 m).
 	var stake := Vector3(0.0, 0.05, -12.192)
-	check(ThrowMath.line_ft_for_release(Vector3(0.0, 1.4, -3.048), stake) == 30,
-		"line: a release on the 30 ft line classifies as 30")
-	check(ThrowMath.line_ft_for_release(Vector3(0.0, 1.4, 0.0), stake) == 40,
-		"line: a release on the 40 ft line classifies as 40")
+	check(ThrowMath.line_ft_for_release(Vector3(0.0, 1.4, -3.962), stake) == 30,
+		"line: a release on the 27 ft foul line classifies as 30")
+	check(ThrowMath.line_ft_for_release(Vector3(0.0, 1.4, -0.914), stake) == 40,
+		"line: a release on the 37 ft foul line classifies as 40")
 	check(ThrowMath.line_ft_for_release(Vector3(0.0, 1.4, -6.0), stake) == 30,
 		"line: a mid-court release nearer the short line classifies as 30")
 	check(ThrowMath.line_ft_for_release(Vector3(0.0, 1.4, -1.0), stake) == 40,
@@ -162,23 +165,23 @@ func test_standing_line() -> void:
 	# classifier alone always answers 30 or 40. standing_line_ft is
 	# that classifier plus a proximity gate on stake distance.
 	var stake := Vector3(0.0, 0.05, -12.192)
-	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -3.048), stake) == 30,
-		"standing: on the 30 ft line is the 30 ft line")
-	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, 0.0), stake) == 40,
-		"standing: on the 40 ft line is the 40 ft line")
-	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -2.548), stake) == 30,
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -3.962), stake) == 30,
+		"standing: on the 27 ft foul line is the 30 ft line")
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -0.914), stake) == 40,
+		"standing: on the 37 ft foul line is the 40 ft line")
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -3.462), stake) == 30,
 		"standing: half a metre behind the short line (a stance) still counts")
-	check(ThrowMath.standing_line_ft(Vector3(0.75, 1.6, -2.548), stake) == 30,
+	check(ThrowMath.standing_line_ft(Vector3(0.75, 1.6, -3.462), stake) == 30,
 		"standing: beside the short pedestal, reaching for it, still counts")
-	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, 0.5), stake) == 40,
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -0.414), stake) == 40,
 		"standing: half a metre behind the standard line still counts")
-	check(ThrowMath.standing_line_ft(Vector3(0.0, 0.2, -3.048), stake) == 30,
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 0.2, -3.962), stake) == 30,
 		"standing: head height is ignored (seated play reads the same)")
 	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -6.096), stake) == 0,
 		"standing: mid-court between the lines is NEITHER line")
 	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -12.0), stake) == 0,
 		"standing: up at the pit inspecting a landing is NEITHER line")
-	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -3.9), stake) == 0,
+	check(ThrowMath.standing_line_ft(Vector3(0.0, 1.6, -4.9), stake) == 0,
 		"standing: past the short line toward the pit, beyond the gate, is NEITHER")
 
 
