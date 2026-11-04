@@ -470,7 +470,7 @@ func _build_world() -> void:
 	# Foul lines at BOTH ends: each end's 40 ft line is the
 	# opposite stake's plane, its 30 ft line 9.144 m from the
 	# target stake. The 40 ft strips pass through the home pit's
-	# clay (the stake plane does), so they are drawn as side
+	# sand (the stake plane does), so they are drawn as side
 	# segments flanking the pit instead of a buried centre strip.
 	for lz: float in [line_z_for_ft_at(40, true), line_z_for_ft_at(40, false)]:
 		_box(self, Vector3(-0.72, 0.006, lz), Vector3(0.55, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
@@ -496,23 +496,65 @@ func _build_world() -> void:
 
 
 ## One pit + stake, built once per end (Backyard Game v1).
-## Everything inside - the clay, the frame, the 1 in stake on its
+## Everything inside - the sand, the timber frame, the 1 in stake on its
 ## leaning pivot, the +3 mm collision core (Fix Pass 8) and the
 ## sweep-guard axis the shoe reads (Fix Pass 9) - is the judged
 ## construction; the second end inherits it verbatim.
 func _build_pit(stake_pos: Vector3, key: String) -> void:
-	# Clay pit: high friction, almost no bounce - shoes deaden + slide.
-	var clay_phys := PhysicsMaterial.new()
-	clay_phys.friction = 1.0
-	clay_phys.bounce = 0.04
+	# Sand pit (Backyard v2 Stage 1, Chris's timber-pit photo):
+	# sand digs and dies - no bounce at all, full friction taken
+	# rough so the combined value stays 1.0 against the shoe,
+	# absorbent on top. Measured against the old clay (friction
+	# 1.0, bounce 0.04) with tests/sand_measure.gd at real
+	# pacing; the numbers are in the pass report. The pit BODY
+	# keeps the judged clay box's exact position and size - the
+	# scoring footprint (36x72 in) and the stake do not move.
+	var sand_phys := PhysicsMaterial.new()
+	sand_phys.friction = 1.0
+	sand_phys.rough = true
+	sand_phys.bounce = 0.0
+	sand_phys.absorbent = true
 	var pit_pos := Vector3(stake_pos.x, 0.025, stake_pos.z)
-	_static_box(pit_pos, PIT_SIZE, _mat(Color(0.62, 0.44, 0.30)), clay_phys)
-	# Pit frame boards.
-	var frame_mat := _mat(Color(0.45, 0.33, 0.20))
-	_box(self, Vector3(0.0, 0.03, stake_pos.z - PIT_SIZE.z * 0.5 - 0.03), Vector3(PIT_SIZE.x + 0.12, 0.06, 0.06), frame_mat)
-	_box(self, Vector3(0.0, 0.03, stake_pos.z + PIT_SIZE.z * 0.5 + 0.03), Vector3(PIT_SIZE.x + 0.12, 0.06, 0.06), frame_mat)
-	_box(self, Vector3(-PIT_SIZE.x * 0.5 - 0.03, 0.03, stake_pos.z), Vector3(0.06, 0.06, PIT_SIZE.z), frame_mat)
-	_box(self, Vector3(PIT_SIZE.x * 0.5 + 0.03, 0.03, stake_pos.z), Vector3(0.06, 0.06, PIT_SIZE.z), frame_mat)
+	var sand_mat := StandardMaterial3D.new()
+	sand_mat.albedo_color = Color(0.76, 0.66, 0.47)
+	sand_mat.roughness = 1.0
+	_static_box(pit_pos, PIT_SIZE, sand_mat, sand_phys)
+	# Worked sand surround: a thin sheet of spilled, trodden
+	# sand around the timber box (visual only - the ground
+	# underneath keeps its judged physics).
+	_box(self, Vector3(stake_pos.x, 0.004, stake_pos.z),
+		Vector3(PIT_SIZE.x + 1.40, 0.008, PIT_SIZE.z + 1.70),
+		_mat(Color(0.71, 0.60, 0.43)))
+	# Timber frame: two courses of weathered railroad ties on
+	# the pit border - inner faces flush with the scoring
+	# footprint, side ties full length, end ties butt between
+	# them. Visual only, like the frame boards they replace:
+	# no gameplay dimension moves.
+	var tie_dark := _mat(Color(0.33, 0.26, 0.19))
+	var tie_grey := _mat(Color(0.41, 0.35, 0.28))
+	var tie_w: float = 0.24
+	var tie_h: float = 0.14
+	var side_x: float = PIT_SIZE.x * 0.5 + tie_w * 0.5
+	var end_z: float = PIT_SIZE.z * 0.5 + tie_w * 0.5
+	for course: int in 2:
+		var cy: float = tie_h * (float(course) + 0.5)
+		var course_mat: Material = tie_dark if course == 0 else tie_grey
+		var alt_mat: Material = tie_grey if course == 0 else tie_dark
+		var side_l: MeshInstance3D = _box(self,
+			Vector3(-side_x, cy, stake_pos.z),
+			Vector3(tie_w, tie_h, PIT_SIZE.z + tie_w * 2.0), course_mat)
+		var side_r: MeshInstance3D = _box(self,
+			Vector3(side_x, cy, stake_pos.z),
+			Vector3(tie_w, tie_h, PIT_SIZE.z + tie_w * 2.0), alt_mat)
+		_box(self, Vector3(0.0, cy, stake_pos.z - end_z),
+			Vector3(PIT_SIZE.x, tie_h, tie_w), alt_mat)
+		_box(self, Vector3(0.0, cy, stake_pos.z + end_z),
+			Vector3(PIT_SIZE.x, tie_h, tie_w), course_mat)
+		if course == 1:
+			# Hand-laid, not machined: a whisper of yaw on the
+			# top course's long ties.
+			side_l.rotation.y = 0.006
+			side_r.rotation.y = -0.005
 
 	# Stake: 1 in steel, top 14.5 in above the pit, leaning ~8 deg
 	# toward the pitcher who throws at it. The far stake leans

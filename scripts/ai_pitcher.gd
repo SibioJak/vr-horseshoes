@@ -9,7 +9,7 @@ extends Node3D
 ## this): a ballistic "good flip" is computed from the release
 ## point to the target stake, then sampled with human error.
 ## The shoe then flies the PRODUCTION physics - stake sweep
-## guard, clay, settle and scoring are the real path; no outcome
+## guard, sand, settle and scoring are the real path; no outcome
 ## is faked. The sampler's spread constants below were tuned
 ## against tests/ai_measure.gd run over the real scene (see the
 ## delivery report for the measured ringer line).
@@ -92,7 +92,7 @@ var _idle_t: float = 0.0
 ## side of the court opposite the player's rack, with 3.6 m of
 ## lateral separation from the stance centre (pit width plus
 ## both boxes). FP11 put him across the pit but UP BESIDE it -
-## rooted level with the pit clay, his release a step in FRONT
+## rooted level with the pit sand, his release a step in FRONT
 ## of the line - and he still read as standing on the player's
 ## side of the game ("both players are still on same side").
 ## The box root is the anchor now; the release point is
