@@ -926,6 +926,68 @@ func _build_scenery() -> void:
 		puff.scale = cs2
 		clouds.add_child(puff)
 
+	# --- Landscaped lane rows (Fix Pass 18, Chris's Stage 1
+	# verdict): where the deleted practice shelves lined the
+	# lane now runs a landscaped row down EACH side - a low,
+	# smooth grass berm (crest ~0.26 m) with shrubs dotted
+	# along it in the tree palette. The rows sit outside the
+	# lane, clear of the stances and swing space (inner toe at
+	# |x| 1.5), and run between the ends without touching
+	# either pit's sand surround. Visual only, like all the
+	# dressing; two shared shrub meshes and the tree materials
+	# keep the poly and material count down.
+	var lane_rows := Node3D.new()
+	lane_rows.name = "LaneRows"
+	scenery_root.add_child(lane_rows)
+	var berm_mesh := SphereMesh.new()
+	berm_mesh.radius = 1.0
+	berm_mesh.height = 2.0
+	berm_mesh.radial_segments = 20
+	berm_mesh.rings = 10
+	var berm_mat := _mat(Color(0.37, 0.57, 0.28))
+	var shrub_mesh_a := SphereMesh.new()
+	shrub_mesh_a.radius = 0.30
+	shrub_mesh_a.height = 0.60
+	shrub_mesh_a.radial_segments = 10
+	shrub_mesh_a.rings = 6
+	var shrub_mesh_b := SphereMesh.new()
+	shrub_mesh_b.radius = 0.22
+	shrub_mesh_b.height = 0.44
+	shrub_mesh_b.radial_segments = 10
+	shrub_mesh_b.rings = 6
+	var shrub_mats: Array = [leaf_a, leaf_b, leaf_a,
+		_mat(Color(0.48, 0.54, 0.34))]
+	var shrub_z: Array = [-2.3, -3.05, -3.8, -4.6, -5.35, -6.1,
+		-6.9, -7.65, -8.4, -9.2, -9.9]
+	var shrub_jx: Array = [0.10, -0.12, 0.05, -0.06, 0.13, -0.10,
+		0.0, 0.08, -0.13, 0.06, -0.04]
+	var shrub_sxz: Array = [1.0, 0.9, 1.12, 0.95]
+	for sx: float in [-1.0, 1.0]:
+		var row := Node3D.new()
+		row.name = "RowL" if sx < 0.0 else "RowR"
+		lane_rows.add_child(row)
+		var berm := MeshInstance3D.new()
+		berm.name = "Berm"
+		berm.mesh = berm_mesh
+		berm.material_override = berm_mat
+		berm.position = Vector3(sx * 2.05, 0.0, -6.05)
+		berm.scale = Vector3(0.55, 0.26, 4.15)
+		row.add_child(berm)
+		var phase: int = 0 if sx > 0.0 else 5
+		for i: int in shrub_z.size():
+			var shrub := MeshInstance3D.new()
+			shrub.name = "Shrub"
+			var big: bool = i % 2 == 0
+			shrub.mesh = shrub_mesh_a if big else shrub_mesh_b
+			var smat: Material = shrub_mats[i % shrub_mats.size()]
+			shrub.material_override = smat
+			var jx: float = float(shrub_jx[(i + phase) % shrub_jx.size()])
+			var sxz: float = float(shrub_sxz[i % shrub_sxz.size()])
+			shrub.position = Vector3(sx * (2.05 + jx),
+				0.39 if big else 0.35, float(shrub_z[i]))
+			shrub.scale = Vector3(sxz, 0.8 if big else 0.85, sxz)
+			row.add_child(shrub)
+
 
 func _build_rig() -> void:
 	origin = XROrigin3D.new()

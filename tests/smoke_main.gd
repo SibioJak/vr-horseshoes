@@ -850,6 +850,46 @@ func _run() -> void:
 		var clouds: Node = main.scenery_root.get_node_or_null("Clouds")
 		check(clouds != null and clouds.get_child_count() >= 4,
 			"clouds ride the sky (%d puffs)" % (clouds.get_child_count() if clouds != null else 0))
+		# Fix Pass 18: landscaped rows where the deleted practice
+		# shelves stood. Guards: both rows exist with their berm
+		# and dotted shrubs; the berm stays a LOW mound (crest
+		# under 0.5 m); every plant stands clear of the lane,
+		# stances and swing space and between the ends; and no
+		# plant reaches into the foul-line -> board sightline
+		# (height-aware: the eye line passes well above the row
+		# at every z along it).
+		var lane_rows: Node = main.scenery_root.get_node_or_null("LaneRows")
+		check(lane_rows != null,
+			"FP18: landscaped rows line the lane where the practice shelves stood")
+		if lane_rows != null:
+			var board_top: Vector3 = main.board_root.global_transform * Vector3(0.0, 1.85, 0.0)
+			for row_name: String in ["RowL", "RowR"]:
+				var row: Node = lane_rows.get_node_or_null(row_name)
+				check(row != null, "FP18: %s exists" % row_name)
+				if row == null:
+					continue
+				var berm: Node = row.get_node_or_null("Berm")
+				check(berm != null
+					and (berm as MeshInstance3D).global_position.y + (berm as MeshInstance3D).scale.y <= 0.5,
+					"FP18: %s is a low grass mound (crest %.2f m)"
+					% [row_name, (berm as MeshInstance3D).scale.y if berm != null else -1.0])
+				var n_shrubs: int = 0
+				for piece: Node in row.get_children():
+					var mi := piece as MeshInstance3D
+					if mi == null or piece.name == "Berm":
+						continue
+					n_shrubs += 1
+					var gp: Vector3 = mi.global_position
+					check(absf(gp.x) >= 1.4 and gp.z > -10.6 and gp.z < -1.6,
+						"FP18: %s plant stands clear of the lane and swing space (at %s)"
+						% [row_name, str(gp)])
+					var top: float = gp.y + (mi.mesh as SphereMesh).radius * mi.scale.y
+					var h_line: float = 1.62 + (board_top.y - 1.62) * (0.55 - gp.z) / (0.55 - board_top.z)
+					check(top < h_line - 0.6,
+						"FP18: %s plant stays under the board sightline (top %.2f m, line %.2f m)"
+						% [row_name, top, h_line])
+				check(n_shrubs >= 9,
+					"FP18: %s carries its dotted plants (%d shrubs)" % [row_name, n_shrubs])
 	var sky_ok: bool = false
 	for child: Node in main.get_children():
 		if child is WorldEnvironment:
