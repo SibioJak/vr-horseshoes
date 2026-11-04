@@ -25,7 +25,7 @@ func wait_physics(n: int) -> void:
 
 
 func throw_once(shoe_node: Shoe) -> Dictionary:
-	var from_pos: Vector3 = AIPitcher.release_base_pos(1, 0.0)
+	var from_pos: Vector3 = AIPitcher.release_base_pos(main.game_line_z())
 	var rel: Dictionary
 	if OS.has_feature("ai_perfect") or "--perfect" in OS.get_cmdline_user_args():
 		rel = AIPitcher.base_release(from_pos, main.STAKE_POS)
@@ -44,7 +44,7 @@ func throw_once(shoe_node: Shoe) -> Dictionary:
 	var fired: bool = false
 	for attempt: int in 5:
 		fired_box[0] = false
-		main.ai_pitcher.place_at(1, 0.0)
+		main.ai_pitcher.place_at(main.game_line_z())
 		shoe_node.freeze = true
 		main.ai_pitcher.play_throw(shoe_node, rel, func() -> void:
 			main._wire_guard(shoe_node, "FAR")

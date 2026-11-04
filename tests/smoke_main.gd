@@ -102,9 +102,12 @@ func board_rev(text: String, key: String) -> float:
 
 
 ## Fix Pass 10: horizontal distance from a point to the board
-## sightline segment (40 ft foul line spot -> board centre, XZ).
+## sightline segment (the player's pitching spot -> board
+## centre, XZ). Fix Pass 19: the spot is his side of the
+## 37 ft line now, not the court centre.
 func sightline_dist(p: Vector3) -> float:
-	var a := Vector2(0.0, 0.0)
+	var spot: Vector3 = main.spot_pos(40, false)
+	var a := Vector2(spot.x, spot.z)
 	var b := Vector2(main.BOARD_POS.x, main.BOARD_POS.z)
 	var q := Vector2(p.x, p.z)
 	var ab: Vector2 = b - a
@@ -112,60 +115,60 @@ func sightline_dist(p: Vector3) -> float:
 	return (a + ab * t).distance_to(q)
 
 
-## Fix Pass 13: one rack's layout assertions - the rack is
-## TURNED (Chris's field order) and moved further out. Slot 0
-## hangs at its line's own z on its owner's side, 1.22 m from
-## the stance centre (the brief's 1.15-1.30 band; FP11 had
-## 1.0); slot 1 steps DOWN-LANE along the turned rail; the
-## hanging shoe presents FACE-ON to the stance - its face
-## normal aims across the court at the player, the photo-feed
-## station's presentation - instead of FP11's down-lane
-## edges-and-backs. Both slots stay outside the stance box
-## (|x| <= 0.85, line z +/- 0.40) and within a reach-over.
-func check_rack(tfar: bool, line_ft: int, is_ai: bool) -> void:
-	var lz: float = main.line_z_for_ft_at(line_ft, tfar)
-	var side: float = main.rack_side_sign(tfar, is_ai)
+## Fix Pass 19: one rack's layout assertions, under the FP13
+## law translated to the one-pit pitching end - the rack
+## stands beside its owner's pitching SPOT at its foul line
+## (the player's station and peg post, the AI's station -
+## there is one end now, no per-end racks), slot 0 at
+## 1.15-1.30 m reach-over FROM THE SPOT, slot 1 stepping
+## DOWN-LANE along the turned rail, the hanging shoe
+## presenting FACE-ON to the spot. Both slots stay outside
+## the stance box (|x| <= 0.85 in the box's old court-centre
+## terms, line z +/- 0.40) and within a reach-over.
+func check_rack(line_ft: int, is_ai: bool) -> void:
+	var lz: float = main.line_z_for_ft(line_ft)
+	var side: float = main.station_side(is_ai)
 	var who: String = "AI" if is_ai else "player"
-	var end_name: String = "home" if tfar else "far"
-	var step_dir: float = -1.0 if tfar else 1.0
+	var spot: Vector2 = Vector2(main.spot_pos(line_ft, is_ai).x, lz)
 	for idx: int in [0, 1]:
-		var rp: Vector3 = main.rack_slot_tf(tfar, line_ft, is_ai, idx).origin
+		var rp: Vector3 = main.rack_slot_tf(line_ft, is_ai, idx).origin
 		var in_stance: bool = absf(rp.x) <= main.STANCE_HALF_WIDTH \
 			and absf(rp.z - lz) <= main.STANCE_HALF_DEPTH
 		check(not in_stance,
-			"FP13: %s rack slot %d at the %s %d ft line is OUTSIDE the stance box (at %s)"
-			% [who, idx, end_name, line_ft, str(rp)])
-		var reach: float = Vector2(rp.x, rp.z).distance_to(Vector2(0.0, lz))
+			"FP19: %s rack slot %d at the %d ft line is OUTSIDE the stance box (at %s)"
+			% [who, idx, line_ft, str(rp)])
+		var reach: float = Vector2(rp.x, rp.z).distance_to(spot)
 		check(reach >= 0.90 and reach <= 1.35,
-			"FP13: %s rack slot %d at the %s %d ft line is a reach-over grab (%.2f m from stance centre)"
-			% [who, idx, end_name, line_ft, reach])
-	var rp0: Vector3 = main.rack_slot_tf(tfar, line_ft, is_ai, 0).origin
-	var rp1: Vector3 = main.rack_slot_tf(tfar, line_ft, is_ai, 1).origin
+			"FP19: %s rack slot %d at the %d ft line is a reach-over grab (%.2f m from its spot)"
+			% [who, idx, line_ft, reach])
+	var rp0: Vector3 = main.rack_slot_tf(line_ft, is_ai, 0).origin
+	var rp1: Vector3 = main.rack_slot_tf(line_ft, is_ai, 1).origin
 	check(absf(rp0.z - lz) < 0.05,
-		"FP13: %s rack at the %s %d ft line stands AT the line, not behind the player (dz %.2f)"
-		% [who, end_name, line_ft, rp0.z - lz])
-	check(signf(rp0.x) == side and absf(absf(rp0.x) - main.STAND_SIDE_X) < 0.05,
-		"FP13: %s rack at the %s %d ft line sits on its owner's side (x %.2f)"
-		% [who, end_name, line_ft, rp0.x])
-	var reach0: float = Vector2(rp0.x, rp0.z).distance_to(Vector2(0.0, lz))
+		"FP19: %s rack at the %d ft line stands AT the line, not behind the player (dz %.2f)"
+		% [who, line_ft, rp0.z - lz])
+	check(signf(rp0.x) == side
+		and absf(absf(rp0.x) - (absf(spot.x) + main.STAND_SIDE_X)) < 0.05,
+		"FP19: %s rack at the %d ft line sits on its owner's side, a reach-over outboard of its spot (x %.2f)"
+		% [who, line_ft, rp0.x])
+	var reach0: float = Vector2(rp0.x, rp0.z).distance_to(spot)
 	check(reach0 >= 1.15 and reach0 <= 1.30,
-		"FP13: %s rack slot 0 at the %s %d ft line sits FURTHER out, in the 1.15-1.30 m band (%.2f m)"
-		% [who, end_name, line_ft, reach0])
+		"FP19: %s rack slot 0 at the %d ft line sits in the 1.15-1.30 m band from its spot (%.2f m)"
+		% [who, line_ft, reach0])
 	check(absf(rp1.x - rp0.x) < 0.01
-		and absf((rp1.z - rp0.z) - step_dir * main.SLOT_STEP) < 0.01,
-		"FP13: %s rack at the %s %d ft line steps slot 1 DOWN-LANE along the turned rail (step %s)"
-		% [who, end_name, line_ft, str(rp1 - rp0)])
+		and absf((rp1.z - rp0.z) - (-1.0) * main.SLOT_STEP) < 0.01,
+		"FP19: %s rack at the %d ft line steps slot 1 DOWN-LANE along the turned rail (step %s)"
+		% [who, line_ft, str(rp1 - rp0)])
 	# Face-on: the hang basis' face normal (shoe local +Y,
 	# tipped by the hang) must aim from the slot back at the
-	# stance centre across the court. The solved hang's normal
+	# owner's spot across the court. The solved hang's normal
 	# dots ~0.85 with that direction; FP11's down-lane hang
 	# dotted ~0.49 at best (and pointed AWAY at two racks).
-	var hang: Transform3D = main.rack_slot_tf(tfar, line_ft, is_ai, 0)
+	var hang: Transform3D = main.rack_slot_tf(line_ft, is_ai, 0)
 	var face_n: Vector3 = hang.basis * Vector3.UP
-	var to_stance: Vector3 = (Vector3(0.0, rp0.y, lz) - rp0).normalized()
-	check(face_n.dot(to_stance) > 0.7,
-		"FP13: %s rack at the %s %d ft line presents its shoes FACE-ON to the stance (facing %.2f)"
-		% [who, end_name, line_ft, face_n.dot(to_stance)])
+	var to_spot: Vector3 = (Vector3(spot.x, rp0.y, spot.y) - rp0).normalized()
+	check(face_n.dot(to_spot) > 0.7,
+		"FP19: %s rack at the %d ft line presents its shoes FACE-ON to its spot (facing %.2f)"
+		% [who, line_ft, face_n.dot(to_spot)])
 
 
 ## Fix Pass 8: fire one shot at the stake through the production
@@ -293,7 +296,7 @@ func scripted_game_throw() -> bool:
 		return false
 	var thrown_shoe: Shoe = main.shoe
 	var line_z: float = main.game_line_z()
-	var travel: float = -1.0 if main.target_far else 1.0
+	var travel: float = -1.0 # Fix Pass 19: one-way, always toward the pit
 	var target: Vector3 = main.target_stake_pos()
 	var release_pos := Vector3(0.25, 1.25, line_z - 0.35 * travel)
 	var t_f: float = 1.15
@@ -340,32 +343,33 @@ func scripted_game_throw() -> bool:
 	return false
 
 
-## Fix Pass 13: the AI's box at the CURRENT throwing end, in
-## the brief's own terms (Chris's layout call: same end,
-## opposite sides, real singles): behind the foul line (his z
-## on the player's side of the line plane), LEVEL with the
-## player's stance depth (the 0.55 m behind the line the game
-## seats the player at), lateral separation >= 3.5 m from the
-## stance centre, facing the target down-lane.
+## Fix Pass 19: the AI's box at the one pitching end, in the
+## brief's own terms (Chris's one-pit call: both pitchers
+## share the end, throws near-parallel): behind the 37 ft
+## line, LEVEL with the player's stance depth (0.55 m behind
+## the line), ~1.6 m from the PLAYER'S pitching spot, on the
+## lane's other side, facing the pit down-lane. (FP13's
+## 3.60 m separation at two ends was the diagonal throw
+## Chris called out from the headset.)
 func check_ai_box() -> void:
 	var lz: float = main.game_line_z()
-	var behind: float = 1.0 if main.target_far else -1.0
-	var stance_z: float = lz + 0.55 * behind
 	var pos: Vector3 = main.ai_pitcher.position
-	var end_name: String = "home" if main.target_far else "far"
-	check((pos.z - lz) * behind > 0.0,
-		"FP13: the AI's box is BEHIND the foul line at the %s end (z %.2f, line %.2f)"
-		% [end_name, pos.z, lz])
-	check(absf(pos.z - stance_z) <= 0.5,
-		"FP13: the AI stands LEVEL with the player's stance at the %s end (his z %.2f, stance z %.2f)"
-		% [end_name, pos.z, stance_z])
-	var sep: float = Vector2(pos.x, pos.z).distance_to(Vector2(0.0, stance_z))
-	check(sep >= 3.5,
-		"FP13: lateral separation at the %s end is %.2f m from the stance centre (>= 3.5)"
-		% [end_name, sep])
+	var spot: Vector3 = main.spot_pos(40, false)
+	check(pos.z > lz,
+		"FP19: the AI's box is BEHIND the 37 ft line (z %.2f, line %.2f)"
+		% [pos.z, lz])
+	check(absf(pos.z - (lz + 0.55)) <= 0.5,
+		"FP19: the AI stands LEVEL with the player's stance depth (his z %.2f, stance z %.2f)"
+		% [pos.z, lz + 0.55])
+	var sep: float = Vector2(pos.x, pos.z).distance_to(
+		Vector2(spot.x, lz + 0.55))
+	check(sep >= 1.4 and sep <= 1.8,
+		"FP19: the two pitching spots sit ~1.6 m apart (%.2f m)" % sep)
+	check(pos.x < 0.0,
+		"FP19: the AI pitches from the lane's other side (x %.2f)" % pos.x)
 	var fwd: Vector3 = -main.ai_pitcher.global_transform.basis.z
-	check(fwd.dot(Vector3(0.0, 0.0, -behind)) > 0.9,
-		"FP13: the AI faces the target down-lane at the %s end" % end_name)
+	check(fwd.dot(Vector3(0.0, 0.0, -1.0)) > 0.9,
+		"FP19: the AI faces the pit down-lane")
 
 
 ## Fix Pass 13: one SCRIPTED player shot through the production
@@ -385,7 +389,7 @@ func scripted_shot(kind: String) -> bool:
 		return false
 	var thrown_shoe: Shoe = main.shoe
 	var line_z: float = main.game_line_z()
-	var travel: float = -1.0 if main.target_far else 1.0
+	var travel: float = -1.0 # Fix Pass 19: one-way, always toward the pit
 	var target: Vector3 = main.target_stake_pos()
 	var aim: Vector3 = target
 	if kind == "point":
@@ -480,9 +484,8 @@ func scripted_ai_throw(kind: String) -> bool:
 			break
 	if next_shoe == null:
 		return false
-	var end_sign: int = main.game_end_sign()
-	main.ai_pitcher.place_at(end_sign, main.game_line_z())
-	var from_pos: Vector3 = AIPitcher.release_base_pos(end_sign, main.game_line_z())
+	main.ai_pitcher.place_at(main.game_line_z())
+	var from_pos: Vector3 = AIPitcher.release_base_pos(main.game_line_z())
 	var aim: Vector3 = main.target_stake_pos()
 	if kind == "dud":
 		aim += Vector3(2.5, 0.0, 0.0)
@@ -502,18 +505,24 @@ func scripted_ai_throw(kind: String) -> bool:
 	return false
 
 
-## Fix Pass 13: play ONE inning with scripted shots on both
-## sides (production paths throughout): the player's shots
-## from p_kinds in throw order, the AI's from ai_kinds.
-## Returns when the inning has scored (phase SWAP or OVER)
-## with every scripted shot thrown.
+## Fix Pass 13 / 19: play ONE inning with scripted shots on
+## both sides (production paths throughout): the player's
+## shots from p_kinds in throw order, the AI's from ai_kinds.
+## Returns when the inning is fully THROWN (phase SCORE -
+## the score itself posts when the player walks down, which
+## the callers do - or OVER, which cannot happen before the
+## walk: the win posts at the pit too). BACK also completes
+## it: if the player is already standing at the pit when the
+## last shoe settles, the inning posts on the spot (the FP12
+## doctrine) and SCORE flashes past between polls.
 func play_scripted_inning(p_kinds: Array, ai_kinds: Array) -> bool:
 	var p_i: int = 0
 	var a_i: int = 0
 	var guard: float = 0.0
 	while guard < 240.0:
 		main.ai_delay = 100000.0
-		if String(main.phase) == "SWAP" or String(main.phase) == "OVER":
+		if String(main.phase) == "SCORE" or String(main.phase) == "BACK" \
+				or String(main.phase) == "OVER":
 			return p_i == p_kinds.size() and a_i == ai_kinds.size()
 		if String(main.phase) == "P_TURN":
 			if p_i >= p_kinds.size():
@@ -533,12 +542,12 @@ func play_scripted_inning(p_kinds: Array, ai_kinds: Array) -> bool:
 	return false
 
 
-## Fix Pass 12: worst distance (m) of any shoe from the rail
-## slot the gather should have put it on, for the given target.
-func max_slot_error(tfar: bool) -> float:
+## Fix Pass 12 / 19: worst distance (m) of any shoe from the
+## slot the gather should have put it on, at the pitching end.
+func max_slot_error() -> float:
 	var worst: float = 0.0
 	for s: Shoe in main._all_shoes():
-		var slot: Transform3D = main.rack_slot_tf(tfar, 40,
+		var slot: Transform3D = main.rack_slot_tf(40,
 			main._is_ai_shoe(s), main._pair_index_of(s))
 		worst = maxf(worst, s.global_position.distance_to(slot.origin))
 	return worst
@@ -551,10 +560,10 @@ func all_railed() -> bool:
 	return true
 
 
-## Fix Pass 12: park a fresh game at the between-innings swap
-## prompt with a manufactured scoring inning (the win probes'
+## Fix Pass 12 / 19: park a fresh game at the walk-down
+## prompt with a manufactured thrown inning (the win probes'
 ## method - honest path to the prompt, no throws needed).
-func manufacture_swap() -> void:
+func manufacture_score_walk() -> void:
 	main.origin.global_transform = Transform3D.IDENTITY
 	main.test_grip["L"] = 0.0
 	main.test_grip["R"] = 0.0
@@ -563,66 +572,120 @@ func manufacture_swap() -> void:
 		{"owner": "AI", "dist_in": 0.0, "ringer": true},
 		{"owner": "P", "dist_in": 30.0, "ringer": false},
 		{"owner": "P", "dist_in": 40.0, "ringer": false}]
-	main._score_inning()
+	main._begin_score_walk()
 
 
-## Fix Pass 12: WALK the player to the other end on the
-## production sticks, the way a player does it - right stick to
-## face the new end if needed, then left stick forward at walk
-## speed down the actual court, ending a step past the new
-## end's foul line, in the racks area. NO origin teleports: if
-## the arrival test ever narrows back into a pinpoint, this
-## walk misses it, the phase stays SWAP, and the caller's
-## checks fail. (The v1/FP11 version of this check teleported
-## the origin into the arrival ring and called it walking;
-## the field walk it never simulated is the one that stranded
-## Chris's game.) The moment the swap fires mid-walk, the
-## gathered state is snapshotted - pairs on slots, AI seated -
-## before the next turn can touch anything.
-func walk_swap_to_other_end(timeout_sec: float) -> Dictionary:
-	var go_far: bool = bool(main.target_far) # new end = far end
-	var dir_z: float = -1.0 if go_far else 1.0
-	var line_z: float = main.line_z_for_ft_at(40, not go_far)
-	var stop_z: float = line_z + 0.40 * dir_z
+## Fix Pass 19: the right-stick correction that keeps a
+## walking player's heading on a target direction, the way a
+## player steers without thinking about it. (Production sign,
+## measured: a +1 stick DECREASES the heading angle
+## atan2(fwd.x, fwd.z).)
+func steer_x(target_dir: Vector3) -> float:
+	var fwd: Vector3 = -main.cam.global_transform.basis.z
+	var phi: float = atan2(fwd.x, fwd.z)
+	var want: float = atan2(target_dir.x, target_dir.z)
+	var err: float = wrapf(want - phi, -PI, PI)
+	if absf(err) < 0.12:
+		return 0.0
+	return -signf(err)
+
+
+## Fix Pass 19 (on Fix Pass 12's doctrine): WALK the player
+## DOWN to the pit on the production sticks, the way a player
+## does it - right stick to face the pit if needed, then left
+## stick forward at walk speed down the actual court, ending
+## beside the pit. NO origin teleports: if the arrival test
+## ever narrows back into a pinpoint, this walk misses it,
+## the phase stays SCORE, and the caller's checks fail. The
+## moment the score posts mid-walk, where he was standing is
+## snapshotted (fire_z) so the caller can prove the area test
+## fired at its boundary, not somewhere up the lane.
+func walk_down_to_pit(timeout_sec: float) -> Dictionary:
 	var t0: int = Time.get_ticks_msec()
 	var limit_ms: int = int(timeout_sec * 1000.0)
-	# Face the new end with the right stick (production turn).
+	# Face the pit with the right stick (production turn) -
+	# ALL the way: the FP19 pitching-zone disc is x-sensitive,
+	# so a lazy 120-degree turn walks a long diagonal and
+	# misses it (the probe that found this ended at x +17).
 	while float(Time.get_ticks_msec() - t0) < limit_ms:
 		var fwd: Vector3 = -main.cam.global_transform.basis.z
-		if fwd.z * dir_z > 0.5:
+		if fwd.z < -0.92:
 			break
 		main.test_stick["R"] = Vector2(1.0, 0.0)
 		await create_timer(0.1).timeout
 	main.test_stick["R"] = Vector2.ZERO
-	# Walk forward on the left stick, a step past the line.
+	# Walk forward on the left stick, ending beside the pit,
+	# steering like a player does (small stick corrections
+	# keep the heading on the pit).
+	var fired: bool = false
+	var fire_z: float = 0.0
+	while float(Time.get_ticks_msec() - t0) < limit_ms:
+		if not fired and String(main.phase) != "SCORE":
+			fired = true
+			fire_z = main.cam.global_position.z
+		if main.cam.global_position.z <= -11.3:
+			break
+		main.test_stick["L"] = Vector2(0.0, 1.0)
+		main.test_stick["R"] = Vector2(steer_x(Vector3(0.0, 0.0, -1.0)), 0.0)
+		await create_timer(0.1).timeout
+	main.test_stick["L"] = Vector2.ZERO
+	main.test_stick["R"] = Vector2.ZERO
+	await frames(6)
+	if not fired and String(main.phase) != "SCORE":
+		fired = true
+		fire_z = main.cam.global_position.z
+	return {"fired": fired, "fire_z": fire_z,
+		"arrived": main.cam.global_position.z <= -11.2}
+
+
+## Fix Pass 19: WALK the player BACK to the pitching end on
+## the production sticks - turn around, walk up the court,
+## ending at his stance depth behind the 37 ft line. The
+## moment the next inning stocks mid-walk (arrival at the
+## pitching zone), the gathered state is snapshotted - pairs
+## on slots, all railed, AI in its box - before the next
+## turn can touch anything.
+func walk_back_to_line(timeout_sec: float) -> Dictionary:
+	var t0: int = Time.get_ticks_msec()
+	var limit_ms: int = int(timeout_sec * 1000.0)
+	# Face the line end with the right stick (production
+	# turn) - ALL the way (see walk_down_to_pit).
+	while float(Time.get_ticks_msec() - t0) < limit_ms:
+		var fwd: Vector3 = -main.cam.global_transform.basis.z
+		if fwd.z > 0.92:
+			break
+		main.test_stick["R"] = Vector2(1.0, 0.0)
+		await create_timer(0.1).timeout
+	main.test_stick["R"] = Vector2.ZERO
+	# Walk forward on the left stick, ending at stance depth.
 	var fired: bool = false
 	var fire_z: float = 0.0
 	var slot_err: float = -1.0
 	var railed: bool = false
 	var ai_pos := Vector3.INF
 	while float(Time.get_ticks_msec() - t0) < limit_ms:
-		if not fired and String(main.phase) != "SWAP":
+		if not fired and String(main.phase) != "BACK":
 			fired = true
 			fire_z = main.cam.global_position.z
-			slot_err = max_slot_error(bool(main.target_far))
+			slot_err = max_slot_error()
 			railed = all_railed()
 			ai_pos = main.ai_pitcher.position
-		var cz: float = main.cam.global_position.z
-		if (cz - stop_z) * dir_z >= 0.0:
+		if main.cam.global_position.z >= -0.36:
 			break
 		main.test_stick["L"] = Vector2(0.0, 1.0)
+		main.test_stick["R"] = Vector2(steer_x(Vector3(0.0, 0.0, 1.0)), 0.0)
 		await create_timer(0.1).timeout
 	main.test_stick["L"] = Vector2.ZERO
+	main.test_stick["R"] = Vector2.ZERO
 	await frames(6)
-	if not fired and String(main.phase) != "SWAP":
+	if not fired and String(main.phase) != "BACK":
 		fired = true
 		fire_z = main.cam.global_position.z
-		slot_err = max_slot_error(bool(main.target_far))
+		slot_err = max_slot_error()
 		railed = all_railed()
 		ai_pos = main.ai_pitcher.position
-	var end_z: float = main.cam.global_position.z
 	return {"fired": fired, "fire_z": fire_z,
-		"arrived": (end_z - stop_z) * dir_z >= -0.05,
+		"arrived": main.cam.global_position.z >= -0.41,
 		"slot_err": slot_err, "railed": railed, "ai_pos": ai_pos}
 
 
@@ -700,24 +763,31 @@ func _run() -> void:
 		"board notes the 30 ft short line (pass 3)")
 	check(main.controls_label.text.contains("A BUTTON")
 		and main.controls_label.text.contains("B BUTTON"),
-		"board lists the game buttons (A start/play again, B swap/practice) - standing rule: every accepted command is listed")
+		"board lists the game buttons (A start/play again, B practice) - standing rule: every accepted command is listed")
+	check(main.controls_label.text.contains("back to practice"),
+		"FP19: the board's B line says what B does now - back to practice (no end-swap exists)")
 	check(main.status_label.text.contains("THROWS: 0"), "board starts at zero throws")
 
-	# --- Backyard Game v1: full court, pairs, the opponent ---
-	check(main.stakes.size() == 2, "two stakes built, one per end (%d)" % main.stakes.size())
+	# --- Backyard Game v1 / Fix Pass 19: one pit, pairs, the opponent ---
+	check(main.stakes.size() == 1, "FP19: exactly ONE stake is built - the one-pit backyard (%d)" % main.stakes.size())
 	var sp_far: Vector3 = main.stakes["FAR"]["pos"]
-	var sp_home: Vector3 = main.stakes["HOME"]["pos"]
-	check(absf(sp_far.distance_to(sp_home) - 12.192) < 0.001,
-		"the two stakes stand exactly 12.192 m apart (%.3f)" % sp_far.distance_to(sp_home))
-	check(absf(main.line_z_for_ft_at(40, true)) < 0.001
-		and absf(main.line_z_for_ft_at(30, true) + 3.048) < 0.001
-		and absf(main.line_z_for_ft_at(40, false) + 12.192) < 0.001
-		and absf(main.line_z_for_ft_at(30, false) + 9.144) < 0.001,
-		"foul lines mirror at both ends (0 / -3.048 / -9.144 / -12.192)")
+	check(sp_far.distance_to(main.STAKE_POS) < 0.001,
+		"FP19: the one stake stands at the pit, 12.192 m from the old home stake's plane (at %s)" % str(sp_far))
+	var home_pit_pieces: int = 0
+	for child: Node in main.get_children():
+		if child is MeshInstance3D and (child as MeshInstance3D).global_position.distance_to(Vector3(0.0, 0.25, 0.0)) < 0.75:
+			home_pit_pieces += 1
+	check(home_pit_pieces == 0,
+		"FP19: no pit furniture stands at the old home end - the home pit is deleted (%d pieces)" % home_pit_pieces)
+	check(absf(main.line_z_for_ft(40) - main.FOUL_40_Z) < 0.001
+		and absf(main.line_z_for_ft(30) - main.FOUL_30_Z) < 0.001
+		and absf(main.FOUL_40_Z + 0.914) < 0.001
+		and absf(main.FOUL_30_Z + 3.962) < 0.001,
+		"FP19: the foul lines are the TRUE lines at the pitching end (37 ft at -0.914, 27 ft at -3.962)")
 	check(main.player_pair.size() == 2 and main.ai_pair.size() == 2,
 		"two pairs of shoes: the player's and the AI's")
 	for s: Shoe in main._all_shoes():
-		var want_slot: Transform3D = main.rack_slot_tf(true, 40,
+		var want_slot: Transform3D = main.rack_slot_tf(40,
 			main._is_ai_shoe(s), main._pair_index_of(s))
 		check(s.global_position.distance_to(want_slot.origin) < 0.01,
 			"shoe hangs on its owner's rack at boot (%s pair, slot %d)"
@@ -726,33 +796,28 @@ func _run() -> void:
 	# Fix Pass 11: the pairs stock on SEPARATE racks - v1 hung
 	# all four shoes on one shared rack (Chris's report).
 	check(main.player_pair[0].global_position.distance_to(
-			main.rack_slot_tf(true, 40, true, 0).origin) > 1.5
+			main.rack_slot_tf(40, true, 0).origin) > 1.5
 		and main.ai_pair[0].global_position.distance_to(
-			main.rack_slot_tf(true, 40, false, 0).origin) > 1.5,
+			main.rack_slot_tf(40, false, 0).origin) > 1.5,
 		"FP11: each pair stocks on its OWN rack - never all four on one")
 	check(main.player_pair[0].tint == main.PLAYER_PAIR_COLOR
 		and main.ai_pair[0].tint == main.AI_PAIR_COLOR,
 		"pairs wear their colours: yellow player, blue AI")
-	var slot0_pos: Vector3 = main.rack_slot_tf(true, 40, false, 0).origin
+	var slot0_pos: Vector3 = main.rack_slot_tf(40, false, 0).origin
 	var rail_pieces: int = 0
 	for child: Node in main.get_children():
 		if child is MeshInstance3D and (child as MeshInstance3D).global_position.distance_to(slot0_pos) < 1.0:
 			rail_pieces += 1
 	check(rail_pieces >= 4,
-		"station furniture (timber body, rail, shelf) stands at the home 40 ft stock point (%d pieces)" % rail_pieces)
+		"station furniture (timber body, rail, shelf) stands at the pitching end's 40 ft stock point (%d pieces)" % rail_pieces)
 	check(main.ai_pitcher != null and main.ai_pitcher.is_inside_tree(),
-		"the AI opponent character stands at the home end")
-	# Fix Pass 13: the AI's box at the home end - behind the
-	# foul line, LEVEL with the player's stance, on the
-	# opposite side from the player's rack (-x here), >= 3.5 m
-	# of separation, facing the target. FP11 rooted him across
-	# the pit but up beside it, level with the pit clay and a
-	# step in front of the line; Chris: "both players are
-	# still on same side, are we supposed to be opposite?"
+		"the AI opponent character stands at the pitching end")
+	# Fix Pass 19: the AI's box at the pitching end - behind
+	# the 37 ft line, LEVEL with the player's stance depth,
+	# ~1.6 m from the player's spot on the lane's other side,
+	# facing the pit. (FP13's 3.6 m two-end layout was the
+	# diagonal Chris threw out with the second pit.)
 	check_ai_box()
-	check(main.ai_pitcher.position.x < 0.0,
-		"FP13: the AI boxes on the opposite side from the player's rack at the home end (x %.2f)"
-		% main.ai_pitcher.position.x)
 
 	# --- Board placement (pass-10 re-derivation of the pass-2 guard) ---
 	# Pass 1's board faced AWAY from the player; pass 2 moved it
@@ -807,11 +872,13 @@ func _run() -> void:
 	# own font. Backyard Game v1 re-derived them: the status font
 	# stepped down (58 / 0.0029) because a game status runs to
 	# SEVEN lines where practice ran to six, and the longest
-	# honest lines grew ("LAST INNING: ... (RINGER)",
-	# "B: SWAP ENDS - OR WALK THERE"). Both modes are measured.
+	# honest lines grew ("LAST INNING: ... (RINGER)").
+	# Fix Pass 19 re-measures the game block as the walk-down
+	# prompt the one-way flow actually shows. Both modes are
+	# measured.
 	var worst_cases: Array = [
 		"THROWS: 999\nHOLD: TURN (SHANK_RIGHT)\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!\nA: START GAME",
-		"YOU 99 - 99 OPP\nINNING 99 - YOUR THROW 2 OF 2\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nLAST INNING: YOU +6 (RINGER)\nB: SWAP ENDS - OR WALK THERE",
+		"YOU 99 - 99 OPP\nINNING 99 THROWN\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nWALK DOWN TO SCORE\nRINGER!",
 	]
 	for worst: String in worst_cases:
 		var w_lines: PackedStringArray = worst.split("\n")
@@ -884,7 +951,7 @@ func _run() -> void:
 						"FP18: %s plant stands clear of the lane and swing space (at %s)"
 						% [row_name, str(gp)])
 					var top: float = gp.y + (mi.mesh as SphereMesh).radius * mi.scale.y
-					var h_line: float = 1.62 + (board_top.y - 1.62) * (0.55 - gp.z) / (0.55 - board_top.z)
+					var h_line: float = 1.62 + (board_top.y - 1.62) * (main.FOUL_40_Z - gp.z) / (main.FOUL_40_Z - board_top.z)
 					check(top < h_line - 0.6,
 						"FP18: %s plant stays under the board sightline (top %.2f m, line %.2f m)"
 						% [row_name, top, h_line])
@@ -914,48 +981,48 @@ func _run() -> void:
 	# player's racks on his right at both ends, the AI's mirrored
 	# across the pit); every slot is outside the stance box and a
 	# reach-over grab (0.90-1.35 m from the stance centre).
-	# (FP18, below, narrows "every rack": the AI's 30 ft racks
-	# no longer exist to be asserted.)
+	# (FP18 narrowed "every rack": the AI's 30 ft racks no
+	# longer exist to be asserted. FP19 narrows it again:
+	# there is ONE end - the pitching end - and the racks are
+	# asserted against each owner's SPOT there, below.)
 	# Fix Pass 18 (Chris's Stage 1 verdict): the stock-point map
 	# itself changed shape - the player keeps both lines at
 	# both ends (the 30 ft peg post is his practice home), the
 	# AI stocks ONLY at the 40 ft game lines: it never
 	# practices, so it has no 30 ft point at all.
-	check(main.stand_tfs.size() == 2 and main.stand_tfs_far.size() == 2,
-		"FP18: the player stocks at both foul lines at both ends (%d + %d)"
-		% [main.stand_tfs.size(), main.stand_tfs_far.size()])
-	check(main.ai_stand_tfs.size() == 1 and main.ai_stand_tfs_far.size() == 1
-		and not main.ai_stand_tfs.has(30) and not main.ai_stand_tfs_far.has(30),
-		"FP18: the AI stocks only at the 40 ft game lines - no practice stock points (%d + %d)"
-		% [main.ai_stand_tfs.size(), main.ai_stand_tfs_far.size()])
-	for rack_end: bool in [true, false]:
-		check_rack(rack_end, 40, false)
-		check_rack(rack_end, 40, true)
-		# The player's 30 ft slots keep their full FP13 layout
-		# geometry - the slim peg post hangs the pair exactly
-		# where the deleted shelf did.
-		check_rack(rack_end, 30, false)
+	check(main.stand_tfs.size() == 2,
+		"FP19: the player stocks at both foul lines at the one pitching end (%d)"
+		% [main.stand_tfs.size()])
+	check(main.ai_stand_tfs.size() == 1 and not main.ai_stand_tfs.has(30),
+		"FP18/19: the AI stocks only at the 40 ft game station - no practice stock point (%d)"
+		% [main.ai_stand_tfs.size()])
+	check_rack(40, false)
+	check_rack(40, true)
+	# The player's 30 ft slots keep their full FP13 layout
+	# geometry - the slim peg post hangs the pair exactly
+	# where the deleted shelf did.
+	check_rack(30, false)
 	# Fix Pass 18: what STANDS at the practice points - the
 	# player's 30 ft home is ONE slim peg post (a post and two
 	# pegs, nothing else), and at the AI's deleted 30 ft points
 	# no furniture stands at all.
-	for post_end: bool in [true, false]:
-		var post_slot: Vector3 = main.rack_slot_tf(post_end, 30, false, 0).origin
-		var post_pieces: int = 0
-		for child: Node in main.get_children():
-			if child is MeshInstance3D and (child as MeshInstance3D).global_position.distance_to(post_slot) < 0.55:
-				post_pieces += 1
-		check(post_pieces == 3,
-			"FP18: the %s 30 ft practice home is one slim peg post (post + two pegs, %d pieces)"
-			% ["home" if post_end else "far", post_pieces])
-		var ghost_slot: Vector3 = main.make_rack_tf(30, post_end, true).origin
-		var ghost_pieces: int = 0
-		for child2: Node in main.get_children():
-			if child2 is MeshInstance3D and (child2 as MeshInstance3D).global_position.distance_to(ghost_slot) < 0.55:
-				ghost_pieces += 1
-		check(ghost_pieces == 0,
-			"FP18: no furniture stands at the AI's deleted %s 30 ft practice point (%d pieces)"
-			% ["home" if post_end else "far", ghost_pieces])
+	var post_slot: Vector3 = main.rack_slot_tf(30, false, 0).origin
+	var post_pieces: int = 0
+	for child: Node in main.get_children():
+		if child is MeshInstance3D and (child as MeshInstance3D).global_position.distance_to(post_slot) < 0.55:
+			post_pieces += 1
+	check(post_pieces == 3,
+		"FP18/19: the 27 ft practice home is one slim peg post (post + two pegs, %d pieces)"
+		% post_pieces)
+	# Fix Pass 19: the far end carries NO stations - nobody
+	# pitches from there. (The FP18-era far player station
+	# stood at (1.22, 1.05, -12.192); nothing may stand there.)
+	var ghost_pieces: int = 0
+	for child2: Node in main.get_children():
+		if child2 is MeshInstance3D and (child2 as MeshInstance3D).global_position.distance_to(Vector3(1.22, 1.05, -12.192)) < 0.55:
+			ghost_pieces += 1
+	check(ghost_pieces == 0,
+		"FP19: no station furniture stands at the far end (%d pieces)" % ghost_pieces)
 	check(main.active_stand_line_ft == 40, "the shoe starts homed to the 40 ft rack")
 
 	# --- Locomotion through the production path (test stick hooks) ---
@@ -1214,7 +1281,7 @@ func _run() -> void:
 	# (a) Walk (production stick input) from the standard end to
 	# the short line, empty-handed: a shoe must be waiting there.
 	main.test_stick["L"] = Vector2(0.0, 1.0)
-	await create_timer(1.55).timeout
+	await create_timer(1.9).timeout
 	main.test_stick["L"] = Vector2.ZERO
 	var arrive_sec: float = await wait_shoe_at(30, 1.0)
 	check(arrive_sec >= 0.0,
@@ -1264,7 +1331,7 @@ func _run() -> void:
 	check(main.state == "FLYING" and main.active_stand_line_ft == 30,
 		"in-flight shoe is not relocated by the player walking away (state %s, home %d)"
 		% [main.state, main.active_stand_line_ft])
-	main.origin.global_transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -3.048))
+	main.origin.global_transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -3.962))
 	var cycle30: float = await wait_rest_to_stand(14.0)
 	check(cycle30 >= 0.0 and cycle30 <= 1.2,
 		"short-line throw: rest -> next shoe grabbable in %.2f s (pass-3 budget)" % cycle30)
@@ -1290,7 +1357,7 @@ func _run() -> void:
 	check(main.state == "HELD" and main.active_stand_line_ft == 30
 		and main.shoe.global_position.distance_to(main.stand_tfs[40].origin) > 0.5,
 		"held shoe is never relocated (state %s, home %d)" % [main.state, main.active_stand_line_ft])
-	main.origin.global_transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -3.048))
+	main.origin.global_transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -3.962))
 	await wait_hand_still("R")
 	main.test_grip["R"] = 0.0
 	await frames(4)
@@ -1315,7 +1382,7 @@ func _run() -> void:
 	# follows the player, so the old hand-only teleport would be
 	# overruled by the restock watcher (in the headset the hand is
 	# never 3 m from the body anyway).
-	main.origin.global_transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -3.048))
+	main.origin.global_transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -3.962))
 	main.shoe.global_transform = main.stand_tfs[30]
 	await frames(2)
 	var toe30: Vector3 = main.shoe.zone_world_center("toe")
@@ -1501,98 +1568,101 @@ func _run() -> void:
 		{"owner": "P", "dist_in": 8.0, "ringer": false},
 		{"owner": "AI", "dist_in": 9.0, "ringer": false}]
 	main._score_inning()
-	check(main.phase == "SWAP" and main.last_scorer == "",
-		"game: a scoreless inning goes to the swap prompt")
-	main._complete_swap(true)
+	check(main.phase == "BACK" and main.last_scorer == "",
+		"game: a scoreless inning goes to the walk-back prompt (FP19: it posts at the pit, then he walks back)")
+	main._finish_inning_cycle()
 	check(main.inning == 2 and main.inning_first == "AI",
 		"game: after a scoreless inning the first throw alternates")
-	# Fix Pass 11: the swap re-seats the AI across the pit at the
-	# far end too (there its box is on +x, opposite the player's
-	# far-end rack).
-	var ai_far_d: float = Vector2(main.ai_pitcher.position.x,
-		main.ai_pitcher.position.z).distance_to(Vector2(0.0, main.game_line_z()))
-	check(ai_far_d >= 2.5 and main.ai_pitcher.position.x > 0.0,
-		"FP11: after the swap the AI is across the pit at the far end too (%.2f m from the stance centre, x %.2f)"
-		% [ai_far_d, main.ai_pitcher.position.x])
-	# Fix Pass 13: the far-end box meets the full layout rule
-	# too - behind that end's foul line, level with the
-	# player's far stance, >= 3.5 m across, facing home.
+	# Fix Pass 19: the cycle does NOT re-seat the AI - there is
+	# no other end. He is still in the one pitching-end box
+	# (FP11/FP13 asserted his far-end box after a swap; that
+	# end, and the swap, no longer exist).
+	check(main.ai_pitcher.position.distance_to(
+			AIPitcher.box_root(main.game_line_z())) < 0.05,
+		"FP19: after the cycle the AI is still in its pitching-end box (at %s)"
+		% str(main.ai_pitcher.position))
 	check_ai_box()
 
-	# ============ Fix Pass 12: the swap can't strand ============
-	# The field break: inning 1 ended, Chris walked the whole
-	# court, and nothing ever happened - no stocked shoes, the
-	# AI never re-seated. The arrival test was a pair of thin
-	# radial rings around the target stake (see _at_new_end in
-	# main.gd), and the old smoke "walk" teleported the origin
-	# into the ring. These checks reach the prompt the way the
-	# field does and leave it the way the field does.
-	manufacture_swap()
-	check(main.phase == "SWAP", "FP12: a scored inning reaches the swap prompt")
-	# Reference seat: the B button swap (the path that always
-	# worked) - where the gather puts the shoes and the AI.
+	# ============ Fix Pass 19: the walk cycle can't strand ============
+	# The FP12 doctrine, carried into the one-way game. FP12's
+	# field break: an inning ended, Chris walked the whole
+	# court, and nothing ever happened - the arrival test was
+	# a pair of thin radial rings (see _at_pit in main.gd) and
+	# the old smoke "walk" teleported into the ring. FP19's
+	# cycle has TWO arrivals (down to score, back to stock),
+	# both plain areas, and both are proven here the way the
+	# field does them: on the production sticks, full court.
+	manufacture_score_walk()
+	check(main.phase == "SCORE", "FP19: a thrown inning reaches the walk-down prompt")
+	# B no longer completes anything: in a game it LEAVES.
 	main.test_button["B"] = true
 	await frames(4)
 	main.test_button["B"] = false
 	await frames(4)
-	check(main.phase != "SWAP" and main.inning == 2,
-		"FP12: the B button completes the swap")
-	check(max_slot_error(false) < 0.01 and all_railed(),
-		"FP12: button swap stocks both pairs on the new end's racks (worst %.3f m)"
-		% max_slot_error(false))
-	var ref_ai_pos: Vector3 = main.ai_pitcher.position
-	# Arrival-area probe at the field's dead point: standing
-	# past the far pit, where the old ring read "not arrived"
-	# forever. (A probe of the arrival AREA - the walking
-	# itself is proven on the sticks just below.)
-	manufacture_swap()
+	check(main.mode == "PRACTICE",
+		"FP19: B in a game returns to practice - no button completes the cycle")
+	# Arrival-area probe at the field's old dead point: standing
+	# PAST the pit, where FP12's ring read "not arrived" forever.
+	# (A probe of the arrival AREA - the walking itself is
+	# proven on the sticks just below.)
+	manufacture_score_walk()
 	var dead_cam := Transform3D(Basis.IDENTITY, Vector3(0.0, 1.6, -13.4))
 	main.origin.global_transform = dead_cam * main.cam.transform.inverse()
 	await create_timer(0.3).timeout
-	check(main.phase != "SWAP",
-		"FP12: standing past the far pit completes the swap - the old ring's dead zone is gone")
-	# Let the AI's first turn run quiet before resetting under it.
-	var quiet12: float = 0.0
-	while quiet12 < 15.0 and (main.ai_pitcher.is_throwing() or not main.ai_flight.is_empty()):
-		await create_timer(0.25).timeout
-		quiet12 += 0.25
-	# The real walk: production sticks, full court, to the racks.
-	manufacture_swap()
-	var wres: Dictionary = await walk_swap_to_other_end(25.0)
-	check(bool(wres["fired"]),
-		"FP12: the stick walk down the court completes the swap (fired at z %.2f)"
-		% float(wres["fire_z"]))
-	check(float(wres["fire_z"]) < main.COURT_MID_Z,
-		"FP12: the walk swap fires on AREA - past centre, not at a destination pinpoint (z %.2f)"
-		% float(wres["fire_z"]))
-	check(bool(wres["arrived"]),
-		"FP12: the walk physically reaches the new end's racks area")
-	check(float(wres["slot_err"]) >= 0.0 and float(wres["slot_err"]) < 0.01
-		and bool(wres["railed"]),
-		"FP12: the walk swap stocks both pairs per owner at the new end (worst %.3f m)"
-		% float(wres["slot_err"]))
-	var walk_ai_pos: Vector3 = wres["ai_pos"]
-	check(walk_ai_pos.distance_to(ref_ai_pos) < 0.05,
-		"FP12: the walk swap seats the AI in his new-end box, same as the button (at %s, not midcourt)"
-		% str(walk_ai_pos))
-	# Inning 2 plays out from the walked-to end.
+	check(main.phase == "BACK" and main.score_opp == 3,
+		"FP19: standing past the pit posts the score on the spot - no dead zone (phase %s, opp %d)"
+		% [String(main.phase), main.score_opp])
+	# The real walks: down the court on the sticks to score,
+	# back up the court on the sticks to stock the next inning.
+	manufacture_score_walk()
+	var dres: Dictionary = await walk_down_to_pit(25.0)
+	check(bool(dres["fired"]),
+		"FP19: the stick walk down the court posts the score (fired at z %.2f)"
+		% float(dres["fire_z"]))
+	check(float(dres["fire_z"]) <= -8.9 and float(dres["fire_z"]) >= -9.6,
+		"FP19: the score posts on AREA at the pit's box zone - not up the lane, not at a pinpoint (z %.2f)"
+		% float(dres["fire_z"]))
+	check(bool(dres["arrived"]),
+		"FP19: the walk physically reaches the pit")
+	check(main.phase == "BACK" and main.score_opp == 3,
+		"FP19: the walked-down inning posted its manufactured score")
+	var bres: Dictionary = await walk_back_to_line(25.0)
+	check(bool(bres["fired"]),
+		"FP19: the stick walk back up the court stocks the next inning (fired at z %.2f)"
+		% float(bres["fire_z"]))
+	check(float(bres["fire_z"]) <= -3.7 and float(bres["fire_z"]) >= -4.3,
+		"FP19: the stocking fires on AREA at the pitching zone (z %.2f)"
+		% float(bres["fire_z"]))
+	check(bool(bres["arrived"]),
+		"FP19: the walk physically returns to the stance")
+	check(float(bres["slot_err"]) >= 0.0 and float(bres["slot_err"]) < 0.01
+		and bool(bres["railed"]),
+		"FP19: arrival stocks both pairs per owner on the stations (worst %.3f m)"
+		% float(bres["slot_err"]))
+	var back_ai_pos: Vector3 = bres["ai_pos"]
+	check(back_ai_pos.distance_to(AIPitcher.box_root(main.game_line_z())) < 0.05,
+		"FP19: the AI never left its box for the cycle (at %s)" % str(back_ai_pos))
+	check(main.inning == 2 and main.phase == "AI_TURN",
+		"FP19: inning 2 opens with the scorer (the AI) throwing first (inning %d, phase %s)"
+		% [main.inning, String(main.phase)])
+	# Inning 2 plays out from the line, end to end.
 	var guard12: int = 0
-	while main.phase != "SWAP" and main.phase != "OVER" and guard12 < 6:
+	while main.phase != "SCORE" and main.phase != "OVER" and guard12 < 6:
 		guard12 += 1
 		if main.phase == "P_TURN":
 			check(await scripted_game_throw(),
-				"FP12: inning 2 accepts the player's throws after the walk swap")
+				"FP19: inning 2 accepts the player's throws after the walked cycle")
 		elif main.phase == "AI_TURN":
 			var waited12: float = 0.0
 			while main.phase == "AI_TURN" and waited12 < 40.0:
 				await create_timer(0.5).timeout
 				waited12 += 0.5
 			check(main.phase != "AI_TURN",
-				"FP12: the AI plays its inning-2 turn after the walk swap")
+				"FP19: the AI plays its inning-2 turn after the walked cycle")
 		else:
 			break
-	check(main.phase == "SWAP" and main.inning == 2,
-		"FP12: inning 2 completes after the walk swap (inning %d, phase %s)"
+	check(main.phase == "SCORE" and main.inning == 2,
+		"FP19: inning 2 is thrown after the walked cycle (inning %d, phase %s)"
 		% [main.inning, String(main.phase)])
 
 	# ============ Fix Pass 13: the scoring audit ============
@@ -1614,7 +1684,7 @@ func _run() -> void:
 	# settle records read mid-inning, tag by tag.
 	main.start_game()
 	check(main.shoe.global_position.distance_to(
-		main.rack_slot_tf(true, 40, false, 0).origin) < 0.01,
+		main.rack_slot_tf(40, false, 0).origin) < 0.01,
 		"FP13 audit: the game stocks the active shoe on slot 0 of the turned rack")
 	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
 		main.shoe.zone_world_center("toe"))
@@ -1645,17 +1715,22 @@ func _run() -> void:
 		"FP13 audit (i): the AI's dud is recorded under the AI's tag")
 	check(await scripted_ai_throw("dud"),
 		"FP13 audit (i): AI dud two settles")
-	check(main.phase == "SWAP" and main.score_you == 3 and main.score_opp == 0
+	check(main.phase == "SCORE" and main.score_you == 0,
+		"FP19 audit (i): the thrown inning is NOT posted yet - in the one-pit game the score waits at the pit (phase %s, board %d-%d)"
+		% [String(main.phase), main.score_you, main.score_opp])
+	var dw_i: Dictionary = await walk_down_to_pit(25.0)
+	check(bool(dw_i["fired"]) and main.score_you == 3 and main.score_opp == 0
 		and main.last_inning_text == "YOU +3 (RINGER)",
-		"FP13 audit (i): player ringer vs two AI duds scores YOU +3 (board %d-%d, '%s')"
+		"FP13 audit (i): player ringer vs two AI duds scores YOU +3, posted at the pit (board %d-%d, '%s')"
 		% [main.score_you, main.score_opp, main.last_inning_text])
 	# (ii) Player point shoe only -> YOU +1.
 	main.start_game()
 	check(await play_scripted_inning(["point", "dud"], ["dud", "dud"]),
 		"FP13 audit (ii): the scripted inning plays out")
-	check(main.score_you == 1 and main.score_opp == 0
+	var dw_ii: Dictionary = await walk_down_to_pit(25.0)
+	check(bool(dw_ii["fired"]) and main.score_you == 1 and main.score_opp == 0
 		and main.last_inning_text == "YOU +1",
-		"FP13 audit (ii): a lone player point shoe scores YOU +1 (board %d-%d, '%s')"
+		"FP13 audit (ii): a lone player point shoe scores YOU +1, posted at the pit (board %d-%d, '%s')"
 		% [main.score_you, main.score_opp, main.last_inning_text])
 	# (iv) Cross-check the other direction: an AI ringer
 	# through the production swing path stands against the
@@ -1664,13 +1739,16 @@ func _run() -> void:
 	main.start_game()
 	check(await play_scripted_inning(["point", "dud"], ["ringer", "dud"]),
 		"FP13 audit (iv): the cross-check inning plays out")
-	check(main.score_you == 0 and main.score_opp == 3
+	var dw_iv: Dictionary = await walk_down_to_pit(25.0)
+	check(bool(dw_iv["fired"]) and main.score_you == 0 and main.score_opp == 3
 		and main.last_inning_text == "OPP +3 (OPP RINGER)",
-		"FP13 audit (iv): AI ringer vs player point shoe scores OPP +3, player shut out (board %d-%d, '%s')"
+		"FP13 audit (iv): AI ringer vs player point shoe scores OPP +3, player shut out, posted at the pit (board %d-%d, '%s')"
 		% [main.score_you, main.score_opp, main.last_inning_text])
 	# (iii) A scripted full game the PLAYER wins, hand-tracked:
 	# ringer + dud vs dud + dud every inning = YOU +3 a round,
-	# seven innings = 21-0, across B-button end swaps both ways.
+	# seven innings = 21-0, every inning scored by the walk
+	# down and stocked by the walk back (Fix Pass 19's one-way
+	# cycle, walked in full seven times).
 	main.start_game()
 	var expect_you: int = 0
 	var innings_ok: bool = true
@@ -1679,14 +1757,19 @@ func _run() -> void:
 			innings_ok = false
 			break
 		expect_you += 3
+		if String(main.phase) == "SCORE":
+			var dw_iii: Dictionary = await walk_down_to_pit(25.0)
+			if not bool(dw_iii["fired"]):
+				innings_ok = false
+				break
 		if main.score_you != expect_you or main.score_opp != 0:
 			innings_ok = false
 			break
-		if String(main.phase) == "SWAP":
-			main.test_button["B"] = true
-			await frames(4)
-			main.test_button["B"] = false
-			await frames(4)
+		if String(main.phase) == "BACK":
+			var bw_iii: Dictionary = await walk_back_to_line(25.0)
+			if not bool(bw_iii["fired"]):
+				innings_ok = false
+				break
 	check(innings_ok and main.phase == "OVER",
 		"FP13 audit (iii): every scripted inning lands its hand-tracked +3 (final phase %s, inning %d)"
 		% [String(main.phase), main.inning])
@@ -1739,29 +1822,23 @@ func _run() -> void:
 	check(absf(wrapf(yaw15b - yaw15a, -PI, PI)) > 0.5,
 		"FP15: the turns still turned with the head pitched (%.2f rad)"
 		% wrapf(yaw15b - yaw15a, -PI, PI))
-	# (b) THE GUILTY PATH: the B-tap swap, head pitched 12 deg.
-	manufacture_swap()
+	# (b) THE GUILTY PATH IS GONE (Fix Pass 19): the B-swap
+	# seat was deleted with the two-pit game - nothing seats
+	# the player anywhere any more, so no path can write a
+	# pitched head into the origin. What B does now, with the
+	# head pitched 12 deg at the tap: it just leaves the game.
+	# (The seat's own checks retire with it; the guard (c) and
+	# the walked cycle (d) carry the FP15 surface now.)
+	manufacture_score_walk()
 	pitch_head(12.0)
-	check(main.phase == "SWAP", "FP15: the swap prompt is up")
+	check(main.phase == "SCORE", "FP19: the walk-down prompt is up")
 	main.test_button["B"] = true
 	await frames(4)
 	main.test_button["B"] = false
 	await frames(4)
-	check(main.phase != "SWAP" and main.inning == 2,
-		"FP15: the B swap still completes with the head pitched")
-	check_origin_level("FP15: the B-tap swap seats a LEVEL origin, head pitched 12 deg")
-	# The seat still lands where it always did: a step behind
-	# the new end's foul line, facing the target stake.
-	var seat_spot_z: float = main.game_line_z() + (0.55 if main.target_far else -0.55)
-	check(absf(main.cam.global_position.z - seat_spot_z) < 0.03,
-		"FP15: the seat lands a step behind the new line (z %.2f, spot %.2f)"
-		% [main.cam.global_position.z, seat_spot_z])
-	var cam_yaw15: float = atan2(main.cam.global_transform.basis.z.x,
-		main.cam.global_transform.basis.z.z)
-	var want_cam_yaw15: float = 0.0 if main.target_far else PI
-	check(absf(wrapf(cam_yaw15 - want_cam_yaw15, -PI, PI)) < 0.02,
-		"FP15: the seated camera faces the target (yaw %.3f, want %.3f)"
-		% [cam_yaw15, want_cam_yaw15])
+	check(main.mode == "PRACTICE",
+		"FP19: B with the head pitched just leaves the game - no seat exists to tilt")
+	check_origin_level("FP19: B leaves a LEVEL origin, head pitched 12 deg")
 	# (c) The guard: a tilt arriving by ANY path is stripped
 	# within a physics frame and the repair counted; with the
 	# guard off the same tilt PERSISTS (the negative control
@@ -1792,23 +1869,26 @@ func _run() -> void:
 	await physics_frame
 	await physics_frame
 	check_origin_level("FP15: the guard heals it again when re-enabled")
-	# (d) The WALKED swap, head pitched 13 deg the whole way
+	# (d) The WALKED cycle, head pitched 13 deg the whole way
 	# down the court (the FP12 walk, head down at the shoes).
 	await wait_ai_quiet()
-	manufacture_swap()
+	manufacture_score_walk()
 	pitch_head(13.0)
-	var wres15: Dictionary = await walk_swap_to_other_end(25.0)
-	check(bool(wres15["fired"]) and bool(wres15["arrived"]),
-		"FP15: the walked swap completes with the head pitched 13 deg")
-	check_origin_level("FP15: the walked swap leaves the origin level")
-	# (e) A FULL GAME with the head pitched 12 deg at every
-	# B-tap swap (the FP13 audit game's shape): level after
-	# every operation and at game end.
+	var dres15: Dictionary = await walk_down_to_pit(25.0)
+	check(bool(dres15["fired"]) and bool(dres15["arrived"]),
+		"FP15/19: the walked score-down completes with the head pitched 13 deg")
+	check_origin_level("FP15/19: the walked score-down leaves the origin level")
+	var bres15: Dictionary = await walk_back_to_line(25.0)
+	check(bool(bres15["fired"]) and bool(bres15["arrived"]),
+		"FP15/19: the walked return completes with the head pitched")
+	check_origin_level("FP15/19: the walked return leaves the origin level")
+	# (e) A FULL GAME with the head pitched 12 deg through
+	# every walk cycle (the FP13 audit game's shape): level
+	# after every operation and at game end. (Fix Pass 19: the
+	# B-tap seats this section was built around no longer
+	# exist; the walks - turns and locomotion under a pitched
+	# head - are the full-game origin surface now.)
 	await wait_ai_quiet()
-	# Start from the home stance: the walked swap above left
-	# the player standing AT the far end, where every swap
-	# would complete by ARRIVAL on the spot and the seat -
-	# the path this section exists to test - would never run.
 	main.origin.global_transform = Transform3D.IDENTITY
 	pitch_head(12.0)
 	main.start_game()
@@ -1821,55 +1901,42 @@ func _run() -> void:
 			break
 		if tilt_of(main.origin.global_transform.basis) >= 0.005:
 			tilt_ok15 = false
-		if String(main.phase) == "SWAP":
-			main.test_button["B"] = true
-			await frames(4)
-			main.test_button["B"] = false
-			await frames(4)
+		if String(main.phase) == "SCORE":
+			var dw15: Dictionary = await walk_down_to_pit(25.0)
+			if not bool(dw15["fired"]):
+				tilt_ok15 = false
+				break
+			if tilt_of(main.origin.global_transform.basis) >= 0.005:
+				tilt_ok15 = false
+		if String(main.phase) == "BACK":
+			var bw15: Dictionary = await walk_back_to_line(25.0)
+			if not bool(bw15["fired"]):
+				tilt_ok15 = false
+				break
 			if tilt_of(main.origin.global_transform.basis) >= 0.005:
 				tilt_ok15 = false
 	check(tilt_ok15 and main.phase == "OVER" and main.score_you == 21,
-		"FP15: a full game, head pitched 12 deg at every swap, stays level and ends 21-0")
-	check_origin_level("FP15: origin level at game end")
+		"FP15/19: a full game, head pitched 12 deg through every walk, stays level and ends 21-0")
+	check_origin_level("FP15/19: origin level at game end")
 	main.cam.transform = Transform3D.IDENTITY
 
-	# ============ Backyard Game v1: a full game ============
+	# ============ Backyard Game v1 / Fix Pass 19: a full game ============
 	# Scripted player throws (production input path) + the AI's
-	# own turns drive a complete game to a winner. End swaps
-	# alternate between the B button and walking there.
+	# own turns drive a complete game to a winner, ONE-WAY:
+	# every inning is thrown from the pitching end, scored by
+	# walking down to the pit, and stocked by walking back.
+	# The player starts where a fresh game starts - standing
+	# at the pitching end. (FP15 (e) left him at the pit; from
+	# there he is standing IN the lane, and the AI quite
+	# correctly holds its throws at him forever.)
+	main.origin.global_transform = Transform3D.IDENTITY
 	main.start_game()
-	var saw_far_target: bool = false
-	var swap_methods: Array = []
 	var guard_innings: int = 0
 	while main.phase != "OVER" and guard_innings < 40:
 		guard_innings += 1
-		if main.phase == "SWAP":
-			if main.inning % 2 == 1:
-				main.test_button["B"] = true
-				await frames(4)
-				main.test_button["B"] = false
-				await frames(4)
-				swap_methods.append("button")
-			else:
-				# Fix Pass 12: a REAL walk on the production
-				# sticks. v1 teleported the origin into the
-				# arrival ring and called it walking - which
-				# is exactly how the field strand shipped
-				# green.
-				var wres2: Dictionary = await walk_swap_to_other_end(25.0)
-				check(bool(wres2["fired"]) and bool(wres2["arrived"]),
-					"game: the walk swap was walked, not teleported (fired at z %.2f)"
-					% float(wres2["fire_z"]))
-				swap_methods.append("walk")
-			check(main.phase != "SWAP",
-				"game: end swap completed (%s)" % String(swap_methods[swap_methods.size() - 1]))
-		if not main.target_far:
-			saw_far_target = true
-		# Play out the inning in whichever order the first-throw
-		# rule dictates: turns alternate within the inning.
 		var inning_no: int = main.inning
 		var turn_guard: int = 0
-		while main.phase != "SWAP" and main.phase != "OVER" and turn_guard < 6:
+		while main.phase != "SCORE" and main.phase != "OVER" and turn_guard < 6:
 			turn_guard += 1
 			if main.phase == "P_TURN":
 				check(await scripted_game_throw(),
@@ -1883,16 +1950,24 @@ func _run() -> void:
 					"game: the AI's turn completes (inning %d)" % inning_no)
 			else:
 				break
-		check(main.phase == "SWAP" or main.phase == "OVER",
-			"game: inning %d completes" % inning_no)
+		check(main.phase == "SCORE" or main.phase == "BACK" or main.phase == "OVER",
+			"game: inning %d is thrown (BACK = the score posted on the spot - the player was already at the pit)" % inning_no)
+		if main.phase == "SCORE":
+			var dw2: Dictionary = await walk_down_to_pit(25.0)
+			check(bool(dw2["fired"]) and bool(dw2["arrived"]),
+				"game: the score walk was walked, not teleported (posted at z %.2f)"
+				% float(dw2["fire_z"]))
+		if main.phase == "BACK":
+			var bw2: Dictionary = await walk_back_to_line(25.0)
+			check(bool(bw2["fired"]) and bool(bw2["arrived"]),
+				"game: the walk back was walked, and stocks the next inning")
+		check(main.phase != "SCORE" and main.phase != "BACK",
+			"game: inning %d completes its one-way cycle" % inning_no)
 	check(main.phase == "OVER",
 		"game: a full game reaches a winner (final %d-%d in %d innings)"
 		% [main.score_you, main.score_opp, main.inning])
 	check(maxi(main.score_you, main.score_opp) >= 21,
 		"game: the winner reached 21 or more")
-	check(saw_far_target, "game: innings alternate ends (home-stake innings happened)")
-	check(swap_methods.has("button") and swap_methods.has("walk"),
-		"game: end swaps worked by button AND by walking %s" % str(swap_methods))
 	main.test_button["B"] = true
 	await frames(4)
 	main.test_button["B"] = false
@@ -1902,7 +1977,7 @@ func _run() -> void:
 		"game: the practice board readouts are back")
 	check(main.state == "STAND"
 		and main.shoe.global_position.distance_to(
-			main.rack_slot_tf(main.stock_target_far, main.active_stand_line_ft,
+			main.rack_slot_tf(main.active_stand_line_ft,
 				false, main._pair_index_of(main.shoe)).origin) < 0.01,
 		"game: practice after the game stocks the shoe on the rail as before")
 

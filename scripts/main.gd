@@ -1,15 +1,20 @@
 extends Node3D
 
 ## VR Horseshoes - Backyard Game v1.
-## The DE toss test grew a game: a full two-pit court, pairs of
-## shoes on rail stands, NHPA cancellation scoring to 21 against
-## a visible AI club player. The judged core is untouched and
-## stays guarded by the suites: zone-snap grab + sticky slide
-## (GrabState/Shoe), windowed release sampling (ThrowMath), the
-## honest rigid-body shoe (zero damping, stake sweep guard), the
-## JSONL recorder, standard twin-stick movement, and the in-world
-## scoreboard. PRACTICE mode is the old test, exactly: free
-## throwing with per-throw readouts.
+## The DE toss test grew a game in a ONE-PIT backyard (Fix
+## Pass 19, the real backyard form): one timber sand pit,
+## true foul lines at the pitching end, NHPA cancellation
+## scoring to 21 against a visible AI club player, and a
+## one-way inning rhythm - both pitchers throw from the line
+## end, the player walks down to the pit to score the inning,
+## walks back, and the next inning stocks. The judged core is
+## untouched and stays guarded by the suites: zone-snap grab
+## + sticky slide (GrabState/Shoe), windowed release sampling
+## (ThrowMath), the honest rigid-body shoe (zero damping,
+## stake sweep guard), the JSONL recorder, standard
+## twin-stick movement, and the in-world scoreboard. PRACTICE
+## mode is the old test, exactly: free throwing with
+## per-throw readouts.
 ##
 ## Rig binding is FIELD-CENSUS settled (VR Baseball Duel, same rig:
 ## Quest 3 + Virtual Desktop/VDXR + Godot 4.7): hands register as
@@ -137,16 +142,16 @@ var _wait_time: float = 0.0
 
 # --- Backyard Game v1 state ---
 # mode: "PRACTICE" (the old test) or "GAME". In GAME, phase runs
-# the loop: "P_TURN" -> "AI_TURN" (order set by inning_first) ->
-# "SCORE" (instant) -> "SWAP" (prompt) -> next inning, or
-# "OVER". Innings pitch from one end: target_far says which
-# stake is being thrown at; the throwing end alternates.
+# the one-way loop (Fix Pass 19): "P_TURN" -> "AI_TURN" (order
+# set by inning_first) -> "SCORE" (the player walks down to the
+# pit; the inning posts on arrival) -> "BACK" (he walks back to
+# the line; arrival stocks the next inning) -> next inning, or
+# "OVER". The AI never leaves the pitching end.
 var mode: String = "PRACTICE"
 var phase: String = ""
 var inning: int = 0
 var score_you: int = 0
 var score_opp: int = 0
-var target_far: bool = true # throwing at the FAR stake this inning
 var inning_first: String = "P" # who throws first this inning
 var turn_side: String = "" # side currently throwing
 var turn_throws_left: int = 0
@@ -1112,7 +1117,7 @@ func _build_board() -> void:
 	status_label.position = Vector3(0.0, 2.06, 0.01)
 	board_root.add_child(status_label)
 	controls_label = Label3D.new()
-	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON: start game / play again\nB BUTTON: swap ends when prompted\nRECENTER: menu long-press - seated/standing ok"
+	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON: start game / play again\nB BUTTON: back to practice (in a game)\nRECENTER: menu long-press - seated/standing ok"
 	controls_label.font_size = 30
 	controls_label.pixel_size = 0.00095
 	controls_label.line_spacing = 1.0
@@ -1158,13 +1163,25 @@ func _update_board() -> void:
 			"A: PLAY AGAIN",
 			"B: PRACTICE",
 		]
-	elif phase == "SWAP":
+	elif phase == "SCORE":
+		# Fix Pass 19: both sides have thrown; the inning posts
+		# when the player walks down to the pit and scores it.
+		lines = [
+			"YOU %d - %d OPP" % [score_you, score_opp],
+			"INNING %d THROWN" % inning,
+			"LAST: %s" % dist_text,
+			"FLIP: %s" % flip_text,
+			"TURN: %s" % turn_text,
+			"WALK DOWN TO SCORE",
+		]
+		if last_ringer:
+			lines.append("RINGER!")
+	elif phase == "BACK":
 		lines = [
 			"YOU %d - %d OPP" % [score_you, score_opp],
 			"INNING %d DONE" % inning,
 			"LAST INNING: %s" % last_inning_text,
-			"THROW FROM THE OTHER END",
-			"B: SWAP ENDS - OR WALK THERE",
+			"WALK BACK TO THE LINE",
 		]
 	else:
 		var turn_text2: String = "YOUR THROW %d OF 2" % (3 - turn_throws_left) \
@@ -1225,7 +1242,7 @@ func _build_ai() -> void:
 	ai_pitcher = AIPitcher.new()
 	ai_pitcher.name = "AIPitcher"
 	add_child(ai_pitcher)
-	ai_pitcher.place_at(1, FOUL_40_Z)
+	ai_pitcher.place_at(FOUL_40_Z)
 
 
 # --- Hand access (test overrides first, then the real controllers) ---
@@ -1267,8 +1284,10 @@ func _stick_value(hand: String) -> Vector2:
 
 
 ## Game buttons (Backyard Game v1): A/X = start game / play
-## again, B/Y = swap ends / back to practice - the board lists
-## both, in the controls and at each prompt. Either hand counts.
+## again, B/Y = back to practice - the board lists both.
+## Either hand counts. Fix Pass 19: B lost the end-swap (the
+## one-way court has no other end) - in a game, at any phase,
+## B returns to practice; in practice B does nothing.
 func _button_down(btn: String) -> bool:
 	if test_button.has(btn):
 		return bool(test_button[btn])
@@ -1293,10 +1312,7 @@ func _poll_buttons() -> void:
 		elif mode == "GAME" and phase == "OVER":
 			start_game()
 	if b_edge and mode == "GAME":
-		if phase == "SWAP":
-			_complete_swap(false)
-		elif phase == "OVER":
-			_enter_practice()
+		_enter_practice()
 
 
 func _track_hand_speed(hand: String) -> void:
@@ -1696,11 +1712,17 @@ func _physics_process(delta: float) -> void:
 			if _wait_time > RETURN_WAIT_SEC:
 				_return_to_stand()
 	_track_ai_flights(delta)
-	if mode == "GAME" and phase == "SWAP" and _at_new_end():
-		# Walking there manually also works: arrival anywhere in
-		# the new end's half of the court ends the swap without
-		# the button (Fix Pass 12 - see _at_new_end).
-		_complete_swap(true)
+	if mode == "GAME":
+		# Fix Pass 19's one-way rhythm: the inning posts when
+		# the player walks down to the pit, and the next inning
+		# stocks when he walks back to the line. Both arrivals
+		# are AREA tests checked every physics frame (the FP12
+		# doctrine - see _at_pit), so a player already standing
+		# there when the phase changes completes it on the spot.
+		if phase == "SCORE" and _at_pit():
+			_score_inning()
+		elif phase == "BACK" and _at_pitching_zone():
+			_finish_inning_cycle()
 
 
 func _settle_throw() -> void:
@@ -1801,14 +1823,6 @@ func game_line_z() -> float:
 	return line_z_for_ft(40)
 
 
-func game_end_sign() -> int:
-	# Fix Pass 19: one-way play - the pitching end is the only
-	# end, and it throws toward -z. (Retired with the swap in
-	# the flow rework; the AI rework derives its box from the
-	# line alone.)
-	return 1
-
-
 ## Clean reset: every shoe frozen onto its rail slot at the
 ## given stock point, the player's first shoe active.
 func _gather_to_rail(line_ft: int) -> void:
@@ -1830,6 +1844,11 @@ func _gather_to_rail(line_ft: int) -> void:
 	release_cache.clear()
 	ai_flight.clear()
 	ai_throw_pending = false
+	# A swing already animating keeps its callbacks: with the
+	# pending shoe cleared, its release call lands on the
+	# null guard in _ai_release_now and does nothing.
+	ai_pending_shoe = null
+	ai_pending_release = {}
 	state = "STAND"
 
 
@@ -1838,14 +1857,13 @@ func start_game() -> void:
 	score_you = 0
 	score_opp = 0
 	inning = 1
-	target_far = true
 	inning_first = "P"
 	last_scorer = ""
 	last_inning_text = ""
 	winner_text = ""
 	inning_results.clear()
 	_gather_to_rail(40)
-	ai_pitcher.place_at(1, game_line_z())
+	ai_pitcher.place_at(game_line_z())
 	_begin_turn("P")
 	_update_board()
 
@@ -1864,7 +1882,7 @@ func _enter_practice() -> void:
 	else:
 		_gather_to_rail(active_stand_line_ft)
 	grab_armed = true
-	ai_pitcher.place_at(1, game_line_z())
+	ai_pitcher.place_at(game_line_z())
 	_update_board()
 
 
@@ -1906,7 +1924,17 @@ func _on_turn_shoe_settled(side: String) -> void:
 	if turn_side == inning_first:
 		_begin_turn("AI" if turn_side == "P" else "P")
 	else:
-		_score_inning()
+		_begin_score_walk()
+
+
+## Both sides have thrown (Fix Pass 19): the inning is on the
+## ground at the pit, unscored, until the player walks down
+## and scores it - the one-pit rhythm. The board prompts the
+## walk; _physics_process watches for his arrival.
+func _begin_score_walk() -> void:
+	phase = "SCORE"
+	grab_armed = false
+	_update_board()
 
 
 func _score_inning() -> void:
@@ -1921,64 +1949,61 @@ func _score_inning() -> void:
 		phase = "OVER"
 		winner_text = "YOU WIN!" if score_you > score_opp else "OPP WINS"
 	else:
-		phase = "SWAP"
+		phase = "BACK"
 	_update_board()
 
 
-const COURT_MID_Z: float = -6.096 # halfway between the two stakes
-const SWAP_PIT_RADIUS_M: float = 3.0 # "at the new end's pit" radius
+const PIT_ARRIVAL_RADIUS_M: float = 3.0 # "at the pit" - its box zone, generously
+const LINE_ARRIVAL_RADIUS_M: float = 3.0 # "back at the pitching end"
 
 
-## Has the player reached the NEW throwing end? (Fix Pass 12.)
-## An AREA test, deliberately generous: past the court's centre
-## line toward the new end, or within a few metres of the new
-## end's pit - whichever he satisfies first. During SWAP,
-## target_far still names the inning just played, so the new
-## end is the OTHER one. The test runs every physics frame, so
-## a player who ambled down during the AI's throws and is
-## already standing there when the inning scores completes the
-## swap on the spot - there is no dead state.
+## Has the player walked down to the pit? (Fix Pass 19, on
+## Fix Pass 12's doctrine.) An AREA test - a plain radius
+## around the stake - checked every physics frame during the
+## SCORE phase: arrive anywhere in the pit's box zone and
+## the inning posts. A radius has no dead annulus and no
+## pinpoint to miss, and a player already standing there
+## when the last shoe settles scores on the spot.
 ##
-## Defect history (the field break this replaces): v1 read
-## arrival with ThrowMath.standing_line_ft against the new
-## TARGET stake - a pair of thin radial RINGS (+/-0.75 m around
-## the exact 30/40 ft distances) with a dead annulus between
-## them (distances 9.9-11.4 m read "neither line") and dead
-## space everywhere past the far stake (> 12.94 m). A player
-## could walk the whole court, stand at the far pit inspecting
-## it, or come back to the racks from the board side, and read
-## "not arrived" forever: no gather, no stocked shoes, the AI
+## Defect history (why arrival tests here are areas, walked
+## by the suites on production sticks, never teleports): v1
+## read end-swap arrival with ThrowMath.standing_line_ft - a
+## pair of thin radial RINGS (+/-0.75 m around exact line
+## distances) with dead space between and past them. A player
+## could walk the whole court, stand at the pit inspecting
+## it, or come back from the board side, and read "not
+## arrived" forever: no gather, no stocked shoes, the AI
 ## never re-seated (Chris, 2026-11-03: "once shoes are thrown
 ## we all just stand around wondering what next, no new
-## shoes"). And the v1/FP11 smoke never caught it: its "walk"
-## check teleported the origin to a point hand-picked inside
-## the ring and called that walking. The FP12 smoke walks the
-## court on the stick for real.
-func _at_new_end() -> bool:
+## shoes"). The v1/FP11 smoke never caught it: its "walk"
+## check teleported the origin into the ring's centre.
+func _at_pit() -> bool:
 	var cp: Vector3 = cam.global_position
-	var pit: Vector3 = STAKE_POS
-	if Vector2(cp.x - pit.x, cp.z - pit.z).length() <= SWAP_PIT_RADIUS_M:
-		return true
-	return cp.z < COURT_MID_Z if target_far else cp.z > COURT_MID_Z
+	return Vector2(cp.x - STAKE_POS.x, cp.z - STAKE_POS.z).length() \
+		<= PIT_ARRIVAL_RADIUS_M
 
 
-## End the between-innings prompt: flip the throwing end,
-## gather the shoes to its rail, put the AI in its box, and
-## start the next inning with whoever scored (NHPA custom;
-## scoreless innings alternate the first throw).
-func _complete_swap(arrived: bool) -> void:
-	if phase != "SWAP":
+## Has the player walked back to the pitching end? The same
+## area doctrine, around the 37 ft line's spot: arrival
+## stocks the next inning (see _finish_inning_cycle).
+func _at_pitching_zone() -> bool:
+	var cp: Vector3 = cam.global_position
+	return Vector2(cp.x, cp.z - FOUL_40_Z).length() <= LINE_ARRIVAL_RADIUS_M
+
+
+## End the walk-back: gather the shoes to the pitching end's
+## stations, and start the next inning with whoever scored
+## (NHPA custom; scoreless innings alternate the first
+## throw). The AI never moved - it lives at this end now.
+func _finish_inning_cycle() -> void:
+	if phase != "BACK":
 		return
-	target_far = not target_far
 	inning += 1
 	if last_scorer != "":
 		inning_first = last_scorer
 	else:
 		inning_first = "AI" if inning_first == "P" else "P"
 	_gather_to_rail(40)
-	ai_pitcher.place_at(game_end_sign(), game_line_z())
-	if not arrived:
-		_move_player_to_end()
 	_begin_turn(inning_first)
 	_update_board()
 
@@ -2011,23 +2036,6 @@ func _origin_pitch_roll() -> Vector2:
 		snappedf(rad_to_deg(asin(clampf(b.x.y, -1.0, 1.0))), 0.01))
 
 
-func _move_player_to_end() -> void:
-	var cx: float = clampf(cam.global_position.x, -0.6, 0.6)
-	var spot_z: float = game_line_z() + (0.55 if target_far else -0.55)
-	var yaw: float = 0.0 if target_far else PI
-	# Fix Pass 15: seat through Locomotion.seat_transform, which
-	# takes only the head's HEADING from its pose. The old seat,
-	# want_cam * cam.transform.inverse(), multiplied by the
-	# inverse of the head's full local rotation, so whatever
-	# pitch/roll the head held at the tap (looking down at the
-	# pit, ~10 deg) was written into the origin's basis and
-	# stayed there - the world slanted for the rest of the
-	# session. Reproduced headlessly pre-fix: a 12 deg pitched
-	# head at the B tap left the origin tilted 12.27 deg.
-	origin.global_transform = Locomotion.seat_transform(
-		cam.transform, Vector3(cx, cam.global_position.y, spot_z), yaw)
-
-
 ## The lane the AI is about to throw down: the corridor between
 ## the foul line and the target stake. The AI holds its throw
 ## while the player stands in it.
@@ -2058,9 +2066,8 @@ func _ai_next_throw() -> void:
 			break
 	if next_shoe == null:
 		return
-	var end_sign: int = game_end_sign()
-	ai_pitcher.place_at(end_sign, game_line_z())
-	var from_pos: Vector3 = AIPitcher.release_base_pos(end_sign, game_line_z())
+	ai_pitcher.place_at(game_line_z())
+	var from_pos: Vector3 = AIPitcher.release_base_pos(game_line_z())
 	var rel: Dictionary = AIPitcher.sample_release(ai_rng, from_pos, target_stake_pos())
 	ai_pending_shoe = next_shoe
 	ai_pending_release = rel

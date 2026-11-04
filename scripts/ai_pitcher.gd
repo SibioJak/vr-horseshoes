@@ -84,29 +84,24 @@ var _released: bool = false
 var _idle_t: float = 0.0
 
 
-## Where the AI stands when it pitches from an end (Fix Pass
-## 13, Chris's layout call: SAME END, OPPOSITE SIDES, real
-## singles): his box sits BEHIND the foul line at the player's
-## own stance depth - the same 0.55 m behind the line the game
-## seats the player at (main's _move_player_to_end) - on the
-## side of the court opposite the player's rack, with 3.6 m of
-## lateral separation from the stance centre (pit width plus
-## both boxes). FP11 put him across the pit but UP BESIDE it -
-## rooted level with the pit sand, his release a step in FRONT
-## of the line - and he still read as standing on the player's
-## side of the game ("both players are still on same side").
-## The box root is the anchor now; the release point is
-## DERIVED from it (the hand tip at the release arm angle), so
-## the character can never drift away from his box again.
-## end_sign: +1 = home end (throws toward -z), -1 = far end.
-const BOX_SIDE_X: float = 3.6
+## Where the AI stands when it pitches (Fix Pass 19: the one
+## pitching end, on the lane's other side from the player,
+## ~1.6 m away - main's AI_SPOT_X, mirrored here because this
+## script cannot reach back into main). His box sits BEHIND
+## the 37 ft line at the player's own stance depth, the same
+## 0.55 m behind the line. FP13 put him 3.6 m across at both
+## ends of a two-pit court; that separation was the diagonal
+## Chris saw the AI throwing on. At 1.6 m his throw runs
+## near-parallel to the player's, a few degrees of converge.
+## The box root is the anchor; the release point is DERIVED
+## from it (the hand tip at the release arm angle), so the
+## character can never drift away from his box.
+const BOX_X: float = -0.8
 const BOX_DEPTH: float = 0.55
 
 
-static func box_root(end_sign: int, line_z: float) -> Vector3:
-	var travel: float = -float(end_sign)
-	return Vector3(-BOX_SIDE_X * float(end_sign), 0.0,
-		line_z - travel * BOX_DEPTH)
+static func box_root(line_z: float) -> Vector3:
+	return Vector3(BOX_X, 0.0, line_z + BOX_DEPTH)
 
 
 ## The swing's release point: the hand tip at the release arm
@@ -116,13 +111,12 @@ static func box_root(end_sign: int, line_z: float) -> Vector3:
 ## animated hand tip and this point coincide (the same
 ## guarantee FP11's solve-the-root-from-the-release gave,
 ## run the other way).
-static func release_base_pos(end_sign: int, line_z: float) -> Vector3:
-	var root: Vector3 = box_root(end_sign, line_z)
-	var travel: float = -float(end_sign)
+static func release_base_pos(line_z: float) -> Vector3:
+	var root: Vector3 = box_root(line_z)
 	return Vector3(
-		root.x + SHOULDER_LOCAL.x * float(end_sign),
+		root.x + SHOULDER_LOCAL.x,
 		SHOULDER_LOCAL.y - ARM_LEN * cos(A_RELEASE),
-		root.z + travel * ARM_LEN * sin(A_RELEASE))
+		root.z - ARM_LEN * sin(A_RELEASE))
 
 
 ## The un-sampled "good flip": ballistic velocity that crosses
@@ -248,13 +242,13 @@ func _ready() -> void:
 	_arm_pivot.add_child(hand)
 
 
-## Stand in the end's box (Fix Pass 13: behind the foul line,
-## level with the player's stance depth, opposite side of the
-## court) facing the target stake down-lane.
-func place_at(end_sign: int, line_z: float) -> void:
-	var travel: float = -float(end_sign)
-	position = box_root(end_sign, line_z)
-	rotation = Vector3(0.0, 0.0 if travel < 0.0 else PI, 0.0)
+## Stand in the box (Fix Pass 19: behind the 37 ft line,
+## level with the player's stance depth, on the lane's other
+## side) facing the pit down-lane. He never seats anywhere
+## else now - the one-way court has one pitching end.
+func place_at(line_z: float) -> void:
+	position = box_root(line_z)
+	rotation = Vector3.ZERO
 
 
 func hand_tip_transform() -> Transform3D:
