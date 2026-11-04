@@ -661,33 +661,26 @@ func test_scoring() -> void:
 func test_ai_release() -> void:
 	# The AI's constructed release: a ballistic flip that crosses
 	# the target stake's plane at scoring height, spinning about
-	# the shoe's lateral axis toward the target - both directions.
-	var far_stake := Vector3(0.0, 0.05, -12.192)
+	# the shoe's lateral axis toward the target. Fix Pass 19:
+	# one-way only - the far-end mirror case is RETIRED with the
+	# two-pit court (there is no far-end throw to mirror), and
+	# the release is derived from the AI's real box at the true
+	# 37 ft line.
+	var far_stake := Vector3(0.0, 0.0, -12.192)
 	var rel: Dictionary = AIPitcher.base_release(
-		AIPitcher.release_base_pos(1, 0.0), far_stake)
+		AIPitcher.release_base_pos(-0.914), far_stake)
 	var p0: Vector3 = rel["pos"]
 	var v0: Vector3 = rel["vel"]
-	check(v0.z < 0.0, "AI release: home-end throw travels toward -z")
+	check(v0.z < 0.0, "AI release: the throw travels toward -z (the one-way court)")
 	var t_cross: float = (far_stake.z - p0.z) / v0.z
 	var y_cross: float = p0.y + v0.y * t_cross - 4.9 * t_cross * t_cross
 	check(absf(y_cross - AIPitcher.ARRIVE_H) < 0.02,
-		"AI release: crosses the far stake plane at ARRIVE_H (got %.2f)" % y_cross)
+		"AI release: crosses the stake plane at ARRIVE_H (got %.2f)" % y_cross)
 	check(absf(p0.x + v0.x * t_cross) < 0.01,
-		"AI release: crosses the far stake plane on the centre line")
+		"AI release: crosses the stake plane on the centre line (from its off-centre box)")
 	check((rel["ang"] as Vector3).x > 0.0
 		and absf((rel["ang"] as Vector3).length() - TAU / AIPitcher.FLIGHT_T) < 0.01,
 		"AI release: one flip revolution per flight at the FLIGHT_T cadence, about the travel frame's lateral axis")
-	var home_stake := Vector3(0.0, 0.05, 0.0)
-	var rel2: Dictionary = AIPitcher.base_release(
-		AIPitcher.release_base_pos(-1, -12.192), home_stake)
-	var p1: Vector3 = rel2["pos"]
-	var v1: Vector3 = rel2["vel"]
-	check(v1.z > 0.0 and (rel2["ang"] as Vector3).x < 0.0,
-		"AI release: far-end throw mirrors (travels +z, spin flips sign)")
-	var t2: float = (home_stake.z - p1.z) / v1.z
-	var y2: float = p1.y + v1.y * t2 - 4.9 * t2 * t2
-	check(absf(y2 - AIPitcher.ARRIVE_H) < 0.02,
-		"AI release: crosses the home stake plane at ARRIVE_H (got %.2f)" % y2)
 
 
 func _run() -> void:

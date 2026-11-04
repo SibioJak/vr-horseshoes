@@ -54,12 +54,31 @@ const PHASE_DEG: float = 59.0
 # 23.6% ringers, 83.2% inside 6 in, mean landing 3.8 in,
 # self-play 1.06 points per side per inning. The line holds
 # from the new box.
-const ERR_SPEED_FRAC: float = 0.008 # fraction of release speed
-const ERR_AZIMUTH_DEG: float = 0.24 # horizontal direction, degrees
-const ERR_VY: float = 0.025 # added vertical velocity, m/s
-const ERR_POS_X: float = 0.013 # release point lateral jitter, m
-const ERR_POS_Y: float = 0.010 # release point height jitter, m
-const ERR_SPIN_FRAC: float = 0.016 # flip rate jitter, fraction
+# Fix Pass 19 re-measure (2026-11-04): the box moved to the
+# player's end of a one-pit court - his spot at -0.8, release
+# at (-0.50, ~1.20, line - 0.02), 37 ft out, the throw running
+# near-parallel down the lane instead of FP13's long diagonal.
+# First measurement at the FP17 spread, 220 throws at live
+# pacing: 21.4% ringers, 74.1% inside 6 in, mean 5.2 in,
+# self-play 1.03 - self-play held (cancellation is relative)
+# but the spread had genuinely widened on straight-on
+# arrivals (square stake hits ricochet further than glancing
+# diagonal ones). One retune iteration, ~15% tighter across
+# the dispersion terms below, restored the family line.
+# Final line, 220 simulated throws through the production
+# flight path at live pacing (2026-11-04): 25.0% ringers,
+# 78.2% of shoes inside 6 in, mean landing 5.5 in, self-play
+# 1.14 points per side per inning. (The mean runs higher
+# than the two-pit line's 3.8 in on a heavier far tail -
+# misses roll out across flat grass past the grade-level
+# pit instead of dying against a raised frame. Ringers and
+# self-play, the character numbers, are in the family.)
+const ERR_SPEED_FRAC: float = 0.007 # fraction of release speed
+const ERR_AZIMUTH_DEG: float = 0.20 # horizontal direction, degrees
+const ERR_VY: float = 0.021 # added vertical velocity, m/s
+const ERR_POS_X: float = 0.011 # release point lateral jitter, m
+const ERR_POS_Y: float = 0.009 # release point height jitter, m
+const ERR_SPIN_FRAC: float = 0.014 # flip rate jitter, fraction
 
 const ARM_LEN: float = 0.62
 # Fix Pass 11: the throwing arm is the LANE-side arm. The AI

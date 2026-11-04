@@ -442,9 +442,11 @@ func _run() -> void:
 	check(stake_body != null, "audit: stake body found in the built scene")
 	main.shoe.body_entered.connect(_on_shoe_body_entered)
 
-	var rp40 := Vector3(0.0, 1.30, -0.30)
+	# Fix Pass 19: the release points ride the TRUE foul lines
+	# (37 ft at -0.914, 27 ft at -3.962), ~0.30 m in front of each.
+	var rp40 := Vector3(0.0, 1.30, -1.214)
 	var v40: Vector3 = ballistic_vel(rp40, FLIGHT_T_40)
-	var rp30 := Vector3(0.0, 1.30, -3.35)
+	var rp30 := Vector3(0.0, 1.30, -4.262)
 	var v30: Vector3 = ballistic_vel(rp30, FLIGHT_T_30)
 
 	# 1. FLIP, one revolution, 40 ft. Spin about +X - the sign

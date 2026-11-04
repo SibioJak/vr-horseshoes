@@ -48,7 +48,12 @@ func _find_pit_bodies() -> void:
 	for child: Node in main.get_children():
 		if child is StaticBody3D:
 			var p: Vector3 = (child as StaticBody3D).position
-			if absf(p.y - 0.025) < 0.002 and absf(p.x) < 0.01:
+			# Fix Pass 19: the one pit's sand body sits sunk at
+			# the far stake (centre y = stake y - 0.023). The z
+			# term now does the excluding: the ground body shares
+			# x = 0 but not the stake's z.
+			if absf(p.y - (main.STAKE_POS.y - 0.023)) < 0.002 and absf(p.x) < 0.01 \
+					and absf(p.z - main.STAKE_POS.z) < 0.01:
 				pit_bodies.append(child)
 
 

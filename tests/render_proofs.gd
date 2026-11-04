@@ -10,14 +10,14 @@ extends SceneTree
 ## ("left_hand"/"right_hand", "default" pose - the Duel's settled
 ## binding) and saves:
 ##   proofs/court_view.png - the full court ON-AXIS (Fix Pass 18):
-##     camera on the court centre line behind the home pit, level,
-##     looking straight down the lane - both pits stacked on the
-##     axis, the player's station near-right with its pair hanging
-##     face-on, the AI in his box across the home pit - behind
-##     the line, level with the player's stance (Fix Pass 13) -
-##     the landscaped lane rows (Fix Pass 18), the dressed backyard
-##     around it all (Fix Pass 10 scenery), board beyond the far
-##     pit at left.
+##     camera on the court centre line behind the pitching end,
+##     level, looking straight down the lane - the ONE pit on the
+##     axis at the far end under the board (Fix Pass 19), the
+##     player's station near-right with its pair hanging face-on,
+##     the AI in his box beside him at the 37 ft line, the
+##     landscaped lane rows (Fix Pass 18), the dressed backyard
+##     around it all (Fix Pass 10 scenery), board beyond the pit
+##     at left.
 ##   proofs/board_closeup.png - the board face-on: every line of the
 ##     status + controls text on the slab and legible.
 ##   proofs/board_from_foul_line.png - from the 40 ft foul line at
@@ -118,17 +118,17 @@ func _run() -> void:
 
 	# --- Proof A: the FULL court, ON-AXIS (Fix Pass 18) ---
 	# The camera stands ON the court centre line behind the
-	# home pit, level, looking straight down the lane, so both
-	# pits stack on the axis in frame. The FP13 three-quarter
-	# framing (off-axis at (3.1, 3.3, 5.6), yawed across the
-	# lane) composed a lie: in Chris's annotated copy the two
-	# pits read as offset into different lanes, while the FP18
-	# audit measured every pit element's centre at x = 0.0000
-	# in the world (stakes, sand bodies, surrounds, timber
-	# frames, at both ends). The honest proof stands where the
-	# axis is visible: the player's station near-right with its
-	# pair face-on, the AI in his box across the home pit, the
-	# landscaped rows lining the lane, board beyond the far pit.
+	# pitching end, level, looking straight down the lane, so
+	# the one pit sits on the axis in frame. The FP13
+	# three-quarter framing (off-axis at (3.1, 3.3, 5.6), yawed
+	# across the lane) composed a lie in the two-pit days: in
+	# Chris's annotated copy the two pits read as offset into
+	# different lanes, while the FP18 audit measured every pit
+	# element's centre at x = 0.0000 in the world. The honest
+	# proof stands where the axis is visible: the player's
+	# station near-right with its pair face-on, the AI in his
+	# box beside him at the line, the landscaped rows lining
+	# the lane, the pit and the board beyond it.
 	var cam_a := Camera3D.new()
 	cam_a.fov = 55.0
 	cam_a.position = Vector3(0.0, 2.9, 5.4)
@@ -178,7 +178,9 @@ func _run() -> void:
 	# this distance (~16 m) - that is the whole point of the move.
 	var cam_d := Camera3D.new()
 	cam_d.fov = 70.0
-	cam_d.position = Vector3(0.0, 1.62, 0.55)
+	# Fix Pass 19: at the player's own spot - his side of the
+	# true 37 ft line, at his stance depth behind it.
+	cam_d.position = Vector3(0.8, 1.62, -0.364)
 	main.add_child(cam_d)
 	cam_d.look_at(board_center, Vector3.UP)
 	cam_d.current = true
