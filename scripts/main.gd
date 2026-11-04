@@ -59,8 +59,8 @@ var stake_axis_b: Vector3 = Vector3.ZERO
 var stakes: Dictionary = {} # "FAR"|"HOME" -> {body, axis_a, axis_b, pos}
 var stand_tfs: Dictionary = {} # line_ft (30/40) -> PLAYER rack slot-0 transform, HOME end (target: far stake)
 var stand_tfs_far: Dictionary = {} # line_ft (30/40) -> PLAYER rack slot-0 transform, FAR end (target: home stake)
-var ai_stand_tfs: Dictionary = {} # line_ft (30/40) -> AI rack slot-0 transform, HOME end
-var ai_stand_tfs_far: Dictionary = {} # line_ft (30/40) -> AI rack slot-0 transform, FAR end
+var ai_stand_tfs: Dictionary = {} # 40 ft ONLY -> AI rack slot-0 transform, HOME end (FP18: no AI practice points)
+var ai_stand_tfs_far: Dictionary = {} # 40 ft ONLY -> AI rack slot-0 transform, FAR end
 var stand_tf: Transform3D # the rail slot the ACTIVE shoe currently belongs to
 var active_stand_line_ft: int = 40
 var stock_target_far: bool = true # stocked shoes aim at the far stake
@@ -328,8 +328,13 @@ func _stock_dict(p_target_far: bool) -> Dictionary:
 func _init_stands() -> void:
 	stand_tfs = {40: make_rack_tf(40, true, false), 30: make_rack_tf(30, true, false)}
 	stand_tfs_far = {40: make_rack_tf(40, false, false), 30: make_rack_tf(30, false, false)}
-	ai_stand_tfs = {40: make_rack_tf(40, true, true), 30: make_rack_tf(30, true, true)}
-	ai_stand_tfs_far = {40: make_rack_tf(40, false, true), 30: make_rack_tf(30, false, true)}
+	# Fix Pass 18: the AI has NO practice stock points - it never
+	# practices. Its pair stocks only at the 40 ft game stations
+	# (one per end). Any gather/restock that names a 30 ft line
+	# sends the AI pair to the same end's 40 ft station instead
+	# (see _gather_to_rail and _restock_to_player_line).
+	ai_stand_tfs = {40: make_rack_tf(40, true, true)}
+	ai_stand_tfs_far = {40: make_rack_tf(40, false, true)}
 	active_stand_line_ft = 40
 	stock_target_far = true
 	stand_tf = stand_tfs[active_stand_line_ft]
@@ -389,7 +394,10 @@ func _restock_to_player_line() -> void:
 	for s: Shoe in _all_shoes():
 		if String(shoe_status[s]) == "RAILED":
 			s.freeze = true
-			s.global_transform = rack_slot_tf(want_far, want_line,
+			# Fix Pass 18: the AI pair has no 30 ft home - it
+			# waits at the same end's 40 ft game station.
+			var s_line: int = 40 if _is_ai_shoe(s) else want_line
+			s.global_transform = rack_slot_tf(want_far, s_line,
 				_is_ai_shoe(s), _pair_index_of(s))
 			s.clear_highlights()
 
@@ -493,6 +501,34 @@ func _build_station(base_pos: Vector3, sx: float, step_dir: float) -> void:
 		Vector3(0.016, 0.32, 0.008), _mat(Color(0.55, 0.56, 0.58)))
 
 
+## The player's PRACTICE home at a 30 ft line (Fix Pass 18,
+## Chris's Stage 1 verdict: "get rid of the duplicate shelves
+## along the side"). The FP7 rule still needs the pair to wait
+## where the player stands at each short line, but a second
+## shelf per line was furniture the court never earned: in its
+## place stands ONE slim peg post - a single low timber post
+## behind the slots with a peg reaching to each slot point,
+## nothing else. The slot transforms (and so the hang, the
+## grab, the restock) are the FP13 ones, untouched; only what
+## STANDS at the practice point changed. base_pos/sx/step_dir
+## carry the same meanings as in _build_station.
+func _build_peg_post(base_pos: Vector3, sx: float, step_dir: float) -> void:
+	var timber := _mat(Color(0.52, 0.40, 0.26))
+	var timber_alt := _mat(Color(0.46, 0.34, 0.22))
+	var mid_z: float = base_pos.z + SLOT_STEP * 0.5 * step_dir
+	var post_x: float = base_pos.x + 0.24 * sx
+	# The post: slim, square, just tall enough to carry the
+	# pegs at rail height (0.885, the station rail's height).
+	_box(self, Vector3(post_x, 0.465, mid_z),
+		Vector3(0.09, 0.93, 0.09), timber)
+	# One peg per slot, reaching from the post to the slot
+	# point the shoe hangs on.
+	for idx: int in 2:
+		var slot_z: float = base_pos.z + SLOT_STEP * float(idx) * step_dir
+		_box(self, Vector3(base_pos.x + 0.10 * sx, 0.885, slot_z),
+			Vector3(0.28, 0.045, 0.05), timber_alt)
+
+
 func _build_world() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-48.0, -24.0, 0.0)
@@ -544,21 +580,29 @@ func _build_world() -> void:
 	for lz2: float in [line_z_for_ft_at(30, true), line_z_for_ft_at(30, false)]:
 		_box(self, Vector3(0.0, 0.006, lz2), Vector3(1.6, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
 
-	# One station per OWNER per stock point (both lines, both
-	# ends), placed by the Fix Pass 11 rule: beside its owner's
-	# stance at the line's own z, clear of the stance box - the
-	# player's pair on his station, the AI's pair on its own
-	# across the pit. Fix Pass 13 turns each stand with its
-	# slots (rail down-lane, shoes face-on to the stance);
-	# Backyard v2 Stage 1 dresses that stand as the timber
-	# station furniture.
+	# One station per OWNER per END, at the 40 ft game lines
+	# only (both ends), placed by the Fix Pass 11 rule: beside
+	# its owner's stance at the line's own z, clear of the
+	# stance box - the player's pair on his station, the AI's
+	# pair on its own across the pit. Fix Pass 13 turns each
+	# stand with its slots (rail down-lane, shoes face-on to
+	# the stance); Backyard v2 Stage 1 dresses that stand as
+	# the timber station furniture.
+	# Fix Pass 18 (Chris's Stage 1 verdict): the four mid-court
+	# PRACTICE shelves are gone - "get rid of the duplicate
+	# shelves along the side." The AI never practices, so it
+	# has no practice stock point at all; the player's 30 ft
+	# home is one slim peg post per line (see _build_peg_post),
+	# and the lane sides where the shelves stood get landscaped
+	# rows instead (see _build_scenery).
 	for tfar: bool in [true, false]:
-		for stand_line: int in [40, 30]:
-			var step_dir: float = -1.0 if tfar else 1.0
-			var ptf: Transform3D = (stand_tfs if tfar else stand_tfs_far)[stand_line]
-			_build_station(ptf.origin, rack_side_sign(tfar, false), step_dir)
-			var atf: Transform3D = (ai_stand_tfs if tfar else ai_stand_tfs_far)[stand_line]
-			_build_station(atf.origin, rack_side_sign(tfar, true), step_dir)
+		var step_dir: float = -1.0 if tfar else 1.0
+		var ptf: Transform3D = (stand_tfs if tfar else stand_tfs_far)[40]
+		_build_station(ptf.origin, rack_side_sign(tfar, false), step_dir)
+		var atf: Transform3D = (ai_stand_tfs if tfar else ai_stand_tfs_far)[40]
+		_build_station(atf.origin, rack_side_sign(tfar, true), step_dir)
+		var post_tf: Transform3D = (stand_tfs if tfar else stand_tfs_far)[30]
+		_build_peg_post(post_tf.origin, rack_side_sign(tfar, false), step_dir)
 
 	_build_scenery()
 
@@ -1698,7 +1742,11 @@ func game_end_sign() -> int:
 func _gather_to_rail(p_target_far: bool, line_ft: int) -> void:
 	for s: Shoe in _all_shoes():
 		s.freeze = true
-		s.global_transform = rack_slot_tf(p_target_far, line_ft,
+		# Fix Pass 18: an AI shoe gathers to the 40 ft game
+		# station of the named end whatever line is requested -
+		# it has no practice stock point to gather to.
+		var s_line: int = 40 if _is_ai_shoe(s) else line_ft
+		s.global_transform = rack_slot_tf(p_target_far, s_line,
 			_is_ai_shoe(s), _pair_index_of(s))
 		s.clear_highlights()
 		shoe_status[s] = "RAILED"

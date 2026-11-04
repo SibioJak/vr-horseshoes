@@ -874,16 +874,48 @@ func _run() -> void:
 	# player's racks on his right at both ends, the AI's mirrored
 	# across the pit); every slot is outside the stance box and a
 	# reach-over grab (0.90-1.35 m from the stance centre).
-	check(main.stand_tfs.size() == 2 and main.ai_stand_tfs.size() == 2,
-		"home end: a player rack and an AI rack per foul line (%d + %d)"
-		% [main.stand_tfs.size(), main.ai_stand_tfs.size()])
-	check(main.stand_tfs_far.size() == 2 and main.ai_stand_tfs_far.size() == 2,
-		"far end: a player rack and an AI rack per foul line, mirrored (%d + %d)"
-		% [main.stand_tfs_far.size(), main.ai_stand_tfs_far.size()])
+	# (FP18, below, narrows "every rack": the AI's 30 ft racks
+	# no longer exist to be asserted.)
+	# Fix Pass 18 (Chris's Stage 1 verdict): the stock-point map
+	# itself changed shape - the player keeps both lines at
+	# both ends (the 30 ft peg post is his practice home), the
+	# AI stocks ONLY at the 40 ft game lines: it never
+	# practices, so it has no 30 ft point at all.
+	check(main.stand_tfs.size() == 2 and main.stand_tfs_far.size() == 2,
+		"FP18: the player stocks at both foul lines at both ends (%d + %d)"
+		% [main.stand_tfs.size(), main.stand_tfs_far.size()])
+	check(main.ai_stand_tfs.size() == 1 and main.ai_stand_tfs_far.size() == 1
+		and not main.ai_stand_tfs.has(30) and not main.ai_stand_tfs_far.has(30),
+		"FP18: the AI stocks only at the 40 ft game lines - no practice stock points (%d + %d)"
+		% [main.ai_stand_tfs.size(), main.ai_stand_tfs_far.size()])
 	for rack_end: bool in [true, false]:
-		for rack_line: int in [40, 30]:
-			check_rack(rack_end, rack_line, false)
-			check_rack(rack_end, rack_line, true)
+		check_rack(rack_end, 40, false)
+		check_rack(rack_end, 40, true)
+		# The player's 30 ft slots keep their full FP13 layout
+		# geometry - the slim peg post hangs the pair exactly
+		# where the deleted shelf did.
+		check_rack(rack_end, 30, false)
+	# Fix Pass 18: what STANDS at the practice points - the
+	# player's 30 ft home is ONE slim peg post (a post and two
+	# pegs, nothing else), and at the AI's deleted 30 ft points
+	# no furniture stands at all.
+	for post_end: bool in [true, false]:
+		var post_slot: Vector3 = main.rack_slot_tf(post_end, 30, false, 0).origin
+		var post_pieces: int = 0
+		for child: Node in main.get_children():
+			if child is MeshInstance3D and (child as MeshInstance3D).global_position.distance_to(post_slot) < 0.55:
+				post_pieces += 1
+		check(post_pieces == 3,
+			"FP18: the %s 30 ft practice home is one slim peg post (post + two pegs, %d pieces)"
+			% ["home" if post_end else "far", post_pieces])
+		var ghost_slot: Vector3 = main.make_rack_tf(30, post_end, true).origin
+		var ghost_pieces: int = 0
+		for child2: Node in main.get_children():
+			if child2 is MeshInstance3D and (child2 as MeshInstance3D).global_position.distance_to(ghost_slot) < 0.55:
+				ghost_pieces += 1
+		check(ghost_pieces == 0,
+			"FP18: no furniture stands at the AI's deleted %s 30 ft practice point (%d pieces)"
+			% ["home" if post_end else "far", ghost_pieces])
 	check(main.active_stand_line_ft == 40, "the shoe starts homed to the 40 ft rack")
 
 	# --- Locomotion through the production path (test stick hooks) ---
