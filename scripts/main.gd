@@ -1761,6 +1761,11 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 	var zone_was: String = held_zone
 	var hold_was: String = held_hold
 	var slide_was: float = slide_offset
+	# Fix Pass 21: the grip position held at release - its
+	# declared count is what the governor serves.
+	var zone_data: Dictionary = Shoe.zones()[zone_was]
+	var grip_was: Dictionary = ThrowMath.grip_position(
+		ThrowMath.grip_index_for(zone_was, slide_was, float(zone_data["slide_max"])))
 	# Fix Pass 16: the finger-drag term. The estimator's spin is
 	# kept verbatim for the record's estimator evidence; what
 	# flies is the governed spin (style axis pulled toward the
@@ -1769,7 +1774,8 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 	# never passes through here.
 	var est_ang: Vector3 = ang
 	var spin_ev: Dictionary = ThrowMath.govern_spin(
-		ang, release_tf, vel, hold_was, target_stake_pos(), spin_governor_enabled)
+		ang, release_tf, vel, hold_was, target_stake_pos(),
+		spin_governor_enabled, float(grip_was["nominal"]))
 	ang = spin_ev["ang"]
 	held_hand = ""
 	sample_hand = ""
@@ -1778,6 +1784,9 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 		var tilt_pr: Vector2 = _origin_pitch_roll()
 		release_cache = {
 			"hand": hand_was, "zone": zone_was, "hold": hold_was,
+			# Fix Pass 21: the grip that declared this throw.
+			"grip_name": String(grip_was["name"]),
+			"grip_nominal": float(grip_was["nominal"]),
 			"slide_offset_m": slide_was,
 			"line_ft": ThrowMath.line_ft_for_release(release_tf.origin, target_stake_pos()),
 			"origin_pos": origin.global_position,
@@ -1949,6 +1958,9 @@ func _settle_throw() -> void:
 		"hand": String(release_cache["hand"]),
 		"hold": String(release_cache["hold"]),
 		"zone": String(release_cache["zone"]),
+		# Fix Pass 21: the grip that declared this throw and its count.
+		"grip_name": String(release_cache.get("grip_name", "")),
+		"grip_nominal": float(release_cache.get("grip_nominal", 0.0)),
 		"slide_offset_m": float(release_cache["slide_offset_m"]),
 		"line_ft": int(release_cache["line_ft"]),
 		"origin_release_pos": ThrowRecorder.vec3_arr(origin_at_release),
@@ -2472,6 +2484,11 @@ func _settle_ai_shoe(s: Shoe) -> void:
 		"hand": "AI",
 		"hold": "flip",
 		"zone": "toe",
+		# The AI's computed release is a toe-grip flip by
+		# construction (see AIPitcher) - the same declaration
+		# its zone/hold fields already make.
+		"grip_name": "TOE GRIP",
+		"grip_nominal": 1.0,
 		"slide_offset_m": 0.0,
 		"line_ft": int(fl["line_ft"]),
 		"origin_release_pos": ThrowRecorder.vec3_arr(origin.global_position),

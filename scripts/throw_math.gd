@@ -648,6 +648,17 @@ const SPIN_DRAG_RESIDUAL: float = 0.30
 const SPIN_GRAVITY: float = 9.8
 
 const SPIN_NOMINAL_FLIP: float = 1.00
+## Fix Pass 21: for PLAYER throws the governor's nominal no
+## longer comes from this nearest-basin snap - it comes from
+## the grip position held at release (GRIP_POSITIONS above:
+## TOE 1.00, shank stops 1.125 / 1.25 / 1.375), passed in as
+## govern_spin's declared_nominal. The basin set survives only
+## as the fallback for a caller that declares nothing. The
+## 0.75 basin disappears as a target: no grip declares it, and
+## Smith called the 3/4 turn a trap (no wobble to break the
+## fall, so it rebounds off the stake). A wild hand can still
+## ARRIVE near 3/4 through the residual - the governor just
+## never aims there.
 const SPIN_NOMINAL_TURNS: Array[float] = [0.75, 1.25, 1.75]
 
 
@@ -710,7 +721,13 @@ static func governor_flight_time(release_pos: Vector3, vel: Vector3, stake_pos: 
 ## about the style axis in the recorder's own convention (flip:
 ## the release basis.x component; turn: the world Y component),
 ## counted hand-to-stake per governor_flight_time.
-static func govern_spin(ang: Vector3, release_tf: Transform3D, vel: Vector3, hold: String, stake_pos: Vector3, enabled: bool) -> Dictionary:
+## Fix Pass 21: `declared_nominal` is the unsigned count the
+## grip held at release declares (ThrowMath.grip_position);
+## when positive it IS the nominal - the governor serves the
+## declaration, sign still following the hand. The default
+## (<= 0, undeclared) keeps the FP16 behaviour for direct
+## callers: flip 1.00, turns snapped to the nearest basin.
+static func govern_spin(ang: Vector3, release_tf: Transform3D, vel: Vector3, hold: String, stake_pos: Vector3, enabled: bool, declared_nominal: float = -1.0) -> Dictionary:
 	var out: Dictionary = {
 		"ang": ang, "hand_total": 0.0, "applied_total": 0.0,
 		"nominal": 0.0, "flight_time": 0.0, "governed": false,
@@ -727,18 +744,23 @@ static func govern_spin(ang: Vector3, release_tf: Transform3D, vel: Vector3, hol
 	var hand_total: float = rate * tof / TAU
 	out["hand_total"] = hand_total
 	out["applied_total"] = hand_total
-	if not enabled:
-		return out
+	var sgn: float = 1.0 if hand_total >= 0.0 else -1.0
 	var nominal: float
-	if is_flip:
-		nominal = SPIN_NOMINAL_FLIP if hand_total >= 0.0 else -SPIN_NOMINAL_FLIP
+	if declared_nominal > 0.0:
+		# Fix Pass 21: the grip declares the count.
+		nominal = sgn * declared_nominal
+	elif is_flip:
+		nominal = sgn * SPIN_NOMINAL_FLIP
 	else:
-		var sgn: float = 1.0 if hand_total >= 0.0 else -1.0
 		nominal = sgn * SPIN_NOMINAL_TURNS[0]
 		for cand: float in SPIN_NOMINAL_TURNS:
 			if absf(sgn * cand - hand_total) < absf(nominal - hand_total):
 				nominal = sgn * cand
+	# The nominal is evidence even when the governor is off:
+	# the throw record keeps the declared count either way.
 	out["nominal"] = nominal
+	if not enabled:
+		return out
 	var applied_total: float = nominal + (hand_total - nominal) * SPIN_DRAG_RESIDUAL
 	out["applied_total"] = applied_total
 	var applied_rate: float = applied_total * TAU / tof
