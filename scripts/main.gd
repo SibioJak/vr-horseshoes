@@ -102,7 +102,10 @@ var slide_offset: float = 0.0
 # position (ThrowMath.GRIP_POSITIONS). Visible only while a
 # shoe is held; gone the instant it is released.
 var grip_label: Label3D = null
-var _cycle_prev: bool = false # free-hand cycle button, previous poll
+# Fix Pass 22: a small second line under the grip name while
+# a shoe is held - the cycle's discoverability lives on the
+# label itself now that any A/X press cycles.
+var grip_hint_label: Label3D = null
 var candidate_hand: String = ""
 var candidate_zone: String = ""
 
@@ -1145,7 +1148,7 @@ func _build_board() -> void:
 	status_label.position = Vector3(0.0, 2.06, 0.01)
 	board_root.add_child(status_label)
 	controls_label = Label3D.new()
-	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nX / A (FREE HAND): CHANGE GRIP\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON: start game / next round / play again\nB BUTTON: back to practice (in a game)\nRECENTER: menu long-press - seated/standing ok"
+	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nA / X WHILE HOLDING A SHOE: CHANGE GRIP\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON (EMPTY HAND): start game / next round / play again\nB BUTTON: back to practice (in a game)\nRECENTER: menu long-press - seated/standing ok"
 	controls_label.font_size = 30
 	controls_label.pixel_size = 0.00095
 	controls_label.line_spacing = 1.0
@@ -1318,12 +1321,17 @@ func _stick_value(hand: String) -> Vector2:
 ## at any phase, B returns to practice; in practice B does
 ## nothing. Fix Pass 20: A at the insert dismisses it and
 ## stocks the next round.
-## Fix Pass 21: the A/X channel is read PER HAND. While a shoe
-## is held, the FREE hand's face button is the grip cycle (X
-## when the right hand holds, A when the left hand holds) -
-## never a game command; the holding hand's own face button
-## does nothing. When no shoe is held, either hand's press is
-## the game A, exactly as before. B is never the cycle.
+## Fix Pass 22 (Chris, from the headset: "not sure how you
+## implemented change grip, cant find it. Just make it A or
+## X for now."): the per-hand free-hand rule of Fix Pass 21
+## is REPLACED. On any A-press or X-press - either hand,
+## holding or free - if a shoe is currently held, the press
+## cycles THAT shoe's grip and is spent; the game A never
+## fires under a held shoe. With no shoe held, a press is
+## the game A exactly as before, and X alone does nothing.
+## B is never the cycle. The A/X channel is the single
+## ax_button action both controllers share (A on the right
+## controller, X on the left), read here as "A".
 func _hand_button_down(hand: String, btn: String) -> bool:
 	if test_button_hand.has(hand):
 		var per: Dictionary = test_button_hand[hand]
@@ -1343,28 +1351,16 @@ func _button_down(btn: String) -> bool:
 
 
 func _poll_buttons() -> void:
-	var free_hand: String = ""
-	if state == "HELD" and held_hand != "":
-		free_hand = "L" if held_hand == "R" else "R"
-	var a_now: bool = false
-	var cycle_now: bool = false
-	for hand: String in ["L", "R"]:
-		if not _hand_button_down(hand, "A"):
-			continue
-		if hand == free_hand:
-			cycle_now = true
-		else:
-			a_now = true
+	var ax_now: bool = _button_down("A")
 	var b_now: bool = _button_down("B")
-	var a_edge: bool = a_now and not bool(_btn_prev["A"])
+	var ax_edge: bool = ax_now and not bool(_btn_prev["A"])
 	var b_edge: bool = b_now and not bool(_btn_prev["B"])
-	_btn_prev["A"] = a_now
+	_btn_prev["A"] = ax_now
 	_btn_prev["B"] = b_now
-	if cycle_now and not _cycle_prev:
-		_cycle_grip()
-	_cycle_prev = cycle_now
-	if a_edge:
-		if mode == "PRACTICE" and state == "STAND":
+	if ax_edge:
+		if state == "HELD":
+			_cycle_grip()
+		elif mode == "PRACTICE" and state == "STAND":
 			start_game()
 		elif mode == "GAME" and phase == "INSERT":
 			_continue_round()
@@ -1405,6 +1401,23 @@ func _build_grip_label() -> void:
 	grip_label.no_depth_test = true
 	grip_label.visible = false
 	add_child(grip_label)
+	# Fix Pass 22: the hint line rides under the grip name
+	# (a child of the name label, so it shares the label's
+	# visibility exactly: shown whenever a shoe is held,
+	# gone at release).
+	grip_hint_label = Label3D.new()
+	grip_hint_label.name = "GripHintLabel"
+	grip_hint_label.font_size = 30
+	grip_hint_label.pixel_size = 0.00085
+	grip_hint_label.modulate = Color(1.0, 0.93, 0.75, 0.85)
+	grip_hint_label.outline_size = 6
+	grip_hint_label.outline_modulate = Color(0.1, 0.07, 0.03)
+	grip_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	grip_hint_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	grip_hint_label.no_depth_test = true
+	grip_hint_label.text = "A/X - CHANGE GRIP"
+	grip_hint_label.position = Vector3(0.0, -0.062, 0.0)
+	grip_label.add_child(grip_hint_label)
 
 
 ## Fix Pass 21: one tap of the free hand's face button walks

@@ -585,9 +585,10 @@ func pulse_button(btn: String) -> void:
 	await frames(4)
 
 
-## Fix Pass 21: pulse ONE hand's face button (the per-hand
-## test transport) - the grip cycle reads the free hand's
-## button, so the walk needs per-hand presses.
+## Pulse ONE hand's face button (the per-hand test
+## transport) - the grip cycle walk needs per-hand presses
+## (Fix Pass 22: any hand's A/X cycles, so the walk drives
+## both hands on purpose).
 func pulse_hand_button(hand: String, btn: String) -> void:
 	var per: Dictionary = {}
 	per[btn] = true
@@ -685,7 +686,10 @@ func _run() -> void:
 	check(main.controls_label.text.contains("back to practice"),
 		"FP19: the board's B line says what B does now - back to practice (no end-swap exists)")
 	check(main.controls_label.text.contains("CHANGE GRIP"),
-		"FP21: the board lists the grip cycle (X / A with the free hand) - standing rule: every accepted command is listed")
+		"FP22: the board lists the grip cycle (A / X while holding a shoe) - standing rule: every accepted command is listed")
+	check(main.controls_label.text.contains("A / X WHILE HOLDING A SHOE")
+		and main.controls_label.text.contains("A BUTTON (EMPTY HAND)"),
+		"FP22: the board's A/X lines carry their conditions - cycle while holding, game A with an empty hand")
 	check(main.status_label.text.contains("THROWS: 0"), "board starts at zero throws")
 
 	# --- Backyard Game v1 / Fix Pass 19: one pit, pairs, the opponent ---
@@ -1205,9 +1209,13 @@ func _run() -> void:
 	check(main.state == "HELD" and main.grip_label.text == "TOE GRIP · FLIP",
 		"FP21: a toe grab starts at TOE GRIP, labelled (got '%s')" % main.grip_label.text)
 	check(main.grip_label.visible, "FP21: the grip label rides visible while the shoe is held")
-	# (b) The FREE hand's button (left X) walks the cycle through
-	# every named position and wraps; the holding hand's own
-	# button never cycles.
+	check(main.grip_hint_label != null and main.grip_hint_label.text == "A/X - CHANGE GRIP"
+		and main.grip_hint_label.is_visible_in_tree(),
+		"FP22: the hint line rides under the grip name while a shoe is held (got '%s')"
+		% (main.grip_hint_label.text if main.grip_hint_label != null else "<none>"))
+	# (b) A free-hand button (left X) walks the cycle through
+	# every named position and wraps; Fix Pass 22: the holding
+	# hand's own button cycles too (checked right after).
 	await pulse_hand_button("L", "A")
 	check(main.grip_label.text == "SHANK · TOE · 1⅛ TURN" and main._grip_index() == 1,
 		"FP21: tap 1 walks to SHANK · TOE (got '%s')" % main.grip_label.text)
@@ -1220,18 +1228,15 @@ func _run() -> void:
 	await pulse_hand_button("L", "A")
 	check(main.grip_label.text == "TOE GRIP · FLIP" and main._grip_index() == 0,
 		"FP21: tap 4 wraps back to TOE GRIP (got '%s')" % main.grip_label.text)
-	main.test_button_hand["R"] = {"A": true}
-	await frames(4)
-	main.test_button_hand.erase("R")
-	await frames(4)
-	check(main._grip_index() == 0 and main.grip_label.text == "TOE GRIP · FLIP",
-		"FP21: the HOLDING hand's own button does not cycle")
+	await pulse_hand_button("R", "A")
+	check(main._grip_index() == 1 and main.grip_label.text == "SHANK · TOE · 1⅛ TURN",
+		"FP22: the HOLDING hand's own button cycles too - A or X, either hand (got '%s')"
+		% main.grip_label.text)
 	# (c) A thrown cycled grip lands with its declared count:
 	# walk to SHANK · MID and pitch its 1-1/4 through the
 	# production release; the cache and the throw record must
 	# carry the grip's name and declared count, and the governed
 	# total must be the declaration.
-	await pulse_hand_button("L", "A")
 	await pulse_hand_button("L", "A")
 	check(main._grip_index() == 2, "FP21: cycled to SHANK · MID for the throw")
 	var line_z21: float = main.game_line_z()
@@ -1272,9 +1277,9 @@ func _run() -> void:
 		% [String(last_throw21.get("grip_name", "")), float(last_throw21.get("grip_nominal", 0.0))])
 	# (d) The LEFT hand: a shank grab starts at SHANK · MID (the
 	# stop nearest the grab point), the RIGHT hand's A walks the
-	# cycle, and the left hand's own A does NOT - A yields to
-	# the cycle only as the free hand, and while the left hand
-	# holds, its A must not fire a game job either.
+	# cycle, and (Fix Pass 22) the left hand's own A cycles too -
+	# while it holds, no A press from either hand may fire a
+	# game job.
 	main.test_hand_tf.erase("R")
 	var gshank: Vector3 = main.shoe.zone_world_center("shank_left")
 	main.test_hand_tf["L"] = Transform3D(Basis.IDENTITY, gshank)
@@ -1286,17 +1291,16 @@ func _run() -> void:
 	await pulse_hand_button("R", "A")
 	check(main.grip_label.text == "SHANK · HEEL · 1⅜ TURN",
 		"FP21: the right hand's A cycles the left hand's grip (got '%s')" % main.grip_label.text)
-	main.test_button_hand["L"] = {"A": true}
-	await frames(4)
-	main.test_button_hand.erase("L")
-	await frames(4)
-	check(main._grip_index() == 3 and main.mode == "PRACTICE",
-		"FP21: the holding left hand's own A neither cycles nor starts a game (A yields while it holds)")
+	await pulse_hand_button("L", "A")
+	check(main._grip_index() == 0 and main.grip_label.text == "TOE GRIP · FLIP"
+		and main.mode == "PRACTICE",
+		"FP22: the holding left hand's own A cycles too (wraps to TOE GRIP) - and still cannot start a game while it holds")
 	await wait_hand_still("L")
 	main.test_grip["L"] = 0.0
 	await frames(4)
-	check(main.state == "DROPPED" and not main.grip_label.visible,
-		"FP21: the label is gone the instant the shoe is released")
+	check(main.state == "DROPPED" and not main.grip_label.visible
+		and not main.grip_hint_label.is_visible_in_tree(),
+		"FP21: the label is gone the instant the shoe is released (FP22: hint line with it)")
 	check(await wait_state("STAND", 6.0), "FP21: the dropped shoe returns")
 	# (e) A settled slide re-names the grip: grab the shank
 	# (MID), slide heel-ward past the midpoint, lock - the
