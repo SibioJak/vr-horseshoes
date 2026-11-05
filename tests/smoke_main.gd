@@ -258,6 +258,20 @@ func wait_hand_still(hand: String) -> void:
 		await process_frame
 
 
+## Fix Pass 22 battery rulers: the held shoe's orientation
+## error against the hand-relative carry (degrees), and the
+## hand-to-shoe separation (metres). A healthy hold reads
+## ~0 on both, under every input.
+func held_orient_error() -> float:
+	var want: Basis = (main.test_hand_tf[main.held_hand] * main.rel_tf).basis.orthonormalized()
+	var got: Basis = main.shoe.global_transform.basis.orthonormalized()
+	return rad_to_deg(want.get_rotation_quaternion().angle_to(got.get_rotation_quaternion()))
+
+
+func held_separation() -> float:
+	return main.test_hand_tf[main.held_hand].origin.distance_to(main.shoe.global_position)
+
+
 func _init() -> void:
 	_run()
 
@@ -1084,8 +1098,16 @@ func _run() -> void:
 		tf.origin += Vector3(0.0, 0.0, 0.004)
 		main.test_hand_tf["R"] = tf
 		await frames(2)
-	check(main.shoe.global_position.distance_to(shoe_pos_before) < 0.02,
-		"shoe stays put in the world while sliding (moved %.3f m)" % main.shoe.global_position.distance_to(shoe_pos_before))
+	# Fix Pass 22: the pass-2 freeze assertion is REPLACED -
+	# the freeze was the dislocation. The hand's travel here
+	# runs ACROSS the toe's slide axis: the shoe must ride
+	# the hand by the full travel, and the grip offset must
+	# not shift (only along-axis travel adjusts it).
+	check(main.shoe.global_position.distance_to(shoe_pos_before) > 0.018,
+		"FP22: the shoe rides the hand while sliding - no world freeze (moved %.3f m with the hand)"
+		% main.shoe.global_position.distance_to(shoe_pos_before))
+	check(absf(main.slide_offset) < 0.004,
+		"FP22: travel across the axis shifts no grip offset (got %.3f)" % main.slide_offset)
 	main.test_trigger["R"] = 0.0
 	await frames(4)
 	check(not main.grab_state.sliding and not main.grab_state.slide_mode
@@ -1318,11 +1340,16 @@ func _run() -> void:
 	main.test_trigger["R"] = 1.0
 	await frames(4)
 	check(main.grab_state.slide_mode, "FP21: the slide engages for the settle test")
-	for i: int in 6:
+	# (Transport strengthened in Fix Pass 22: 0.004 m steps
+	# with settle frames - the offset accumulates per sliding
+	# frame now, and coarse steps trip the speed gate for a
+	# frame at a time under headless frame quantization. The
+	# assertion below is unchanged from Fix Pass 21.)
+	for i: int in 8:
 		var tf_s: Transform3D = main.test_hand_tf["R"]
-		tf_s.origin += Vector3(-0.005, 0.0, 0.0) # heel-ward for the R-hand turn seat
+		tf_s.origin += Vector3(-0.004, 0.0, 0.0) # heel-ward for the R-hand turn seat
 		main.test_hand_tf["R"] = tf_s
-		await frames(2)
+		await frames(3)
 	main.test_trigger["R"] = 0.0
 	await frames(4)
 	check(main._grip_index() == 3 and main.grip_label.text == "SHANK · HEEL · 1⅜ TURN",
@@ -1343,6 +1370,151 @@ func _run() -> void:
 	# candidacy (hands iterate L first) and silently blocks
 	# every later grab in the suite.
 	main.test_hand_tf.erase("L")
+	main.test_hand_tf.erase("R")
+
+	# --- Fix Pass 22: the dislocation battery (permanent).
+	# Chris, button-hunting in the headset with a shoe in
+	# hand, got his hand and the shoe ENTIRELY separated
+	# while the hold persisted. The conviction probe on the
+	# pre-fix code: a plain grab and a cycled grip carried a
+	# 50 deg hand pitch at 0.000 deg error, but the SLIDE -
+	# trigger in, hand travelling slowly - left the shoe
+	# parked (0.000 m moved over 0.800 m of travel, separation
+	# grown +0.757 m, a 50.000 deg orientation error when he
+	# turned his hand down, and a 0.800 m teleport at the
+	# re-lock). The freeze was the mechanism; the cycle was
+	# innocent. This battery is that probe, kept: hand and
+	# shoe cannot separate beyond the slide's clamped extent
+	# under any input. ---
+	main.origin.global_transform = Transform3D.IDENTITY
+	var gtoe22: Vector3 = main.shoe.zone_world_center("toe")
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, gtoe22)
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	check(main.state == "HELD" and main.held_hand == "R",
+		"FP22 battery: the right hand holds the toe for the battery")
+	# (i) A plain grab carries rotation exactly.
+	var down50: Basis = Basis.from_euler(Vector3(deg_to_rad(-50.0), 0.0, 0.0))
+	main.test_hand_tf["R"] = Transform3D(down50, gtoe22)
+	await frames(4)
+	check(held_orient_error() < 0.5,
+		"FP22 battery: a plain grab carries a 50 deg hand pitch exactly (err %.3f deg)"
+		% held_orient_error())
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, gtoe22)
+	await frames(4)
+	# (ii) Cycle-then-rotate: the regression - the cycle was
+	# innocent and must stay innocent under the new rule.
+	await pulse_hand_button("L", "A")
+	main.test_hand_tf["R"] = Transform3D(down50, gtoe22)
+	await frames(4)
+	check(held_orient_error() < 0.5,
+		"FP22 battery: cycle-then-rotate - the cycled hold carries rotation like a fresh grab (err %.3f deg)"
+		% held_orient_error())
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, gtoe22)
+	await frames(4)
+	# (iii) THE SLIDE, as Chris lived it: trigger in, hand
+	# wanders off slowly, hand turns down.
+	await wait_hand_still("R")
+	main.test_trigger["R"] = 1.0
+	await frames(6)
+	check(main.grab_state.slide_mode, "FP22 battery: the slide engages")
+	var sep_ref: float = held_separation()
+	var shoe_at_slide: Vector3 = main.shoe.global_position
+	var max_growth: float = 0.0
+	var tf22: Transform3D = main.test_hand_tf["R"]
+	for i: int in 120:
+		tf22.origin += Vector3(0.005, 0.0, 0.0)
+		main.test_hand_tf["R"] = tf22
+		await frames(1)
+		await frames(2)
+		max_growth = maxf(max_growth, held_separation() - sep_ref)
+	check(max_growth < 0.01,
+		"FP22 battery: 0.6 m of hand travel mid-slide grows the separation by %.4f m (was +0.757 m on the freeze)"
+		% max_growth)
+	check(main.shoe.global_position.distance_to(shoe_at_slide) > 0.55,
+		"FP22 battery: the shoe travelled WITH the hand (%.3f m)"
+		% main.shoe.global_position.distance_to(shoe_at_slide))
+	check(absf(main.slide_offset + 0.045) < 0.004,
+		"FP22 battery: the offset saturated at the stop instead of stranding (got %.3f)"
+		% main.slide_offset)
+	var down60: Basis = Basis.from_euler(Vector3(deg_to_rad(-60.0), 0.0, 0.0))
+	main.test_hand_tf["R"] = Transform3D(down60, tf22.origin)
+	await frames(4)
+	check(held_orient_error() < 0.5,
+		"FP22 battery: turning the hand down mid-slide - the shoe follows (err %.3f deg; the freeze left 50.000)"
+		% held_orient_error())
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, tf22.origin)
+	await frames(4)
+	var shoe_pre_lock: Vector3 = main.shoe.global_position
+	main.test_trigger["R"] = 0.0
+	await frames(4)
+	check(main.shoe.global_position.distance_to(shoe_pre_lock) < 0.02
+		and not main.grab_state.slide_mode,
+		"FP22 battery: the re-lock does not teleport the shoe (moved %.4f m; the freeze teleported 0.800 m)"
+		% main.shoe.global_position.distance_to(shoe_pre_lock))
+	check(main._grip_index() == 1,
+		"FP22 battery: the settled slide names the stop it saturated at (idx %d)"
+		% main._grip_index())
+	# (iv) A cycle tap mid-slide: walks the grip, hold intact.
+	await wait_hand_still("R")
+	main.test_trigger["R"] = 1.0
+	await frames(6)
+	check(main.grab_state.slide_mode, "FP22 battery: the slide re-engages for the mid-slide cycle")
+	await pulse_button("A")
+	check(main.state == "HELD" and main._grip_index() == 2,
+		"FP22 battery: a cycle tap mid-slide walks the grip (idx %d) and the hold survives"
+		% main._grip_index())
+	check(held_orient_error() < 0.5 and held_separation() < 0.16,
+		"FP22 battery: no stranding after the mid-slide cycle (err %.3f deg, sep %.4f m)"
+		% [held_orient_error(), held_separation()])
+	main.test_trigger["R"] = 0.0
+	await frames(4)
+	await wait_hand_still("R")
+	main.test_grip["R"] = 0.0
+	await frames(4)
+	check(main.state == "DROPPED", "FP22 battery: the battery shoe drops clean")
+	main.test_hand_tf.erase("R")
+	await wait_state("STAND", 600)
+	# (v) A mode switch mid-hold (B in a game) gathers the
+	# shoe and resets the latch - no straddled hold - and the
+	# hold works again immediately after.
+	main.test_button["A"] = true
+	await frames(4)
+	main.test_button["A"] = false
+	await frames(4)
+	check(main.mode == "GAME", "FP22 battery: a game starts for the mode-switch leg")
+	var gtoe22b: Vector3 = main.shoe.zone_world_center("toe")
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, gtoe22b)
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	check(main.state == "HELD", "FP22 battery: the game shoe is held")
+	# Carry the shoe up off its rail before the switch: the
+	# gather returns it to that same rail slot, and a hand
+	# still parked there with the grip shut would simply
+	# re-grab it - correct behaviour, not a straddle - so the
+	# leg clears the rail first.
+	var tf22b: Transform3D = main.test_hand_tf["R"]
+	tf22b.origin += Vector3(0.0, 0.5, 0.0)
+	main.test_hand_tf["R"] = tf22b
+	await frames(4)
+	main.test_button["B"] = true
+	await frames(4)
+	main.test_button["B"] = false
+	await frames(4)
+	check(main.mode == "PRACTICE" and main.state == "STAND"
+		and not main.grab_state.latched,
+		"FP22 battery: B mid-hold ends the hold cleanly - gathered, unlatched, nothing straddled")
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
+		main.shoe.zone_world_center("toe"))
+	await frames(6)
+	check(main.state == "HELD" and held_orient_error() < 0.5,
+		"FP22 battery: the hold works again right after the switch (err %.3f deg)"
+		% held_orient_error())
+	await wait_hand_still("R")
+	main.test_grip["R"] = 0.0
+	await frames(4)
+	check(await wait_state("STAND", 600),
+		"FP22 battery: the mode-switch shoe settles back to the stand")
 	main.test_hand_tf.erase("R")
 
 	# --- Fix Pass 7: the shoe waits where you are ---

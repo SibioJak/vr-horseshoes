@@ -22,11 +22,15 @@ extends RefCounted
 ##     already held when the grab latches is consumed by the latch -
 ##     it cannot start a slide until it has been let go and pressed
 ##     again. Trigger-first-then-grip is a grab, never a slide.
-##   - In slide mode the shoe freezes in the world and the hand
-##     slides along the held zone's axis - but only while the hand
-##     is nearly still: at swing speed the shoe keeps following the
-##     hand, so a trigger squeezed mid-swing can never shift the
-##     anchor under a throw.
+##   - In slide mode the hand's travel along the held zone's
+##     axis adjusts the grip offset - but only while the hand
+##     is nearly still: at swing speed the anchor cannot shift,
+##     so a trigger squeezed mid-swing can never move the grip
+##     under a throw. (Fix Pass 22: main's mechanism is the
+##     CARRIED slide - the shoe rides the hand and the offset
+##     accumulates, clamped to the zone's extent. The original
+##     world-freeze let the hand walk away from the parked
+##     shoe entirely; this class owns only mode and gate.)
 ##   - Exit: trigger released below TRIG_OFF while the grip stays
 ##     held - the hold re-locks at the new anchor (slide_end).
 ##   - Releasing the GRIP is always the throw/drop path, in or out
@@ -44,7 +48,7 @@ var latched: bool = false
 var hand: String = ""
 var zone: String = ""
 var slide_mode: bool = false # trigger held: slide mode is engaged
-var sliding: bool = false # slide mode AND hand slow: shoe frozen, anchor adjustable
+var sliding: bool = false # slide mode AND hand slow: the offset is being adjusted (shoe carried)
 var _trig_prev: float = 0.0
 
 

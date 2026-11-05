@@ -97,6 +97,11 @@ var held_zone: String = ""
 var held_hold: String = ""
 var rel_tf := Transform3D.IDENTITY
 var slide_offset: float = 0.0
+# Fix Pass 22: the carried slide's hand tracker - the previous
+# frame's holding-hand position, so the hand's per-frame travel
+# along the zone axis can accumulate into slide_offset.
+var _slide_prev_hand: Vector3 = Vector3.ZERO
+var _slide_prev_valid: bool = false
 # Fix Pass 21: the grip cycle's in-world label - a small board-
 # family tag that rides above the held shoe naming the grip
 # position (ThrowMath.GRIP_POSITIONS). Visible only while a
@@ -1433,8 +1438,10 @@ func _build_grip_label() -> void:
 func _cycle_grip() -> void:
 	if state != "HELD" or held_hand == "" or shoe == null:
 		return
-	if grab_state.sliding or grab_state.slide_mode:
-		return # mid-slide the shoe is frozen; the slide owns it
+	# Fix Pass 22: no mid-slide refusal any more - under the
+	# carried slide the shoe is in the hand, so a cycle
+	# mid-slide just re-bases the offset at the tapped stop
+	# and the slide keeps adjusting from there.
 	var idx: int = (_grip_index() + 1) % ThrowMath.grip_position_count()
 	var pos: Dictionary = ThrowMath.grip_position(idx)
 	var zone: String = held_zone
@@ -1599,7 +1606,10 @@ func _process(_delta: float) -> void:
 	if state == "HELD":
 		_add_sample()
 	_process_grab()
-	if state == "HELD" and not grab_state.sliding:
+	# Fix Pass 22: the follow is unconditional while held -
+	# the carried slide (see _update_carried_slide) means
+	# even mid-slide the shoe rides the hand.
+	if state == "HELD":
 		shoe.global_transform = _hand_tf(held_hand) * rel_tf
 	shoe.set_markers_visible(debug_show_zones and (state == "STAND" or state == "HELD"))
 	# Fix Pass 21: the grip label rides above the held shoe and
@@ -1654,11 +1664,56 @@ func _process_grab() -> void:
 		"latch":
 			_do_latch(in_hand, in_zone)
 		"slide_start":
-			pass # shoe simply stops following; slide resolves at lock
+			pass # the carried slide accumulates below, per frame
 		"slide_end":
 			_do_slide_end()
 		"release":
 			_do_release()
+	_update_carried_slide()
+
+
+## Fix Pass 22: the CARRIED slide (replaces the world-freeze
+## slide of Fix Pass 2). While the slide is live - trigger
+## held, hand slower than GrabState's swing gate - the shoe
+## keeps riding the hand exactly as in a plain hold (the
+## follow writers no longer skip it), and the hand's travel
+## along the held zone's axis, read in the shoe's own frame,
+## accumulates into slide_offset, clamped to the zone's
+## slide extent: the named stops' span. Travel past a stop
+## saturates the offset, so the hand can wander anywhere -
+## down, sideways, a metre off - and the shoe is still in
+## it. Separation is impossible by construction.
+##
+## The defect this kills (Chris, in the headset, hunting for
+## the cycle button with every control): the old slide FROZE
+## the shoe in the world while the hand moved, with no bound
+## on the travel - turn the hand down and the shoe "didn't
+## want to follow"; they separated entirely, and the shoe
+## teleported back only when the trigger let go. Convicted
+## by probe on the pre-fix code: 0.800 m of slow hand travel
+## left the shoe 0.000 m moved and the separation grown
+## +0.757 m; a 50-degree hand pitch mid-slide left a 50.000
+## degree orientation error; the re-lock teleported the shoe
+## the full 0.800 m. A plain grab and a cycled grip both
+## measured 0.000 deg / 0.0000 m on the same bench - the
+## cycle was innocent; the freeze was the mechanism.
+func _update_carried_slide() -> void:
+	if not grab_state.latched or not grab_state.sliding:
+		_slide_prev_valid = false
+		return
+	var hand_pos: Vector3 = _hand_tf(held_hand).origin
+	if _slide_prev_valid:
+		var z: Dictionary = Shoe.zones()[held_zone]
+		var axis: Vector3 = z["slide_axis"]
+		var smax: float = float(z["slide_max"])
+		var axis_world: Vector3 = (shoe.global_transform.basis * axis).normalized()
+		var d: float = (hand_pos - _slide_prev_hand).dot(axis_world)
+		var new_off: float = clampf(slide_offset + d, -smax, smax)
+		if not is_equal_approx(new_off, slide_offset):
+			slide_offset = new_off
+			rel_tf = Shoe.hold_transform(held_zone, held_hand, slide_offset)
+	_slide_prev_hand = hand_pos
+	_slide_prev_valid = true
 
 
 func _do_latch(hand: String, zone: String) -> void:
@@ -1693,22 +1748,16 @@ func _do_latch(hand: String, zone: String) -> void:
 
 
 func _do_slide_end() -> void:
-	var hand_tf: Transform3D = _hand_tf(held_hand)
-	var z: Dictionary = Shoe.zones()[held_zone]
-	var axis: Vector3 = z["slide_axis"]
-	var smax: float = float(z["slide_max"])
-	var center: Vector3 = z["center"]
-	var anchor_local: Vector3 = shoe.global_transform.affine_inverse() * hand_tf.origin
-	var off: float = (anchor_local - center).dot(axis)
-	var clamped: float = clampf(off, -smax, smax)
-	if not is_equal_approx(off, clamped):
-		var shift_local: Vector3 = axis * (off - clamped)
-		shoe.global_position += shoe.global_transform.basis * shift_local
-	slide_offset = clamped
-	rel_tf = hand_tf.affine_inverse() * shoe.global_transform
+	# Fix Pass 22: under the carried slide the offset has
+	# already accumulated live, frame by frame, and rel_tf
+	# already seats it - the re-lock just keeps both. (The
+	# pre-FP22 version measured the hand against the PARKED
+	# shoe here and shifted the shoe to meet it - including a
+	# sideways seat shift from any perpendicular travel, and
+	# the full-travel teleport when the hand had walked off.)
 	recorder.log_record({
 		"type": "grab", "event": "slide", "hand": held_hand, "zone": held_zone,
-		"slide_offset_m": clamped, "ts": Time.get_datetime_string_from_system(),
+		"slide_offset_m": slide_offset, "ts": Time.get_datetime_string_from_system(),
 	})
 	# Fix Pass 21: a settled slide may have crossed into another
 	# stop's neighbourhood - the label follows the nearest stop.
@@ -1883,8 +1932,7 @@ func _physics_process(delta: float) -> void:
 	_restock_to_player_line()
 	if state == "HELD":
 		_add_sample()
-		if not grab_state.sliding:
-			shoe.global_transform = _hand_tf(held_hand) * rel_tf
+		shoe.global_transform = _hand_tf(held_hand) * rel_tf
 	match state:
 		"FLYING":
 			_fly_time += delta
