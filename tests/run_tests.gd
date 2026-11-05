@@ -656,6 +656,43 @@ func test_scoring() -> void:
 	res = Scoring.score_inning([ra])
 	check(int(res["points_ai"]) == 3 and String(res["scorer"]) == "AI",
 		"scoring: a lone AI ringer = 3 for the AI")
+	# Fix Pass 20: the insert cam's breakdown text - per-shoe
+	# lines and the cancellation arithmetic in plain words,
+	# driven off the same settled results the scorer reads.
+	var shoes20: Array = [
+		{"owner": "P", "dist_in": 0.0, "ringer": true},
+		{"owner": "P", "dist_in": 30.0, "ringer": false},
+		{"owner": "AI", "dist_in": 4.5, "ringer": false},
+		{"owner": "AI", "dist_in": 40.0, "ringer": false}]
+	var sl: Array = Scoring.shoe_lines(shoes20)
+	check(sl.size() == 4 and String(sl[0]) == "YOU 1: RINGER"
+		and String(sl[1]) == "YOU 2: NO SCORE (30.0 IN)"
+		and String(sl[2]) == "OPP 1: 4.5 IN"
+		and String(sl[3]) == "OPP 2: NO SCORE (40.0 IN)",
+		"FP20 breakdown: per-shoe lines name owner, number and result (%s)" % str(sl))
+	var res20: Dictionary = Scoring.score_inning(shoes20)
+	var ex: Array = Scoring.explain_lines(shoes20, res20)
+	check(ex.has("YOUR RINGER STANDS: +3"),
+		"FP20 breakdown: a standing ringer is explained (%s)" % str(ex))
+	check(ex.has("CLOSEST ONLY SCORES"),
+		"FP20 breakdown: the ringer shut out the opponent's point shoe, and the text says why (%s)" % str(ex))
+	var both_ring: Array = [
+		{"owner": "P", "dist_in": 0.0, "ringer": true},
+		{"owner": "AI", "dist_in": 0.0, "ringer": true},
+		{"owner": "P", "dist_in": 3.0, "ringer": false},
+		{"owner": "AI", "dist_in": 5.0, "ringer": false}]
+	var ex2: Array = Scoring.explain_lines(both_ring,
+		Scoring.score_inning(both_ring))
+	check(ex2.has("RINGERS CANCEL IN PAIRS")
+		and ex2.has("YOUR CLOSEST SHOE SCORES: +1"),
+		"FP20 breakdown: cancelled ringers, then the closest shoe decides (%s)" % str(ex2))
+	var dud_round: Array = [
+		{"owner": "P", "dist_in": 20.0, "ringer": false},
+		{"owner": "AI", "dist_in": 25.0, "ringer": false}]
+	var ex3: Array = Scoring.explain_lines(dud_round,
+		Scoring.score_inning(dud_round))
+	check(ex3.size() == 1 and String(ex3[0]) == "NO SCORE THIS ROUND",
+		"FP20 breakdown: a scoreless round says so plainly (%s)" % str(ex3))
 
 
 func test_ai_release() -> void:

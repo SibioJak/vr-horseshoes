@@ -6,8 +6,12 @@ extends Node3D
 ## true foul lines at the pitching end, NHPA cancellation
 ## scoring to 21 against a visible AI club player, and a
 ## one-way inning rhythm - both pitchers throw from the line
-## end, the player walks down to the pit to score the inning,
-## walks back, and the next inning stocks. The judged core is
+## end, and when the last shoe settles the round tabulates
+## itself and the INSERT CAM shows a live closeup of the pit
+## with the score breakdown (Fix Pass 20: no mandatory walk
+## down and back; walking is free, it just does nothing
+## functional - though a live round clamps the player behind
+## the foul line). The judged core is
 ## untouched and stays guarded by the suites: zone-snap grab
 ## + sticky slide (GrabState/Shoe), windowed release sampling
 ## (ThrowMath), the honest rigid-body shoe (zero damping,
@@ -142,11 +146,13 @@ var _wait_time: float = 0.0
 
 # --- Backyard Game v1 state ---
 # mode: "PRACTICE" (the old test) or "GAME". In GAME, phase runs
-# the one-way loop (Fix Pass 19): "P_TURN" -> "AI_TURN" (order
-# set by inning_first) -> "SCORE" (the player walks down to the
-# pit; the inning posts on arrival) -> "BACK" (he walks back to
-# the line; arrival stocks the next inning) -> next inning, or
-# "OVER". The AI never leaves the pitching end.
+# the one-way loop: "P_TURN" -> "AI_TURN" (order set by
+# inning_first) -> "TABULATE" (Fix Pass 20: all four shoes are
+# down; a short beat runs, then the round posts itself and the
+# insert cam appears) -> "INSERT" (the breakdown is up; A
+# stocks the next inning) -> next inning, or "OVER" (the
+# insert carries the final breakdown). The AI never leaves
+# the pitching end.
 var mode: String = "PRACTICE"
 var phase: String = ""
 var inning: int = 0
@@ -164,6 +170,19 @@ var ai_throw_pending: bool = false # an AI swing is animating
 var ai_wait_clear: float = 0.0
 var _btn_prev: Dictionary = {"A": false, "B": false}
 
+# Fix Pass 20: the insert cam - an in-world panel carrying a
+# live closeup of the pit (a SubViewport sharing this world)
+# plus the round's score breakdown, spawned in front of the
+# player when a round tabulates and dismissed with A.
+const ROUND_BEAT_SEC: float = 0.75 # settle -> tabulation beat
+const INSERT_DIST_M: float = 2.0 # panel distance at spawn
+var tabulate_left: float = -1.0 # TABULATE countdown (<0 idle)
+var round_lines: Array = [] # the insert's breakdown lines
+var insert_root: Node3D = null
+var insert_viewport: SubViewport = null
+var insert_cam: Camera3D = null
+var insert_label: Label3D = null
+
 # Test hooks (used by the headless suites / render proofs only).
 var test_hand_tf: Dictionary = {}
 var test_grip: Dictionary = {}
@@ -180,6 +199,7 @@ func _ready() -> void:
 	_build_world()
 	_build_rig()
 	_build_board()
+	_build_insert()
 	_spawn_shoes()
 	_build_ai()
 	head_tracking_ok = _head_tracking_ok()
@@ -1117,7 +1137,7 @@ func _build_board() -> void:
 	status_label.position = Vector3(0.0, 2.06, 0.01)
 	board_root.add_child(status_label)
 	controls_label = Label3D.new()
-	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON: start game / play again\nB BUTTON: back to practice (in a game)\nRECENTER: menu long-press - seated/standing ok"
+	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON: start game / next round / play again\nB BUTTON: back to practice (in a game)\nRECENTER: menu long-press - seated/standing ok"
 	controls_label.font_size = 30
 	controls_label.pixel_size = 0.00095
 	controls_label.line_spacing = 1.0
@@ -1163,25 +1183,25 @@ func _update_board() -> void:
 			"A: PLAY AGAIN",
 			"B: PRACTICE",
 		]
-	elif phase == "SCORE":
-		# Fix Pass 19: both sides have thrown; the inning posts
-		# when the player walks down to the pit and scores it.
+	elif phase == "TABULATE":
+		# Fix Pass 20: both sides have thrown and all four
+		# shoes are down; the round is posting itself (the
+		# insert cam is about to show the breakdown).
 		lines = [
 			"YOU %d - %d OPP" % [score_you, score_opp],
-			"INNING %d THROWN" % inning,
+			"ROUND %d THROWN" % inning,
 			"LAST: %s" % dist_text,
 			"FLIP: %s" % flip_text,
 			"TURN: %s" % turn_text,
-			"WALK DOWN TO SCORE",
 		]
 		if last_ringer:
 			lines.append("RINGER!")
-	elif phase == "BACK":
+	elif phase == "INSERT":
 		lines = [
 			"YOU %d - %d OPP" % [score_you, score_opp],
-			"INNING %d DONE" % inning,
+			"ROUND %d DONE" % inning,
 			"LAST INNING: %s" % last_inning_text,
-			"WALK BACK TO THE LINE",
+			"A: NEXT ROUND",
 		]
 	else:
 		var turn_text2: String = "YOUR THROW %d OF 2" % (3 - turn_throws_left) \
@@ -1283,11 +1303,13 @@ func _stick_value(hand: String) -> Vector2:
 	return c.get_vector2(&"primary")
 
 
-## Game buttons (Backyard Game v1): A/X = start game / play
-## again, B/Y = back to practice - the board lists both.
-## Either hand counts. Fix Pass 19: B lost the end-swap (the
-## one-way court has no other end) - in a game, at any phase,
-## B returns to practice; in practice B does nothing.
+## Game buttons (Backyard Game v1): A/X = start game / next
+## round / play again, B/Y = back to practice - the board
+## lists both. Either hand counts. Fix Pass 19: B lost the
+## end-swap (the one-way court has no other end) - in a game,
+## at any phase, B returns to practice; in practice B does
+## nothing. Fix Pass 20: A at the insert dismisses it and
+## stocks the next round.
 func _button_down(btn: String) -> bool:
 	if test_button.has(btn):
 		return bool(test_button[btn])
@@ -1309,6 +1331,8 @@ func _poll_buttons() -> void:
 	if a_edge:
 		if mode == "PRACTICE" and state == "STAND":
 			start_game()
+		elif mode == "GAME" and phase == "INSERT":
+			_continue_round()
 		elif mode == "GAME" and phase == "OVER":
 			start_game()
 	if b_edge and mode == "GAME":
@@ -1395,6 +1419,52 @@ func _process_locomotion(delta: float) -> void:
 	if not is_zero_approx(ang):
 		origin.global_transform = Locomotion.rotate_about(
 			origin.global_transform, cam.global_position, deg_to_rad(ang))
+	# Fix Pass 20: the LINE CLAMP (game mode, round live -
+	# see _round_live). A position clamp on the movement
+	# RESULT, not a new input rule: turning, walking backward
+	# or sideways and blending stay exactly as Fix Pass 6
+	# left them; only forward progress past the plane stops.
+	# The plane sits the stance box's stride allowance
+	# (0.40 m) past the 37 ft game line - the player can
+	# stride AT the line, he cannot walk down the lane while
+	# a round is live.
+	if _round_live():
+		var p: Vector3 = origin.global_position
+		var plane: float = game_line_z() - STANCE_HALF_DEPTH
+		if p.z < plane:
+			p.z = plane
+			origin.global_position = p
+
+
+## Fix Pass 20: a game round is LIVE from its first stock
+## until it tabulates and the insert appears (phases P_TURN,
+## AI_TURN, TABULATE). While the insert is up, while the
+## game is over, and in practice, movement is free.
+func _round_live() -> bool:
+	return mode == "GAME" and (phase == "P_TURN" \
+		or phase == "AI_TURN" or phase == "TABULATE")
+
+
+## Fix Pass 20: is the player past the game line's clamp
+## plane (down the lane where a live round would not let
+## him be)?
+func _past_line() -> bool:
+	return origin.global_position.z < game_line_z() - STANCE_HALF_DEPTH
+
+
+## Seat the player back behind the game line (Fix Pass 20,
+## on Fix Pass 15's seat construction): the camera lands
+## 0.55 m behind the 37 ft line at his own x, facing the
+## pit, via Locomotion.seat_transform - yaw only, level by
+## construction, the head's pitch never read, so the FP15
+## tilt cannot recur on this path. Used when a round starts
+## (game start, or A-continue from the insert) with the
+## player down the lane.
+func _seat_behind_line() -> void:
+	var cam_pos: Vector3 = cam.global_position
+	var want := Vector3(cam_pos.x, cam_pos.y, game_line_z() + 0.55)
+	origin.global_transform = Locomotion.seat_transform(
+		cam.transform, want, 0.0)
 
 
 func _process(_delta: float) -> void:
@@ -1712,17 +1782,18 @@ func _physics_process(delta: float) -> void:
 			if _wait_time > RETURN_WAIT_SEC:
 				_return_to_stand()
 	_track_ai_flights(delta)
-	if mode == "GAME":
-		# Fix Pass 19's one-way rhythm: the inning posts when
-		# the player walks down to the pit, and the next inning
-		# stocks when he walks back to the line. Both arrivals
-		# are AREA tests checked every physics frame (the FP12
-		# doctrine - see _at_pit), so a player already standing
-		# there when the phase changes completes it on the spot.
-		if phase == "SCORE" and _at_pit():
+	if mode == "GAME" and phase == "TABULATE":
+		# Fix Pass 20: the round posts ITSELF. All four shoes
+		# are down (the settle paths routed here through
+		# _begin_tabulate), a short beat runs, then the inning
+		# tabulates and the insert cam appears. No player
+		# movement is required at any point - the FP19
+		# walk-arrival triggers are deleted; walking down is
+		# still physically possible and does nothing.
+		tabulate_left -= delta
+		if tabulate_left <= 0.0:
+			tabulate_left = -1.0
 			_score_inning()
-		elif phase == "BACK" and _at_pitching_zone():
-			_finish_inning_cycle()
 
 
 func _settle_throw() -> void:
@@ -1853,6 +1924,14 @@ func _gather_to_rail(line_ft: int) -> void:
 
 
 func start_game() -> void:
+	_hide_insert()
+	# Fix Pass 20: a game can be started from down the lane
+	# (practice is free-form) - the first round is live the
+	# moment it stocks, so seat him behind the line first
+	# rather than let the line clamp snap him back.
+	if _past_line():
+		_seat_behind_line()
+	tabulate_left = -1.0
 	mode = "GAME"
 	score_you = 0
 	score_opp = 0
@@ -1869,6 +1948,8 @@ func start_game() -> void:
 
 
 func _enter_practice() -> void:
+	_hide_insert()
+	tabulate_left = -1.0
 	mode = "PRACTICE"
 	phase = ""
 	inning = 0
@@ -1924,15 +2005,20 @@ func _on_turn_shoe_settled(side: String) -> void:
 	if turn_side == inning_first:
 		_begin_turn("AI" if turn_side == "P" else "P")
 	else:
-		_begin_score_walk()
+		_begin_tabulate()
 
 
-## Both sides have thrown (Fix Pass 19): the inning is on the
-## ground at the pit, unscored, until the player walks down
-## and scores it - the one-pit rhythm. The board prompts the
-## walk; _physics_process watches for his arrival.
-func _begin_score_walk() -> void:
-	phase = "SCORE"
+## Both sides have thrown (Fix Pass 20): all four shoes are
+## DOWN - the settle paths brought us here - so the round
+## tabulates itself after a short beat and the insert cam
+## shows the result. (Fix Pass 19 made the player walk down
+## to post the score and walk back to stock the next round;
+## Chris, 2026-11-04: "we dont wanna make walking down and
+## back mandatory. last shoe thrown in round, score is
+## tabulated, next round, shoes are ready to go.")
+func _begin_tabulate() -> void:
+	phase = "TABULATE"
+	tabulate_left = ROUND_BEAT_SEC
 	grab_armed = false
 	_update_board()
 
@@ -1943,61 +2029,67 @@ func _score_inning() -> void:
 	score_opp += int(res["points_ai"])
 	last_scorer = String(res["scorer"])
 	last_inning_text = String(res["summary"])
+	var over: bool = score_you >= WIN_SCORE or score_opp >= WIN_SCORE
+	if over:
+		winner_text = "YOU WIN!" if score_you > score_opp else "OPP WINS"
+	# Fix Pass 20: the insert's breakdown is built HERE, from
+	# the same settled results the scorer just read - per-shoe
+	# lines, the cancellation arithmetic in plain words, the
+	# round's points and the running totals (the final
+	# breakdown and winner line at game end).
+	round_lines = _build_round_lines(res, over)
 	inning_results.clear()
 	grab_armed = false
-	if score_you >= WIN_SCORE or score_opp >= WIN_SCORE:
-		phase = "OVER"
-		winner_text = "YOU WIN!" if score_you > score_opp else "OPP WINS"
-	else:
-		phase = "BACK"
+	phase = "OVER" if over else "INSERT"
 	_update_board()
+	_show_insert()
 
 
-const PIT_ARRIVAL_RADIUS_M: float = 3.0 # "at the pit" - its box zone, generously
-const LINE_ARRIVAL_RADIUS_M: float = 3.0 # "back at the pitching end"
+## The insert's text for one tabulated round (Fix Pass 20):
+## a header, one line per shoe, the arithmetic in plain
+## words, the round and match lines, and the continue
+## control the panel names on its own face.
+func _build_round_lines(res: Dictionary, over: bool) -> Array:
+	var lines: Array = []
+	if over:
+		lines.append("FINAL - %s" % winner_text)
+	else:
+		lines.append("ROUND %d" % inning)
+	lines.append_array(Scoring.shoe_lines(inning_results))
+	lines.append_array(Scoring.explain_lines(inning_results, res))
+	if int(res["points_p"]) > 0:
+		lines.append("ROUND: YOU +%d" % int(res["points_p"]))
+	elif int(res["points_ai"]) > 0:
+		lines.append("ROUND: OPP +%d" % int(res["points_ai"]))
+	else:
+		lines.append("ROUND: NO SCORE")
+	lines.append("MATCH: YOU %d - %d OPP" % [score_you, score_opp])
+	lines.append("A - PLAY AGAIN" if over else "A - NEXT ROUND")
+	return lines
 
 
-## Has the player walked down to the pit? (Fix Pass 19, on
-## Fix Pass 12's doctrine.) An AREA test - a plain radius
-## around the stake - checked every physics frame during the
-## SCORE phase: arrive anywhere in the pit's box zone and
-## the inning posts. A radius has no dead annulus and no
-## pinpoint to miss, and a player already standing there
-## when the last shoe settles scores on the spot.
-##
-## Defect history (why arrival tests here are areas, walked
-## by the suites on production sticks, never teleports): v1
-## read end-swap arrival with ThrowMath.standing_line_ft - a
-## pair of thin radial RINGS (+/-0.75 m around exact line
-## distances) with dead space between and past them. A player
-## could walk the whole court, stand at the pit inspecting
-## it, or come back from the board side, and read "not
-## arrived" forever: no gather, no stocked shoes, the AI
-## never re-seated (Chris, 2026-11-03: "once shoes are thrown
-## we all just stand around wondering what next, no new
-## shoes"). The v1/FP11 smoke never caught it: its "walk"
-## check teleported the origin into the ring's centre.
-func _at_pit() -> bool:
-	var cp: Vector3 = cam.global_position
-	return Vector2(cp.x - STAKE_POS.x, cp.z - STAKE_POS.z).length() \
-		<= PIT_ARRIVAL_RADIUS_M
-
-
-## Has the player walked back to the pitching end? The same
-## area doctrine, around the 37 ft line's spot: arrival
-## stocks the next inning (see _finish_inning_cycle).
-func _at_pitching_zone() -> bool:
-	var cp: Vector3 = cam.global_position
-	return Vector2(cp.x, cp.z - FOUL_40_Z).length() <= LINE_ARRIVAL_RADIUS_M
-
-
-## End the walk-back: gather the shoes to the pitching end's
-## stations, and start the next inning with whoever scored
-## (NHPA custom; scoreless innings alternate the first
-## throw). The AI never moved - it lives at this end now.
-func _finish_inning_cycle() -> void:
-	if phase != "BACK":
+## A at the insert (Fix Pass 20): dismiss it and stock the
+## next round. If the player strolled down to the pit while
+## the insert was up (movement is free then), he is first
+## seated back behind the line (Fix Pass 15's yaw-only seat
+## - level by construction) so the new round starts legal;
+## the line clamp then holds him there while it is live.
+func _continue_round() -> void:
+	if phase != "INSERT":
 		return
+	if _past_line():
+		_seat_behind_line()
+	_finish_inning_cycle()
+
+
+## Dismiss the insert, gather the shoes to the pitching
+## end's stations, and start the next inning with whoever
+## scored (NHPA custom; scoreless innings alternate the
+## first throw). The AI never moved - it lives at this end.
+func _finish_inning_cycle() -> void:
+	if phase != "INSERT":
+		return
+	_hide_insert()
 	inning += 1
 	if last_scorer != "":
 		inning_first = last_scorer
@@ -2005,6 +2097,91 @@ func _finish_inning_cycle() -> void:
 		inning_first = "AI" if inning_first == "P" else "P"
 	_gather_to_rail(40)
 	_begin_turn(inning_first)
+	_update_board()
+
+
+## Build the insert cam panel (Fix Pass 20): a board-family
+## wooden slab carrying a LIVE pit closeup over the round's
+## breakdown text. The closeup is a SubViewport sharing this
+## world, fed by its own camera parked above and behind the
+## pit looking down at the stake (framed so all four settled
+## shoes sit in the shot - the suites assert exactly that).
+## The viewport renders only while the panel is up. Built
+## once, hidden, positioned at each showing.
+func _build_insert() -> void:
+	insert_root = Node3D.new()
+	insert_root.name = "InsertCam"
+	add_child(insert_root)
+	var wood := _mat(Color(0.30, 0.21, 0.12))
+	_box(insert_root, Vector3(0.0, 0.0, -0.03), Vector3(1.52, 1.34, 0.05), wood)
+	insert_viewport = SubViewport.new()
+	insert_viewport.name = "InsertViewport"
+	insert_viewport.size = Vector2i(1024, 512)
+	insert_viewport.world_3d = get_world_3d()
+	insert_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	insert_root.add_child(insert_viewport)
+	insert_cam = Camera3D.new()
+	insert_cam.name = "InsertCamera"
+	insert_viewport.add_child(insert_cam)
+	insert_cam.position = Vector3(0.0, 3.0, -9.35)
+	insert_cam.fov = 50.0
+	insert_cam.look_at(Vector3(0.0, 0.1, STAKE_POS.z), Vector3.UP)
+	insert_cam.current = true
+	var quad := MeshInstance3D.new()
+	quad.name = "InsertScreen"
+	var qm := QuadMesh.new()
+	qm.size = Vector2(1.36, 0.68)
+	quad.mesh = qm
+	var qmat := StandardMaterial3D.new()
+	qmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	qmat.albedo_texture = insert_viewport.get_texture()
+	quad.material_override = qmat
+	quad.position = Vector3(0.0, 0.28, 0.001)
+	insert_root.add_child(quad)
+	insert_label = Label3D.new()
+	insert_label.font_size = 48
+	insert_label.pixel_size = 0.00062
+	insert_label.modulate = Color(0.95, 0.97, 0.90)
+	insert_label.outline_size = 5
+	insert_label.outline_modulate = Color(0.1, 0.07, 0.03)
+	insert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	insert_label.position = Vector3(0.0, -0.40, 0.0025)
+	insert_root.add_child(insert_label)
+	insert_root.visible = false
+
+
+## Raise the insert (Fix Pass 20): spawned head-relative -
+## INSERT_DIST_M ahead of where the player is looking,
+## slightly below eye level - then WORLD-LOCKED. It never
+## follows the head after spawn, so he can look around it,
+## walk around it, or stroll down to the pit while it is
+## up; it appears identically whether he stayed at the line
+## or wandered. The spawn basis is yaw-only by construction
+## (the look target shares the panel's height), the FP15
+## discipline: no head pitch can be written into the world.
+func _show_insert() -> void:
+	if insert_root == null:
+		return
+	insert_label.text = "\n".join(PackedStringArray(round_lines))
+	var cam_pos: Vector3 = cam.global_position
+	var fwd := Vector3(-cam.global_transform.basis.z.x, 0.0,
+		-cam.global_transform.basis.z.z)
+	if fwd.length() < 0.01:
+		fwd = Vector3(0.0, 0.0, -1.0)
+	fwd = fwd.normalized()
+	var pos: Vector3 = cam_pos + fwd * INSERT_DIST_M
+	pos.y = clampf(cam_pos.y - 0.12, 0.9, 1.75)
+	insert_root.global_transform = Transform3D(Basis(), pos).looking_at(
+		pos + fwd, Vector3.UP)
+	insert_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	insert_root.visible = true
+
+
+func _hide_insert() -> void:
+	if insert_root == null:
+		return
+	insert_root.visible = false
+	insert_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	_update_board()
 
 

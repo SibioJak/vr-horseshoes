@@ -99,3 +99,86 @@ static func score_inning(shoes: Array) -> Dictionary:
 		"scorer": scorer,
 		"summary": summary,
 	}
+
+
+## Per-shoe lines for the round breakdown (Fix Pass 20's
+## insert cam): one line per settled shoe, in throw order,
+## each side numbered within itself. The result words are
+## the insert's three: RINGER, the distance in inches for a
+## point-range shoe, or NO SCORE with the distance kept.
+static func shoe_lines(shoes: Array) -> Array:
+	var lines: Array = []
+	var n_p: int = 0
+	var n_ai: int = 0
+	for raw: Variant in shoes:
+		var s: Dictionary = raw
+		var who: String
+		if String(s["owner"]) == "P":
+			n_p += 1
+			who = "YOU %d" % n_p
+		else:
+			n_ai += 1
+			who = "OPP %d" % n_ai
+		var res_text: String
+		if bool(s["ringer"]):
+			res_text = "RINGER"
+		elif float(s["dist_in"]) <= POINT_RANGE_IN:
+			res_text = "%.1f IN" % float(s["dist_in"])
+		else:
+			res_text = "NO SCORE (%.1f IN)" % float(s["dist_in"])
+		lines.append("%s: %s" % [who, res_text])
+	return lines
+
+
+## The cancellation arithmetic in plain words (Fix Pass 20):
+## how the round's points came to be, line by line - ringers
+## cancel in pairs, a standing ringer scores, and point
+## shoes score only for the side holding the closest (which
+## is why a point-range shoe on the losing side earns the
+## CLOSEST ONLY SCORES line when it was shut out).
+static func explain_lines(shoes: Array, res: Dictionary) -> Array:
+	var lines: Array = []
+	var ringers_p: int = int(res["ringers_p"])
+	var ringers_ai: int = int(res["ringers_ai"])
+	var rem_p: int = maxi(0, ringers_p - ringers_ai)
+	var rem_ai: int = maxi(0, ringers_ai - ringers_p)
+	if ringers_p > 0 and ringers_ai > 0:
+		lines.append("RINGERS CANCEL IN PAIRS")
+	if rem_p == 1:
+		lines.append("YOUR RINGER STANDS: +%d" % (RINGER_POINTS * rem_p))
+	elif rem_p > 1:
+		lines.append("YOUR RINGERS STAND: +%d" % (RINGER_POINTS * rem_p))
+	if rem_ai == 1:
+		lines.append("OPP RINGER STANDS: +%d" % (RINGER_POINTS * rem_ai))
+	elif rem_ai > 1:
+		lines.append("OPP RINGERS STAND: +%d" % (RINGER_POINTS * rem_ai))
+	var point_p: int = int(res["points_p"]) - RINGER_POINTS * rem_p
+	var point_ai: int = int(res["points_ai"]) - RINGER_POINTS * rem_ai
+	if point_p == 1:
+		lines.append("YOUR CLOSEST SHOE SCORES: +1")
+	elif point_p > 1:
+		lines.append("YOUR CLOSEST SHOES SCORE: +%d" % point_p)
+	if point_ai == 1:
+		lines.append("OPP CLOSEST SHOE SCORES: +1")
+	elif point_ai > 1:
+		lines.append("OPP CLOSEST SHOES SCORE: +%d" % point_ai)
+	if String(res["scorer"]) != "" and _loser_had_point_shoe(shoes, res):
+		lines.append("CLOSEST ONLY SCORES")
+	if int(res["points_p"]) == 0 and int(res["points_ai"]) == 0:
+		lines.append("NO SCORE THIS ROUND")
+	return lines
+
+
+## Did the losing side land a point-range shoe that earned
+## nothing? It lost the closest contest - or a standing
+## ringer held closest (distance 0) against it.
+static func _loser_had_point_shoe(shoes: Array, res: Dictionary) -> bool:
+	var scorer: String = String(res["scorer"])
+	if scorer == "":
+		return false
+	for raw: Variant in shoes:
+		var s: Dictionary = raw
+		if String(s["owner"]) != scorer and not bool(s["ringer"]) \
+				and float(s["dist_in"]) <= POINT_RANGE_IN:
+			return true
+	return false
