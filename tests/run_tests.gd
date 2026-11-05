@@ -607,6 +607,42 @@ func test_api_guard() -> void:
 			"API guard: %s.%s exists" % [String(p[0]), String(p[1])])
 
 
+func test_grip_positions() -> void:
+	# Fix Pass 21: the grip cycle's named positions - the table
+	# itself (cycle order, declared counts, families) and the
+	# derivation that names a hold from its zone + slide offset.
+	check(ThrowMath.grip_position_count() == 4, "grip cycle: four named positions")
+	var want_names: Array = ["TOE GRIP", "SHANK · TOE", "SHANK · MID", "SHANK · HEEL"]
+	var want_nom: Array = [1.0, 1.125, 1.25, 1.375]
+	var want_hold: Array = ["flip", "turn", "turn", "turn"]
+	for i: int in 4:
+		var p: Dictionary = ThrowMath.grip_position(i)
+		check(String(p["name"]) == String(want_names[i]),
+			"grip cycle: position %d is %s (got %s)" % [i, want_names[i], p["name"]])
+		check(is_equal_approx(float(p["nominal"]), float(want_nom[i])),
+			"grip cycle: %s declares %.3f rev" % [want_names[i], want_nom[i]])
+		check(String(p["hold"]) == String(want_hold[i]),
+			"grip cycle: %s is the %s family" % [want_names[i], want_hold[i]])
+	# Derivation at the stops and across the neighbourhood
+	# boundaries (stops at frac -1/0/+1, split at +-0.5).
+	var smax: float = 0.045 # the shank zones' slide_max (Shoe.zones)
+	check(ThrowMath.grip_index_for("toe", 0.0, 0.022) == 0, "grip derive: the toe zone is TOE GRIP")
+	check(ThrowMath.grip_index_for("shank_right", -smax, smax) == 1, "grip derive: shank toe-end stop")
+	check(ThrowMath.grip_index_for("shank_left", 0.0, smax) == 2, "grip derive: shank middle stop")
+	check(ThrowMath.grip_index_for("shank_right", smax, smax) == 3, "grip derive: shank heel-end stop")
+	check(ThrowMath.grip_index_for("shank_right", -0.49 * smax, smax) == 2,
+		"grip derive: just inside the toe/mid boundary names MID")
+	check(ThrowMath.grip_index_for("shank_right", -0.51 * smax, smax) == 1,
+		"grip derive: just past the toe/mid boundary names TOE")
+	check(ThrowMath.grip_index_for("shank_left", 0.51 * smax, smax) == 3,
+		"grip derive: just past the mid/heel boundary names HEEL")
+	# The stops' slide offsets are the slide range's ends and middle.
+	check(is_equal_approx(ThrowMath.grip_slide_offset(1, smax), -smax), "grip stops: TOE stop at -slide_max")
+	check(is_equal_approx(ThrowMath.grip_slide_offset(2, smax), 0.0), "grip stops: MID stop at 0")
+	check(is_equal_approx(ThrowMath.grip_slide_offset(3, smax), smax), "grip stops: HEEL stop at +slide_max")
+	check(is_equal_approx(ThrowMath.grip_slide_offset(0, 0.022), 0.0), "grip stops: TOE GRIP carries no slide")
+
+
 func test_scoring() -> void:
 	# Backyard Game v1: NHPA cancellation scoring, hand-computed
 	# cases. A shoe entry is {owner, dist_in, ringer}; a ringer is
@@ -734,6 +770,7 @@ func _run() -> void:
 	test_level_origin()
 	test_origin_relative_velocity()
 	test_yaw_deg()
+	test_grip_positions()
 	test_api_guard()
 	test_scoring()
 	test_ai_release()

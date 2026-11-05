@@ -101,9 +101,17 @@ static func zone_aabb(zone: String) -> AABB:
 ## The defined hold for a zone: shoe transform relative to the hand
 ## (shoe_global = hand_global * this). The anchor is the zone centre,
 ## so the grabbed part of the shoe sits in the fingers.
-static func hold_transform(zone: String, hand: String) -> Transform3D:
+## Fix Pass 21: `slide_off` slides the anchor along the zone's
+## slide axis exactly as a settled slide leaves it (main's
+## _do_slide_end measures the same offset), so a cycled grip
+## stop and a slid grip seat the shoe identically. Default 0
+## keeps every pre-FP21 caller byte-identical.
+static func hold_transform(zone: String, hand: String, slide_off: float = 0.0) -> Transform3D:
 	var z: Dictionary = zones()[zone]
 	var center: Vector3 = z["center"]
+	if slide_off != 0.0:
+		var axis: Vector3 = z["slide_axis"]
+		center = center + axis * slide_off
 	var basis: Basis
 	if String(z["hold"]) == "flip":
 		# Toe in the fingers, shoe flat, open end forward (hand -Z):

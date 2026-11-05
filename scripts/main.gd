@@ -97,6 +97,12 @@ var held_zone: String = ""
 var held_hold: String = ""
 var rel_tf := Transform3D.IDENTITY
 var slide_offset: float = 0.0
+# Fix Pass 21: the grip cycle's in-world label - a small board-
+# family tag that rides above the held shoe naming the grip
+# position (ThrowMath.GRIP_POSITIONS). Visible only while a
+# shoe is held; gone the instant it is released.
+var grip_label: Label3D = null
+var _cycle_prev: bool = false # free-hand cycle button, previous poll
 var candidate_hand: String = ""
 var candidate_zone: String = ""
 
@@ -189,6 +195,7 @@ var test_grip: Dictionary = {}
 var test_trigger: Dictionary = {}
 var test_stick: Dictionary = {}
 var test_button: Dictionary = {} # "A"/"B" -> bool
+var test_button_hand: Dictionary = {} # "L"/"R" -> {"A"/"B" -> bool} (Fix Pass 21 per-hand reads)
 var debug_show_zones: bool = false
 
 
@@ -199,6 +206,7 @@ func _ready() -> void:
 	_build_world()
 	_build_rig()
 	_build_board()
+	_build_grip_label()
 	_build_insert()
 	_spawn_shoes()
 	_build_ai()
@@ -1137,7 +1145,7 @@ func _build_board() -> void:
 	status_label.position = Vector3(0.0, 2.06, 0.01)
 	board_root.add_child(status_label)
 	controls_label = Label3D.new()
-	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON: start game / next round / play again\nB BUTTON: back to practice (in a game)\nRECENTER: menu long-press - seated/standing ok"
+	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nX / A (FREE HAND): CHANGE GRIP\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON: start game / next round / play again\nB BUTTON: back to practice (in a game)\nRECENTER: menu long-press - seated/standing ok"
 	controls_label.font_size = 30
 	controls_label.pixel_size = 0.00095
 	controls_label.line_spacing = 1.0
@@ -1310,24 +1318,51 @@ func _stick_value(hand: String) -> Vector2:
 ## at any phase, B returns to practice; in practice B does
 ## nothing. Fix Pass 20: A at the insert dismisses it and
 ## stocks the next round.
-func _button_down(btn: String) -> bool:
+## Fix Pass 21: the A/X channel is read PER HAND. While a shoe
+## is held, the FREE hand's face button is the grip cycle (X
+## when the right hand holds, A when the left hand holds) -
+## never a game command; the holding hand's own face button
+## does nothing. When no shoe is held, either hand's press is
+## the game A, exactly as before. B is never the cycle.
+func _hand_button_down(hand: String, btn: String) -> bool:
+	if test_button_hand.has(hand):
+		var per: Dictionary = test_button_hand[hand]
+		if per.has(btn):
+			return bool(per[btn])
 	if test_button.has(btn):
 		return bool(test_button[btn])
+	var c: XRController3D = hand_ctrl[hand]
+	if c == null:
+		return false
 	var action: StringName = &"ax_button" if btn == "A" else &"by_button"
-	for hand: String in ["L", "R"]:
-		var c: XRController3D = hand_ctrl[hand]
-		if c != null and c.is_button_pressed(action):
-			return true
-	return false
+	return c.is_button_pressed(action)
+
+
+func _button_down(btn: String) -> bool:
+	return _hand_button_down("L", btn) or _hand_button_down("R", btn)
 
 
 func _poll_buttons() -> void:
-	var a_now: bool = _button_down("A")
+	var free_hand: String = ""
+	if state == "HELD" and held_hand != "":
+		free_hand = "L" if held_hand == "R" else "R"
+	var a_now: bool = false
+	var cycle_now: bool = false
+	for hand: String in ["L", "R"]:
+		if not _hand_button_down(hand, "A"):
+			continue
+		if hand == free_hand:
+			cycle_now = true
+		else:
+			a_now = true
 	var b_now: bool = _button_down("B")
 	var a_edge: bool = a_now and not bool(_btn_prev["A"])
 	var b_edge: bool = b_now and not bool(_btn_prev["B"])
 	_btn_prev["A"] = a_now
 	_btn_prev["B"] = b_now
+	if cycle_now and not _cycle_prev:
+		_cycle_grip()
+	_cycle_prev = cycle_now
 	if a_edge:
 		if mode == "PRACTICE" and state == "STAND":
 			start_game()
@@ -1337,6 +1372,82 @@ func _poll_buttons() -> void:
 			start_game()
 	if b_edge and mode == "GAME":
 		_enter_practice()
+
+
+## Fix Pass 21: the grip position the held shoe currently
+## declares - from the zone under the hand and the settled
+## slide offset (ThrowMath.grip_index_for). The label names
+## it; the cycle advances from it; the release serves it.
+func _grip_index() -> int:
+	if held_zone == "":
+		return 0
+	var z: Dictionary = Shoe.zones()[held_zone]
+	return ThrowMath.grip_index_for(held_zone, slide_offset, float(z["slide_max"]))
+
+
+func _refresh_grip_label() -> void:
+	if grip_label == null:
+		return
+	var p: Dictionary = ThrowMath.grip_position(_grip_index())
+	grip_label.text = String(p["label"])
+
+
+func _build_grip_label() -> void:
+	grip_label = Label3D.new()
+	grip_label.name = "GripLabel"
+	grip_label.font_size = 48
+	grip_label.pixel_size = 0.00085
+	grip_label.modulate = Color(1.0, 0.93, 0.75)
+	grip_label.outline_size = 8
+	grip_label.outline_modulate = Color(0.1, 0.07, 0.03)
+	grip_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	grip_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	grip_label.no_depth_test = true
+	grip_label.visible = false
+	add_child(grip_label)
+
+
+## Fix Pass 21: one tap of the free hand's face button walks
+## the grip to the next named position around the shoe
+## (TOE GRIP -> SHANK · TOE -> SHANK · MID -> SHANK · HEEL ->
+## TOE GRIP ...). The shoe re-seats in the hand at the new
+## position's hold pose - zone plus the stop's slide offset -
+## with a haptic tick from the zone tick's family, deepened
+## per stop. Entering the shank family from the toe takes the
+## shank on the holding hand's own side (the per-hand mirrored
+## turn setups Shoe.hold_transform builds); moving within the
+## shank family keeps the grabbed shank.
+func _cycle_grip() -> void:
+	if state != "HELD" or held_hand == "" or shoe == null:
+		return
+	if grab_state.sliding or grab_state.slide_mode:
+		return # mid-slide the shoe is frozen; the slide owns it
+	var idx: int = (_grip_index() + 1) % ThrowMath.grip_position_count()
+	var pos: Dictionary = ThrowMath.grip_position(idx)
+	var zone: String = held_zone
+	if String(pos["hold"]) == "flip":
+		zone = "toe"
+	elif held_zone == "toe":
+		zone = "shank_right" if held_hand == "R" else "shank_left"
+	var z: Dictionary = Shoe.zones()[zone]
+	slide_offset = ThrowMath.grip_slide_offset(idx, float(z["slide_max"]))
+	if zone != held_zone:
+		shoe.clear_highlights()
+		held_zone = zone
+		held_hold = String(z["hold"])
+		shoe.set_highlight(zone, true)
+	rel_tf = Shoe.hold_transform(zone, held_hand, slide_offset)
+	shoe.global_transform = _hand_tf(held_hand) * rel_tf
+	var c: XRController3D = hand_ctrl[held_hand]
+	if c != null:
+		c.trigger_haptic_pulse(&"haptic", 0.0, 0.30 + 0.10 * float(idx),
+			0.03 + 0.012 * float(idx), 0.0)
+	_refresh_grip_label()
+	recorder.log_record({
+		"type": "grab", "event": "grip_cycle", "hand": held_hand, "zone": held_zone,
+		"grip": String(pos["name"]), "slide_offset_m": slide_offset,
+		"ts": Time.get_datetime_string_from_system(),
+	})
 
 
 func _track_hand_speed(hand: String) -> void:
@@ -1478,6 +1589,14 @@ func _process(_delta: float) -> void:
 	if state == "HELD" and not grab_state.sliding:
 		shoe.global_transform = _hand_tf(held_hand) * rel_tf
 	shoe.set_markers_visible(debug_show_zones and (state == "STAND" or state == "HELD"))
+	# Fix Pass 21: the grip label rides above the held shoe and
+	# is gone the instant the shoe leaves the hand.
+	if grip_label != null:
+		if state == "HELD" and shoe != null:
+			grip_label.visible = true
+			grip_label.global_position = shoe.global_position + Vector3(0.0, 0.14, 0.0)
+		else:
+			grip_label.visible = false
 
 
 func _process_grab() -> void:
@@ -1557,6 +1676,7 @@ func _do_latch(hand: String, zone: String) -> void:
 		"type": "grab", "event": "latch", "hand": hand, "zone": zone,
 		"hold": held_hold, "ts": Time.get_datetime_string_from_system(),
 	})
+	_refresh_grip_label()
 
 
 func _do_slide_end() -> void:
@@ -1577,6 +1697,9 @@ func _do_slide_end() -> void:
 		"type": "grab", "event": "slide", "hand": held_hand, "zone": held_zone,
 		"slide_offset_m": clamped, "ts": Time.get_datetime_string_from_system(),
 	})
+	# Fix Pass 21: a settled slide may have crossed into another
+	# stop's neighbourhood - the label follows the nearest stop.
+	_refresh_grip_label()
 
 
 func _do_release() -> void:

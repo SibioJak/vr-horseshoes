@@ -536,6 +536,69 @@ static func evaluate_release_at(samples: Array, release_basis: Basis, t_star: fl
 
 
 # ============================================================
+# Fix Pass 21: the grip cycle - named positions around the shoe.
+#
+# While a shoe is held, the free hand's face button walks the
+# grip through four NAMED positions, each declaring the total
+# it is meant to throw (Smith, "Science at the Stake": the
+# grip names the count - a shank hold toward the toe end
+# declares 1 1/8 turns, mid-shank 1 1/4, toward the heel
+# 1 3/8; the toe/bridge hold is the flip, 1.00). The cycle
+# teaches the sport: the label by the shoe always names a
+# position, and the spin governor (below) serves the position
+# held at release. The three shank stops ride the existing
+# shank zone's slide axis (Shoe.zones): slide_frac is the
+# position's seat as a fraction of the zone's slide_max -
+# toe end -1, middle 0, heel end +1 - and the grip+trigger
+# slide stays the fine trim between stops.
+# ============================================================
+
+const GRIP_POSITIONS: Array = [
+	{"id": "toe", "name": "TOE GRIP", "label": "TOE GRIP · FLIP",
+		"hold": "flip", "nominal": 1.0, "slide_frac": 0.0},
+	{"id": "shank_toe", "name": "SHANK · TOE", "label": "SHANK · TOE · 1⅛ TURN",
+		"hold": "turn", "nominal": 1.125, "slide_frac": -1.0},
+	{"id": "shank_mid", "name": "SHANK · MID", "label": "SHANK · MID · 1¼ TURN",
+		"hold": "turn", "nominal": 1.25, "slide_frac": 0.0},
+	{"id": "shank_heel", "name": "SHANK · HEEL", "label": "SHANK · HEEL · 1⅜ TURN",
+		"hold": "turn", "nominal": 1.375, "slide_frac": 1.0},
+]
+
+
+static func grip_position_count() -> int:
+	return GRIP_POSITIONS.size()
+
+
+static func grip_position(idx: int) -> Dictionary:
+	return GRIP_POSITIONS[clampi(idx, 0, GRIP_POSITIONS.size() - 1)]
+
+
+## The position a hold currently declares, from the zone under
+## the hand and the slide offset along the zone's axis
+## (Shoe.zones, main's slide_offset): the toe zone always
+## declares TOE GRIP; a shank hold declares the stop nearest
+## its slide fraction (stops at -1, 0, +1, split at the
+## +-0.5 midpoints). A grab starts here; the cycle advances
+## from here; a slide settle re-derives here.
+static func grip_index_for(zone: String, slide_offset: float, slide_max: float) -> int:
+	if zone == "toe" or slide_max <= 0.0:
+		return 0
+	var frac: float = clampf(slide_offset / slide_max, -1.0, 1.0)
+	if frac < -0.5:
+		return 1
+	if frac > 0.5:
+		return 3
+	return 2
+
+
+## The slide offset a position declares on a zone with the
+## given slide range.
+static func grip_slide_offset(idx: int, slide_max: float) -> float:
+	var p: Dictionary = grip_position(idx)
+	return float(p["slide_frac"]) * slide_max
+
+
+# ============================================================
 # Fix Pass 16: the finger-drag term (spin governor).
 #
 # The disease (measured on Chris's throws-14): his shoes leave
