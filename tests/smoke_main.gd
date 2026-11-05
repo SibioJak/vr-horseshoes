@@ -505,23 +505,22 @@ func scripted_ai_throw(kind: String) -> bool:
 	return false
 
 
-## Fix Pass 13 / 19: play ONE inning with scripted shots on
-## both sides (production paths throughout): the player's
-## shots from p_kinds in throw order, the AI's from ai_kinds.
-## Returns when the inning is fully THROWN (phase SCORE -
-## the score itself posts when the player walks down, which
-## the callers do - or OVER, which cannot happen before the
-## walk: the win posts at the pit too). BACK also completes
-## it: if the player is already standing at the pit when the
-## last shoe settles, the inning posts on the spot (the FP12
-## doctrine) and SCORE flashes past between polls.
+## Fix Pass 13 / 19 / 20: play ONE inning with scripted
+## shots on both sides (production paths throughout): the
+## player's shots from p_kinds in throw order, the AI's from
+## ai_kinds. Returns when the inning is fully THROWN (phase
+## TABULATE - Fix Pass 20: the round then posts ITSELF after
+## the beat and the insert appears; the callers wait for
+## INSERT - or OVER, which posts through the same beat).
+## INSERT also completes it: the 0.75 s beat can elapse
+## between polls while a slow scripted shot settles.
 func play_scripted_inning(p_kinds: Array, ai_kinds: Array) -> bool:
 	var p_i: int = 0
 	var a_i: int = 0
 	var guard: float = 0.0
 	while guard < 240.0:
 		main.ai_delay = 100000.0
-		if String(main.phase) == "SCORE" or String(main.phase) == "BACK" \
+		if String(main.phase) == "TABULATE" or String(main.phase) == "INSERT" \
 				or String(main.phase) == "OVER":
 			return p_i == p_kinds.size() and a_i == ai_kinds.size()
 		if String(main.phase) == "P_TURN":
@@ -560,10 +559,12 @@ func all_railed() -> bool:
 	return true
 
 
-## Fix Pass 12 / 19: park a fresh game at the walk-down
-## prompt with a manufactured thrown inning (the win probes'
-## method - honest path to the prompt, no throws needed).
-func manufacture_score_walk() -> void:
+## Fix Pass 12 / 19 / 20: park a fresh game at the round-end
+## beat with a manufactured thrown inning (the win probes'
+## method - honest path to the tabulation, no throws needed).
+## Fix Pass 20: _begin_tabulate starts the settle beat; the
+## round posts itself ~0.75 s later and the insert appears.
+func manufacture_round() -> void:
 	main.origin.global_transform = Transform3D.IDENTITY
 	main.test_grip["L"] = 0.0
 	main.test_grip["R"] = 0.0
@@ -572,121 +573,26 @@ func manufacture_score_walk() -> void:
 		{"owner": "AI", "dist_in": 0.0, "ringer": true},
 		{"owner": "P", "dist_in": 30.0, "ringer": false},
 		{"owner": "P", "dist_in": 40.0, "ringer": false}]
-	main._begin_score_walk()
+	main._begin_tabulate()
 
 
-## Fix Pass 19: the right-stick correction that keeps a
-## walking player's heading on a target direction, the way a
-## player steers without thinking about it. (Production sign,
-## measured: a +1 stick DECREASES the heading angle
-## atan2(fwd.x, fwd.z).)
-func steer_x(target_dir: Vector3) -> float:
-	var fwd: Vector3 = -main.cam.global_transform.basis.z
-	var phi: float = atan2(fwd.x, fwd.z)
-	var want: float = atan2(target_dir.x, target_dir.z)
-	var err: float = wrapf(want - phi, -PI, PI)
-	if absf(err) < 0.12:
-		return 0.0
-	return -signf(err)
+## Pulse a game button through the production poll (the A/B
+## test transport), the way the field presses it.
+func pulse_button(btn: String) -> void:
+	main.test_button[btn] = true
+	await frames(4)
+	main.test_button[btn] = false
+	await frames(4)
 
 
-## Fix Pass 19 (on Fix Pass 12's doctrine): WALK the player
-## DOWN to the pit on the production sticks, the way a player
-## does it - right stick to face the pit if needed, then left
-## stick forward at walk speed down the actual court, ending
-## beside the pit. NO origin teleports: if the arrival test
-## ever narrows back into a pinpoint, this walk misses it,
-## the phase stays SCORE, and the caller's checks fail. The
-## moment the score posts mid-walk, where he was standing is
-## snapshotted (fire_z) so the caller can prove the area test
-## fired at its boundary, not somewhere up the lane.
-func walk_down_to_pit(timeout_sec: float) -> Dictionary:
-	var t0: int = Time.get_ticks_msec()
-	var limit_ms: int = int(timeout_sec * 1000.0)
-	# Face the pit with the right stick (production turn) -
-	# ALL the way: the FP19 pitching-zone disc is x-sensitive,
-	# so a lazy 120-degree turn walks a long diagonal and
-	# misses it (the probe that found this ended at x +17).
-	while float(Time.get_ticks_msec() - t0) < limit_ms:
-		var fwd: Vector3 = -main.cam.global_transform.basis.z
-		if fwd.z < -0.92:
-			break
-		main.test_stick["R"] = Vector2(1.0, 0.0)
-		await create_timer(0.1).timeout
-	main.test_stick["R"] = Vector2.ZERO
-	# Walk forward on the left stick, ending beside the pit,
-	# steering like a player does (small stick corrections
-	# keep the heading on the pit).
-	var fired: bool = false
-	var fire_z: float = 0.0
-	while float(Time.get_ticks_msec() - t0) < limit_ms:
-		if not fired and String(main.phase) != "SCORE":
-			fired = true
-			fire_z = main.cam.global_position.z
-		if main.cam.global_position.z <= -11.3:
-			break
-		main.test_stick["L"] = Vector2(0.0, 1.0)
-		main.test_stick["R"] = Vector2(steer_x(Vector3(0.0, 0.0, -1.0)), 0.0)
-		await create_timer(0.1).timeout
+## Hold the left stick forward (production walk input, FP4
+## sign) for the given seconds - a plain straight walk down
+## the lane from wherever the player stands.
+func walk_forward_for(sec: float) -> void:
+	main.test_stick["L"] = Vector2(0.0, 1.0)
+	await create_timer(sec).timeout
 	main.test_stick["L"] = Vector2.ZERO
-	main.test_stick["R"] = Vector2.ZERO
-	await frames(6)
-	if not fired and String(main.phase) != "SCORE":
-		fired = true
-		fire_z = main.cam.global_position.z
-	return {"fired": fired, "fire_z": fire_z,
-		"arrived": main.cam.global_position.z <= -11.2}
-
-
-## Fix Pass 19: WALK the player BACK to the pitching end on
-## the production sticks - turn around, walk up the court,
-## ending at his stance depth behind the 37 ft line. The
-## moment the next inning stocks mid-walk (arrival at the
-## pitching zone), the gathered state is snapshotted - pairs
-## on slots, all railed, AI in its box - before the next
-## turn can touch anything.
-func walk_back_to_line(timeout_sec: float) -> Dictionary:
-	var t0: int = Time.get_ticks_msec()
-	var limit_ms: int = int(timeout_sec * 1000.0)
-	# Face the line end with the right stick (production
-	# turn) - ALL the way (see walk_down_to_pit).
-	while float(Time.get_ticks_msec() - t0) < limit_ms:
-		var fwd: Vector3 = -main.cam.global_transform.basis.z
-		if fwd.z > 0.92:
-			break
-		main.test_stick["R"] = Vector2(1.0, 0.0)
-		await create_timer(0.1).timeout
-	main.test_stick["R"] = Vector2.ZERO
-	# Walk forward on the left stick, ending at stance depth.
-	var fired: bool = false
-	var fire_z: float = 0.0
-	var slot_err: float = -1.0
-	var railed: bool = false
-	var ai_pos := Vector3.INF
-	while float(Time.get_ticks_msec() - t0) < limit_ms:
-		if not fired and String(main.phase) != "BACK":
-			fired = true
-			fire_z = main.cam.global_position.z
-			slot_err = max_slot_error()
-			railed = all_railed()
-			ai_pos = main.ai_pitcher.position
-		if main.cam.global_position.z >= -0.36:
-			break
-		main.test_stick["L"] = Vector2(0.0, 1.0)
-		main.test_stick["R"] = Vector2(steer_x(Vector3(0.0, 0.0, 1.0)), 0.0)
-		await create_timer(0.1).timeout
-	main.test_stick["L"] = Vector2.ZERO
-	main.test_stick["R"] = Vector2.ZERO
-	await frames(6)
-	if not fired and String(main.phase) != "BACK":
-		fired = true
-		fire_z = main.cam.global_position.z
-		slot_err = max_slot_error()
-		railed = all_railed()
-		ai_pos = main.ai_pitcher.position
-	return {"fired": fired, "fire_z": fire_z,
-		"arrived": main.cam.global_position.z >= -0.41,
-		"slot_err": slot_err, "railed": railed, "ai_pos": ai_pos}
+	await frames(3)
 
 
 ## Fix Pass 15: tilt of a basis in degrees, measured HERE -
@@ -873,12 +779,13 @@ func _run() -> void:
 	# stepped down (58 / 0.0029) because a game status runs to
 	# SEVEN lines where practice ran to six, and the longest
 	# honest lines grew ("LAST INNING: ... (RINGER)").
-	# Fix Pass 19 re-measures the game block as the walk-down
-	# prompt the one-way flow actually shows. Both modes are
-	# measured.
+	# Fix Pass 20 re-measures the game blocks the settle-posted
+	# flow actually shows (the tabulation beat and the insert
+	# prompt). Both modes are measured.
 	var worst_cases: Array = [
 		"THROWS: 999\nHOLD: TURN (SHANK_RIGHT)\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!\nA: START GAME",
-		"YOU 99 - 99 OPP\nINNING 99 THROWN\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nWALK DOWN TO SCORE\nRINGER!",
+		"YOU 99 - 99 OPP\nROUND 99 THROWN\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!",
+		"YOU 99 - 99 OPP\nROUND 99 DONE\nLAST INNING: OPP +7 (OPP RINGER)\nA: NEXT ROUND",
 	]
 	for worst: String in worst_cases:
 		var w_lines: PackedStringArray = worst.split("\n")
@@ -1568,8 +1475,8 @@ func _run() -> void:
 		{"owner": "P", "dist_in": 8.0, "ringer": false},
 		{"owner": "AI", "dist_in": 9.0, "ringer": false}]
 	main._score_inning()
-	check(main.phase == "BACK" and main.last_scorer == "",
-		"game: a scoreless inning goes to the walk-back prompt (FP19: it posts at the pit, then he walks back)")
+	check(main.phase == "INSERT" and main.last_scorer == "",
+		"game: a scoreless inning posts to the insert (FP20: tabulated on settle, no walk)")
 	main._finish_inning_cycle()
 	check(main.inning == 2 and main.inning_first == "AI",
 		"game: after a scoreless inning the first throw alternates")
@@ -1583,87 +1490,126 @@ func _run() -> void:
 		% str(main.ai_pitcher.position))
 	check_ai_box()
 
-	# ============ Fix Pass 19: the walk cycle can't strand ============
-	# The FP12 doctrine, carried into the one-way game. FP12's
-	# field break: an inning ended, Chris walked the whole
-	# court, and nothing ever happened - the arrival test was
-	# a pair of thin radial rings (see _at_pit in main.gd) and
-	# the old smoke "walk" teleported into the ring. FP19's
-	# cycle has TWO arrivals (down to score, back to stock),
-	# both plain areas, and both are proven here the way the
-	# field does them: on the production sticks, full court.
-	manufacture_score_walk()
-	check(main.phase == "SCORE", "FP19: a thrown inning reaches the walk-down prompt")
-	# B no longer completes anything: in a game it LEAVES.
-	main.test_button["B"] = true
-	await frames(4)
-	main.test_button["B"] = false
-	await frames(4)
-	check(main.mode == "PRACTICE",
-		"FP19: B in a game returns to practice - no button completes the cycle")
-	# Arrival-area probe at the field's old dead point: standing
-	# PAST the pit, where FP12's ring read "not arrived" forever.
-	# (A probe of the arrival AREA - the walking itself is
-	# proven on the sticks just below.)
-	manufacture_score_walk()
-	var dead_cam := Transform3D(Basis.IDENTITY, Vector3(0.0, 1.6, -13.4))
-	main.origin.global_transform = dead_cam * main.cam.transform.inverse()
-	await create_timer(0.3).timeout
-	check(main.phase == "BACK" and main.score_opp == 3,
-		"FP19: standing past the pit posts the score on the spot - no dead zone (phase %s, opp %d)"
+	# ============ Fix Pass 20: rounds post themselves ============
+	# Chris's FP19 verdict: "everything is working" - and his
+	# flow order: "we dont wanna make walking down and back
+	# mandatory. last shoe thrown in round, score is tabulated,
+	# next round, shoes are ready to go. I can see an Insert
+	# Cam depicting a closeup, with a nice little score
+	# breakdown." FP20 deletes the walk-arrival triggers: the
+	# round tabulates on settle + a beat, the insert cam shows
+	# the pit closeup and the breakdown, A stocks the next
+	# round. Walking still exists; it just does nothing.
+	# (a) THE LINE CLAMP: while a round is live the player
+	# cannot walk past the foul line - a full stick walk into
+	# the lane stops at the clamp plane, and retreat still
+	# works (the clamp is on the movement result, not input).
+	var plane20: float = main.game_line_z() - 0.40
+	main.origin.global_transform = Transform3D.IDENTITY
+	main.start_game()
+	await walk_forward_for(3.0)
+	check(main.origin.global_position.z >= plane20 - 0.001
+		and main.origin.global_position.z <= plane20 + 0.02,
+		"FP20 clamp: a live-round walk down the lane stops at the line plane (z %.3f, plane %.3f)"
+		% [main.origin.global_position.z, plane20])
+	main.test_stick["L"] = Vector2(0.0, -1.0)
+	await create_timer(0.6).timeout
+	main.test_stick["L"] = Vector2.ZERO
+	await frames(3)
+	check(main.origin.global_position.z > plane20 + 0.5,
+		"FP20 clamp: walking BACKWARD off the plane still works (z %.3f)"
+		% main.origin.global_position.z)
+	check(main.phase == "P_TURN",
+		"FP20 clamp: the round is still live and unthrown after the walk attempt")
+	await pulse_button("B")
+	check(main.mode == "PRACTICE", "FP20: B leaves the clamp-test game")
+	# The manufactured round: the beat runs first (nothing
+	# posted yet), then the round posts ITSELF with the
+	# player never having moved from the line.
+	manufacture_round()
+	check(main.phase == "TABULATE" and main.score_opp == 0,
+		"FP20: a thrown round enters the tabulation beat unposted (phase %s, opp %d)"
 		% [String(main.phase), main.score_opp])
-	# The real walks: down the court on the sticks to score,
-	# back up the court on the sticks to stock the next inning.
-	manufacture_score_walk()
-	var dres: Dictionary = await walk_down_to_pit(25.0)
-	check(bool(dres["fired"]),
-		"FP19: the stick walk down the court posts the score (fired at z %.2f)"
-		% float(dres["fire_z"]))
-	check(float(dres["fire_z"]) <= -8.9 and float(dres["fire_z"]) >= -9.6,
-		"FP19: the score posts on AREA at the pit's box zone - not up the lane, not at a pinpoint (z %.2f)"
-		% float(dres["fire_z"]))
-	check(bool(dres["arrived"]),
-		"FP19: the walk physically reaches the pit")
-	check(main.phase == "BACK" and main.score_opp == 3,
-		"FP19: the walked-down inning posted its manufactured score")
-	var bres: Dictionary = await walk_back_to_line(25.0)
-	check(bool(bres["fired"]),
-		"FP19: the stick walk back up the court stocks the next inning (fired at z %.2f)"
-		% float(bres["fire_z"]))
-	check(float(bres["fire_z"]) <= -3.7 and float(bres["fire_z"]) >= -4.3,
-		"FP19: the stocking fires on AREA at the pitching zone (z %.2f)"
-		% float(bres["fire_z"]))
-	check(bool(bres["arrived"]),
-		"FP19: the walk physically returns to the stance")
-	check(float(bres["slot_err"]) >= 0.0 and float(bres["slot_err"]) < 0.01
-		and bool(bres["railed"]),
-		"FP19: arrival stocks both pairs per owner on the stations (worst %.3f m)"
-		% float(bres["slot_err"]))
-	var back_ai_pos: Vector3 = bres["ai_pos"]
-	check(back_ai_pos.distance_to(AIPitcher.box_root(main.game_line_z())) < 0.05,
-		"FP19: the AI never left its box for the cycle (at %s)" % str(back_ai_pos))
+	check(await wait_phase("INSERT", 5.0),
+		"FP20: the round posts itself after the beat - no walking (phase %s)"
+		% String(main.phase))
+	check(main.phase == "INSERT" and main.score_opp == 3
+		and main.cam.global_position.z > -0.5,
+		"FP20: the manufactured score posted with the player standing at the line (board %d-%d, cam z %.2f)"
+		% [main.score_you, main.score_opp, main.cam.global_position.z])
+	check(main.insert_root.visible,
+		"FP20: the insert cam is up at the round's end")
+	var to_insert: Vector3 = main.insert_root.global_position - main.cam.global_position
+	to_insert.y = 0.0
+	check(absf(to_insert.length() - 2.0) < 0.05,
+		"FP20: the insert spawned ~2 m from the player (%.2f m)" % to_insert.length())
+	var lines20: String = "\n".join(PackedStringArray(main.round_lines))
+	check(lines20.contains("OPP 1: RINGER")
+		and lines20.contains("YOU 1: NO SCORE (30.0 IN)")
+		and lines20.contains("OPP RINGER STANDS: +3")
+		and lines20.contains("ROUND: OPP +3")
+		and lines20.contains("MATCH: YOU 0 - 3 OPP")
+		and lines20.contains("NEXT ROUND"),
+		"FP20: the insert carries the breakdown - shoes, arithmetic, totals, continue (%s)"
+		% lines20.replace("\n", " | "))
+	check(main.ai_pitcher.position.distance_to(
+			AIPitcher.box_root(main.game_line_z())) < 0.05,
+		"FP20: the AI never left its box for the cycle (at %s)"
+		% str(main.ai_pitcher.position))
+	# (b) FREE MOVEMENT during the insert: he may stroll down
+	# the lane while the breakdown is up - the clamp is off.
+	await walk_forward_for(2.5)
+	check(main.origin.global_position.z < plane20 - 0.5,
+		"FP20: during the insert the player walks PAST the line freely (z %.3f)"
+		% main.origin.global_position.z)
+	# (c) A-CONTINUE from beyond the line seats him back
+	# behind it (yaw-only seat - origin pitch/roll stay 0)
+	# and stocks the next round, scorer first.
+	await pulse_button("A")
+	var waited20: float = 0.0
+	while String(main.phase) != "AI_TURN" and waited20 < 5.0:
+		await create_timer(0.1).timeout
+		waited20 += 0.1
 	check(main.inning == 2 and main.phase == "AI_TURN",
-		"FP19: inning 2 opens with the scorer (the AI) throwing first (inning %d, phase %s)"
+		"FP20: A at the insert opens inning 2 with the scorer (the AI) first (inning %d, phase %s)"
 		% [main.inning, String(main.phase)])
-	# Inning 2 plays out from the line, end to end.
+	check(main.origin.global_position.z >= plane20 - 0.001
+		and main.cam.global_position.z > main.game_line_z(),
+		"FP20: the A-continue seated him back behind the line (origin z %.3f, cam z %.3f)"
+		% [main.origin.global_position.z, main.cam.global_position.z])
+	check_origin_level("FP20: the A-continue seat-back leaves the origin level (pitch/roll 0)")
+	check(not main.insert_root.visible,
+		"FP20: the insert is dismissed by the continue")
+	check(all_railed() and max_slot_error() < 0.01,
+		"FP20: the continue stocks both pairs per owner on the stations (worst %.3f m)"
+		% max_slot_error())
+	# Inning 2 (stocked by the seat-back continue above)
+	# plays out from the line, end to end.
 	var guard12: int = 0
-	while main.phase != "SCORE" and main.phase != "OVER" and guard12 < 6:
+	while main.phase != "TABULATE" and main.phase != "INSERT" \
+			and main.phase != "OVER" and guard12 < 6:
 		guard12 += 1
 		if main.phase == "P_TURN":
 			check(await scripted_game_throw(),
-				"FP19: inning 2 accepts the player's throws after the walked cycle")
+				"FP20: inning 2 accepts the player's throws after the insert cycle")
 		elif main.phase == "AI_TURN":
 			var waited12: float = 0.0
 			while main.phase == "AI_TURN" and waited12 < 40.0:
 				await create_timer(0.5).timeout
 				waited12 += 0.5
 			check(main.phase != "AI_TURN",
-				"FP19: the AI plays its inning-2 turn after the walked cycle")
+				"FP20: the AI plays its inning-2 turn after the insert cycle")
 		else:
 			break
-	check(main.phase == "SCORE" and main.inning == 2,
-		"FP19: inning 2 is thrown after the walked cycle (inning %d, phase %s)"
+	check((main.phase == "TABULATE" or main.phase == "INSERT")
+		and main.inning == 2,
+		"FP20: inning 2 is thrown and reaches its tabulation (inning %d, phase %s)"
 		% [main.inning, String(main.phase)])
+	# B during the beat leaves, as at any game phase.
+	manufacture_round()
+	await pulse_button("B")
+	check(main.mode == "PRACTICE",
+		"FP20: B during the tabulation beat returns to practice")
 
 	# ============ Fix Pass 13: the scoring audit ============
 	# Chris played a full game: "it scored all the points, I
@@ -1715,22 +1661,32 @@ func _run() -> void:
 		"FP13 audit (i): the AI's dud is recorded under the AI's tag")
 	check(await scripted_ai_throw("dud"),
 		"FP13 audit (i): AI dud two settles")
-	check(main.phase == "SCORE" and main.score_you == 0,
-		"FP19 audit (i): the thrown inning is NOT posted yet - in the one-pit game the score waits at the pit (phase %s, board %d-%d)"
+	check(main.phase == "TABULATE" and main.score_you == 0,
+		"FP20 audit (i): the thrown inning is NOT posted yet - the round posts itself after the beat (phase %s, board %d-%d)"
 		% [String(main.phase), main.score_you, main.score_opp])
-	var dw_i: Dictionary = await walk_down_to_pit(25.0)
-	check(bool(dw_i["fired"]) and main.score_you == 3 and main.score_opp == 0
+	check(await wait_phase("INSERT", 10.0) and main.score_you == 3
+		and main.score_opp == 0
 		and main.last_inning_text == "YOU +3 (RINGER)",
-		"FP13 audit (i): player ringer vs two AI duds scores YOU +3, posted at the pit (board %d-%d, '%s')"
+		"FP13 audit (i): player ringer vs two AI duds scores YOU +3, posted by the tabulation (board %d-%d, '%s')"
 		% [main.score_you, main.score_opp, main.last_inning_text])
+	# The insert closeup frames ALL FOUR settled shoes - a
+	# framed-but-empty closeup is a fail (the duds sit ~2.5 m
+	# out, the stress case for the framing).
+	var framed20: bool = true
+	for raw20: Variant in main._all_shoes():
+		var s20: Node3D = raw20
+		if not main.insert_cam.is_position_in_frustum(s20.global_position):
+			framed20 = false
+	check(framed20,
+		"FP20 audit (i): every settled shoe is inside the insert closeup's view")
 	# (ii) Player point shoe only -> YOU +1.
 	main.start_game()
 	check(await play_scripted_inning(["point", "dud"], ["dud", "dud"]),
 		"FP13 audit (ii): the scripted inning plays out")
-	var dw_ii: Dictionary = await walk_down_to_pit(25.0)
-	check(bool(dw_ii["fired"]) and main.score_you == 1 and main.score_opp == 0
+	check(await wait_phase("INSERT", 10.0) and main.score_you == 1
+		and main.score_opp == 0
 		and main.last_inning_text == "YOU +1",
-		"FP13 audit (ii): a lone player point shoe scores YOU +1, posted at the pit (board %d-%d, '%s')"
+		"FP13 audit (ii): a lone player point shoe scores YOU +1, posted by the tabulation (board %d-%d, '%s')"
 		% [main.score_you, main.score_opp, main.last_inning_text])
 	# (iv) Cross-check the other direction: an AI ringer
 	# through the production swing path stands against the
@@ -1739,16 +1695,17 @@ func _run() -> void:
 	main.start_game()
 	check(await play_scripted_inning(["point", "dud"], ["ringer", "dud"]),
 		"FP13 audit (iv): the cross-check inning plays out")
-	var dw_iv: Dictionary = await walk_down_to_pit(25.0)
-	check(bool(dw_iv["fired"]) and main.score_you == 0 and main.score_opp == 3
+	check(await wait_phase("INSERT", 10.0) and main.score_you == 0
+		and main.score_opp == 3
 		and main.last_inning_text == "OPP +3 (OPP RINGER)",
-		"FP13 audit (iv): AI ringer vs player point shoe scores OPP +3, player shut out, posted at the pit (board %d-%d, '%s')"
+		"FP13 audit (iv): AI ringer vs player point shoe scores OPP +3, player shut out, posted by the tabulation (board %d-%d, '%s')"
 		% [main.score_you, main.score_opp, main.last_inning_text])
 	# (iii) A scripted full game the PLAYER wins, hand-tracked:
 	# ringer + dud vs dud + dud every inning = YOU +3 a round,
-	# seven innings = 21-0, every inning scored by the walk
-	# down and stocked by the walk back (Fix Pass 19's one-way
-	# cycle, walked in full seven times).
+	# seven innings = 21-0, every inning posted by its own
+	# tabulation and continued with A - a full game played
+	# with NO walking at all (Fix Pass 20's rhythm; the
+	# brief's no-walk full-game proof).
 	main.start_game()
 	var expect_you: int = 0
 	var innings_ok: bool = true
@@ -1757,19 +1714,23 @@ func _run() -> void:
 			innings_ok = false
 			break
 		expect_you += 3
-		if String(main.phase) == "SCORE":
-			var dw_iii: Dictionary = await walk_down_to_pit(25.0)
-			if not bool(dw_iii["fired"]):
-				innings_ok = false
-				break
+		var waited_iii: float = 0.0
+		while String(main.phase) != "INSERT" and String(main.phase) != "OVER" \
+				and waited_iii < 10.0:
+			await create_timer(0.2).timeout
+			waited_iii += 0.2
+		if String(main.phase) != "INSERT" and String(main.phase) != "OVER":
+			innings_ok = false
+			break
 		if main.score_you != expect_you or main.score_opp != 0:
 			innings_ok = false
 			break
-		if String(main.phase) == "BACK":
-			var bw_iii: Dictionary = await walk_back_to_line(25.0)
-			if not bool(bw_iii["fired"]):
-				innings_ok = false
-				break
+		if String(main.phase) == "OVER":
+			break
+		await pulse_button("A")
+		if not await wait_phase("P_TURN", 10.0):
+			innings_ok = false
+			break
 	check(innings_ok and main.phase == "OVER",
 		"FP13 audit (iii): every scripted inning lands its hand-tracked +3 (final phase %s, inning %d)"
 		% [String(main.phase), main.inning])
@@ -1829,16 +1790,13 @@ func _run() -> void:
 	# head pitched 12 deg at the tap: it just leaves the game.
 	# (The seat's own checks retire with it; the guard (c) and
 	# the walked cycle (d) carry the FP15 surface now.)
-	manufacture_score_walk()
+	manufacture_round()
 	pitch_head(12.0)
-	check(main.phase == "SCORE", "FP19: the walk-down prompt is up")
-	main.test_button["B"] = true
-	await frames(4)
-	main.test_button["B"] = false
-	await frames(4)
+	check(main.phase == "TABULATE", "FP20: the tabulation beat is running")
+	await pulse_button("B")
 	check(main.mode == "PRACTICE",
-		"FP19: B with the head pitched just leaves the game - no seat exists to tilt")
-	check_origin_level("FP19: B leaves a LEVEL origin, head pitched 12 deg")
+		"FP20: B with the head pitched just leaves the game - no seat exists to tilt")
+	check_origin_level("FP20: B leaves a LEVEL origin, head pitched 12 deg")
 	# (c) The guard: a tilt arriving by ANY path is stripped
 	# within a physics frame and the repair counted; with the
 	# guard off the same tilt PERSISTS (the negative control
@@ -1869,25 +1827,35 @@ func _run() -> void:
 	await physics_frame
 	await physics_frame
 	check_origin_level("FP15: the guard heals it again when re-enabled")
-	# (d) The WALKED cycle, head pitched 13 deg the whole way
-	# down the court (the FP12 walk, head down at the shoes).
+	# (d) THE FP20 SEAT under a pitched head: the round posts
+	# itself with the head pitched 13 deg; the player strolls
+	# past the line during the insert (the walk reads only
+	# the head's flat direction - pitch cannot tilt it), and
+	# the A-continue seats him back behind the line with the
+	# pitch still held. The seat writes yaw only, so the
+	# origin stays level throughout - the FP15 surface in
+	# FP20's shape.
 	await wait_ai_quiet()
-	manufacture_score_walk()
+	manufacture_round()
 	pitch_head(13.0)
-	var dres15: Dictionary = await walk_down_to_pit(25.0)
-	check(bool(dres15["fired"]) and bool(dres15["arrived"]),
-		"FP15/19: the walked score-down completes with the head pitched 13 deg")
-	check_origin_level("FP15/19: the walked score-down leaves the origin level")
-	var bres15: Dictionary = await walk_back_to_line(25.0)
-	check(bool(bres15["fired"]) and bool(bres15["arrived"]),
-		"FP15/19: the walked return completes with the head pitched")
-	check_origin_level("FP15/19: the walked return leaves the origin level")
+	check(await wait_phase("INSERT", 10.0),
+		"FP15/20: the round posts to the insert with the head pitched 13 deg")
+	await walk_forward_for(2.5)
+	check(main.origin.global_position.z < main.game_line_z() - 0.90,
+		"FP15/20: the pitched-head stroll crosses the line freely during the insert (z %.2f)"
+		% main.origin.global_position.z)
+	check_origin_level("FP15/20: the stroll under a pitched head leaves the origin level")
+	await pulse_button("A")
+	check(main.phase == "AI_TURN"
+		and main.cam.global_position.z > main.game_line_z(),
+		"FP15/20: the A-continue seats the pitched-head player back behind the line")
+	check_origin_level("FP15/20: the seat-back leaves the origin level, head pitched 13 deg")
 	# (e) A FULL GAME with the head pitched 12 deg through
-	# every walk cycle (the FP13 audit game's shape): level
-	# after every operation and at game end. (Fix Pass 19: the
-	# B-tap seats this section was built around no longer
-	# exist; the walks - turns and locomotion under a pitched
-	# head - are the full-game origin surface now.)
+	# every round (the FP13 audit game's shape): level after
+	# every operation and at game end. (Fix Pass 20: the walk
+	# cycles are gone; the operations under a pitched head
+	# are now the throws, the tabulation, the insert, and
+	# the A-continue.)
 	await wait_ai_quiet()
 	main.origin.global_transform = Transform3D.IDENTITY
 	pitch_head(12.0)
@@ -1901,34 +1869,36 @@ func _run() -> void:
 			break
 		if tilt_of(main.origin.global_transform.basis) >= 0.005:
 			tilt_ok15 = false
-		if String(main.phase) == "SCORE":
-			var dw15: Dictionary = await walk_down_to_pit(25.0)
-			if not bool(dw15["fired"]):
-				tilt_ok15 = false
-				break
-			if tilt_of(main.origin.global_transform.basis) >= 0.005:
-				tilt_ok15 = false
-		if String(main.phase) == "BACK":
-			var bw15: Dictionary = await walk_back_to_line(25.0)
-			if not bool(bw15["fired"]):
+		var waited15: float = 0.0
+		while String(main.phase) != "INSERT" and String(main.phase) != "OVER" \
+				and waited15 < 10.0:
+			await create_timer(0.2).timeout
+			waited15 += 0.2
+		if String(main.phase) != "INSERT" and String(main.phase) != "OVER":
+			tilt_ok15 = false
+			break
+		if tilt_of(main.origin.global_transform.basis) >= 0.005:
+			tilt_ok15 = false
+		if String(main.phase) == "INSERT":
+			await pulse_button("A")
+			if not await wait_phase("P_TURN", 10.0):
 				tilt_ok15 = false
 				break
 			if tilt_of(main.origin.global_transform.basis) >= 0.005:
 				tilt_ok15 = false
 	check(tilt_ok15 and main.phase == "OVER" and main.score_you == 21,
-		"FP15/19: a full game, head pitched 12 deg through every walk, stays level and ends 21-0")
-	check_origin_level("FP15/19: origin level at game end")
+		"FP15/20: a full game, head pitched 12 deg through every round, stays level and ends 21-0")
+	check_origin_level("FP15/20: origin level at game end")
 	main.cam.transform = Transform3D.IDENTITY
 
-	# ============ Backyard Game v1 / Fix Pass 19: a full game ============
+	# ============ Backyard Game v1 / Fix Pass 20: a full game ============
 	# Scripted player throws (production input path) + the AI's
-	# own turns drive a complete game to a winner, ONE-WAY:
-	# every inning is thrown from the pitching end, scored by
-	# walking down to the pit, and stocked by walking back.
-	# The player starts where a fresh game starts - standing
-	# at the pitching end. (FP15 (e) left him at the pit; from
-	# there he is standing IN the lane, and the AI quite
-	# correctly holds its throws at him forever.)
+	# own turns drive a complete game to a winner, ONE-WAY and
+	# SETTLE-POSTED: every inning is thrown from the pitching
+	# end, posts itself after the settle beat, and the next
+	# inning starts on A at the insert. The player never
+	# walks. He starts where a fresh game starts - standing
+	# at the pitching end.
 	main.origin.global_transform = Transform3D.IDENTITY
 	main.start_game()
 	var guard_innings: int = 0
@@ -1936,7 +1906,8 @@ func _run() -> void:
 		guard_innings += 1
 		var inning_no: int = main.inning
 		var turn_guard: int = 0
-		while main.phase != "SCORE" and main.phase != "OVER" and turn_guard < 6:
+		while main.phase != "TABULATE" and main.phase != "INSERT" \
+				and main.phase != "OVER" and turn_guard < 6:
 			turn_guard += 1
 			if main.phase == "P_TURN":
 				check(await scripted_game_throw(),
@@ -1950,19 +1921,23 @@ func _run() -> void:
 					"game: the AI's turn completes (inning %d)" % inning_no)
 			else:
 				break
-		check(main.phase == "SCORE" or main.phase == "BACK" or main.phase == "OVER",
-			"game: inning %d is thrown (BACK = the score posted on the spot - the player was already at the pit)" % inning_no)
-		if main.phase == "SCORE":
-			var dw2: Dictionary = await walk_down_to_pit(25.0)
-			check(bool(dw2["fired"]) and bool(dw2["arrived"]),
-				"game: the score walk was walked, not teleported (posted at z %.2f)"
-				% float(dw2["fire_z"]))
-		if main.phase == "BACK":
-			var bw2: Dictionary = await walk_back_to_line(25.0)
-			check(bool(bw2["fired"]) and bool(bw2["arrived"]),
-				"game: the walk back was walked, and stocks the next inning")
-		check(main.phase != "SCORE" and main.phase != "BACK",
-			"game: inning %d completes its one-way cycle" % inning_no)
+		check(main.phase == "TABULATE" or main.phase == "INSERT"
+			or main.phase == "OVER",
+			"game: inning %d is thrown" % inning_no)
+		if main.phase == "TABULATE" or main.phase == "INSERT":
+			var waited_g: float = 0.0
+			while String(main.phase) != "INSERT" and String(main.phase) != "OVER" \
+					and waited_g < 10.0:
+				await create_timer(0.2).timeout
+				waited_g += 0.2
+			check(main.phase == "INSERT" or main.phase == "OVER",
+				"game: inning %d posts itself - no walk down, no walk back" % inning_no)
+		if main.phase == "INSERT":
+			await pulse_button("A")
+			check(main.phase == "P_TURN" or main.phase == "AI_TURN",
+				"game: A at the insert starts inning %d" % (inning_no + 1))
+		check(main.phase != "TABULATE" and main.phase != "INSERT",
+			"game: inning %d completes its settle-posted cycle" % inning_no)
 	check(main.phase == "OVER",
 		"game: a full game reaches a winner (final %d-%d in %d innings)"
 		% [main.score_you, main.score_opp, main.inning])

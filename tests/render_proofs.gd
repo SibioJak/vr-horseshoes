@@ -25,6 +25,10 @@ extends SceneTree
 ##     the pit with its stat lines legible at ~16 m.
 ##   proofs/held_shoe.png  - the shoe latched in the right hand via a
 ##     real tracker grip input, grab-zone markers visible.
+##   proofs/insert_view.png - the Fix Pass 20 insert cam UP at a
+##     round's end: the live pit closeup (all four settled shoes
+##     parked around the stake, one dud wide) over the round's
+##     score breakdown, seen from the player's eye.
 ## These prove the rendered path + input path work together; they do
 ## NOT prove headset feel. The XR interaction layer is only verified
 ## when Chris runs it in the headset.
@@ -190,6 +194,58 @@ func _run() -> void:
 	await settle(4)
 	await snap(cam_d, "res://proofs/board_from_foul_line.png")
 	cam_d.queue_free()
+
+	# --- Proof E: the insert cam UP at a round's end (Fix Pass 20) ---
+	# A manufactured round ends the way a real one does: the
+	# tabulation raises the insert - live pit closeup over the
+	# score breakdown. The four shoes are parked settled around
+	# the stake (one dud wide, the framing stress case), and
+	# every one of them must sit inside the closeup's view: a
+	# framed-but-empty closeup is a fail.
+	main.start_game()
+	var park_spots: Array = [
+		Vector3(0.10, 0.05, -12.10), Vector3(0.55, 0.05, -11.95),
+		Vector3(-0.35, 0.05, -12.45), Vector3(2.30, 0.05, -12.30)]
+	var park_i: int = 0
+	for raw_e: Variant in main._all_shoes():
+		var shoe_e: Node3D = raw_e
+		shoe_e.freeze = true
+		shoe_e.global_position = park_spots[park_i]
+		main.shoe_status[shoe_e] = "DOWN"
+		park_i += 1
+	main.inning_results = [
+		{"owner": "P", "dist_in": 2.0, "ringer": false},
+		{"owner": "P", "dist_in": 9.0, "ringer": false},
+		{"owner": "AI", "dist_in": 4.0, "ringer": false},
+		{"owner": "AI", "dist_in": 90.0, "ringer": false}]
+	main._score_inning()
+	await settle(6)
+	check(main.phase == "INSERT" and main.insert_root.visible,
+		"insert cam is UP at the round's end")
+	var framed_e: bool = true
+	for raw_f: Variant in main._all_shoes():
+		var shoe_f: Node3D = raw_f
+		if not main.insert_cam.is_position_in_frustum(shoe_f.global_position):
+			framed_e = false
+	check(framed_e,
+		"insert closeup frames ALL FOUR settled shoes (dud at 2.3 m included)")
+	var lines_e: String = "\n".join(PackedStringArray(main.round_lines))
+	check(lines_e.contains("YOU 1: 2.0 IN")
+		and lines_e.contains("YOUR CLOSEST SHOE SCORES: +1")
+		and lines_e.contains("MATCH: YOU 1 - 0 OPP"),
+		"insert carries the round's breakdown")
+	var cam_e := Camera3D.new()
+	cam_e.fov = 60.0
+	cam_e.position = Vector3(0.0, 1.05, 0.35)
+	main.add_child(cam_e)
+	cam_e.look_at(main.insert_root.global_position, Vector3.UP)
+	cam_e.current = true
+	await settle(4)
+	await snap(cam_e, "res://proofs/insert_view.png")
+	cam_e.queue_free()
+	# Back to practice for the proofs that follow.
+	main._enter_practice()
+	await settle(4)
 
 	# --- Proof B: grab the shoe through the tracker grip input ---
 	var toe_c: Vector3 = main.shoe.zone_world_center("toe")

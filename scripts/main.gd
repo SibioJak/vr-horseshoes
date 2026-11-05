@@ -2123,9 +2123,9 @@ func _build_insert() -> void:
 	insert_cam = Camera3D.new()
 	insert_cam.name = "InsertCamera"
 	insert_viewport.add_child(insert_cam)
-	insert_cam.position = Vector3(0.0, 3.0, -9.35)
-	insert_cam.fov = 50.0
-	insert_cam.look_at(Vector3(0.0, 0.1, STAKE_POS.z), Vector3.UP)
+	insert_cam.position = Vector3(0.0, 2.4, -10.0)
+	insert_cam.fov = 55.0
+	insert_cam.look_at(Vector3(0.0, 0.05, STAKE_POS.z), Vector3.UP)
 	insert_cam.current = true
 	var quad := MeshInstance3D.new()
 	quad.name = "InsertScreen"

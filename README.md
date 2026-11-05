@@ -24,11 +24,18 @@ from the judged test — 1:1 release, no assist. Design skeleton:
   in pairs. Then only the side holding the closest shoe(s) inside
   6 inches scores — 1 point per shoe closer than the opponent's
   closest. Only one side scores per inning.
-- **The one-way rhythm:** when both sides have thrown, walk down
-  to the pit — arriving scores the inning. The shoes gather back
-  to the pitching end; walk back to the line and the next inning
-  is stocked. The side that scored throws first (a scoreless
-  inning alternates).
+- **The rhythm (Fix Pass 20):** when the last shoe settles, the
+  round tabulates itself — no walking anywhere. An **insert cam**
+  appears in front of you: a live close-up of the pit with all
+  four shoes around the stake, over the round's score breakdown
+  (each shoe's result, the cancellation arithmetic in plain
+  words, the round's points, the match totals). **A** dismisses
+  it and the next round is stocked, shoes gathered back to the
+  pitching end. The side that scored throws first (a scoreless
+  inning alternates). While a round is live you can't walk past
+  the foul line; while the insert is up you can stroll down to
+  the pit if you like — **A** seats you back behind the line for
+  the next round.
 - **First to 21** at an inning's end wins (no win-by-two). At game
   over: **A** plays again, **B** returns to practice. In a game,
   **B** returns to practice at any time.
@@ -53,8 +60,8 @@ from the judged test — 1:1 release, no assist. Design skeleton:
 - **Drop:** open your hand while still.
 - **Move:** left stick walks, right stick turns (smoothly) — both
   live at once, so you can curve.
-- **A button:** start game / play again. **B button:** back to
-  practice (in a game).
+- **A button:** start game / next round / play again.
+  **B button:** back to practice (in a game).
 - **Recenter:** system menu / long-press (platform standard).
 
 ## Throws file
@@ -97,12 +104,14 @@ end to end. Throw records carry the evidence per throw:
 `release_timing` ("substep" / "grid" / "ai_exact"),
 `substep_offset_ms`, and the bracketing grip readings. The smoke suite plays a full game to
 21 headlessly (scripted player throws + AI turns, every inning
-scored by walking down to the pit and stocked by walking back —
-production sticks throughout). `ai_measure.gd` is the AI tuning
+posting itself on settle and continuing on A — a complete game
+with no walking at all, Fix Pass 20's rhythm). `ai_measure.gd` is the AI tuning
 harness that produced the line quoted above.
 
 Rendered proofs land in `proofs/` (court_view.png — the one-pit
 yard on-axis: line end in front, pit under the board at the far
 end; board_closeup.png — the board mid-game;
-board_from_foul_line.png, held_shoe.png).
+board_from_foul_line.png, held_shoe.png; insert_view.png — the
+insert cam up at a round's end, live pit closeup over the
+breakdown).
 Suites verify math and wiring — feel is judged in the headset only.
