@@ -25,6 +25,8 @@ extends SceneTree
 ##     the pit with its stat lines legible at ~16 m.
 ##   proofs/held_shoe.png  - the shoe latched in the right hand via a
 ##     real tracker grip input, grab-zone markers visible.
+##   proofs/grip_label.png - the Fix Pass 21 grip label riding the
+##     held shoe after a free-hand X cycle (SHANK · TOE).
 ##   proofs/insert_view.png - the Fix Pass 20 insert cam UP at a
 ##     round's end: the live pit closeup (all four settled shoes
 ##     parked around the stake, one dud wide) over the round's
@@ -69,6 +71,11 @@ func set_grip(tracker_name: StringName, value: float) -> void:
 func set_stick(tracker_name: StringName, value: Vector2) -> void:
 	var t: XRPositionalTracker = XRServer.get_tracker(tracker_name) as XRPositionalTracker
 	t.set_input(&"primary", value)
+
+
+func set_button(tracker_name: StringName, action: StringName, pressed: bool) -> void:
+	var t: XRPositionalTracker = XRServer.get_tracker(tracker_name) as XRPositionalTracker
+	t.set_input(action, pressed)
 
 
 func settle(phys: int = 6) -> void:
@@ -274,6 +281,39 @@ func _run() -> void:
 	await settle(4)
 	await snap(cam_b, "res://proofs/held_shoe.png")
 	cam_b.queue_free()
+
+	# --- Proof B2: the grip label rides the held shoe (Fix Pass 21) ---
+	# The toe grab above starts at TOE GRIP; the label must be
+	# up, naming it. Then the FREE (left) hand's face button -
+	# fed through the real tracker input, the same ax_button the
+	# headset's X feeds - walks the grip to SHANK · TOE and the
+	# label follows.
+	check(main.grip_label.visible and main.grip_label.text == "TOE GRIP · FLIP",
+		"grip label rides the held shoe naming TOE GRIP (got '%s', visible %s)"
+		% [main.grip_label.text, str(main.grip_label.visible)])
+	set_button(&"left_hand", &"ax_button", true)
+	await settle(5)
+	set_button(&"left_hand", &"ax_button", false)
+	await settle(5)
+	check(main._grip_index() == 1 and main.grip_label.text == "SHANK · TOE · 1⅛ TURN",
+		"free-hand X through the tracker input cycles the grip; the label follows (got '%s')"
+		% main.grip_label.text)
+	# Carry the held shoe out into open space for the shot: at
+	# the station the turn hold's edge-on shoe is a sliver lost
+	# against the timber; at arm's length over the lawn the
+	# label and the shoe it rides read clean.
+	move_tracker(&"right_hand", Transform3D(Basis.IDENTITY, Vector3(0.25, 1.25, -0.55)))
+	await settle(8)
+	var shoe_pos2: Vector3 = main.shoe.global_position
+	var cam_b2 := Camera3D.new()
+	cam_b2.fov = 70.0
+	cam_b2.position = shoe_pos2 + Vector3(0.45, 0.25, 0.62)
+	main.add_child(cam_b2)
+	cam_b2.look_at(shoe_pos2 + Vector3(0.0, 0.05, 0.0), Vector3.UP)
+	cam_b2.current = true
+	await settle(4)
+	await snap(cam_b2, "res://proofs/grip_label.png")
+	cam_b2.queue_free()
 
 	# --- Proof C: locomotion through the REAL tracker stick inputs ---
 	# (the same "primary" action the headset's thumbsticks feed).

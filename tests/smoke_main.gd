@@ -585,6 +585,18 @@ func pulse_button(btn: String) -> void:
 	await frames(4)
 
 
+## Fix Pass 21: pulse ONE hand's face button (the per-hand
+## test transport) - the grip cycle reads the free hand's
+## button, so the walk needs per-hand presses.
+func pulse_hand_button(hand: String, btn: String) -> void:
+	var per: Dictionary = {}
+	per[btn] = true
+	main.test_button_hand[hand] = per
+	await frames(4)
+	main.test_button_hand.erase(hand)
+	await frames(4)
+
+
 ## Hold the left stick forward (production walk input, FP4
 ## sign) for the given seconds - a plain straight walk down
 ## the lane from wherever the player stands.
@@ -672,6 +684,8 @@ func _run() -> void:
 		"board lists the game buttons (A start/play again, B practice) - standing rule: every accepted command is listed")
 	check(main.controls_label.text.contains("back to practice"),
 		"FP19: the board's B line says what B does now - back to practice (no end-swap exists)")
+	check(main.controls_label.text.contains("CHANGE GRIP"),
+		"FP21: the board lists the grip cycle (X / A with the free hand) - standing rule: every accepted command is listed")
 	check(main.status_label.text.contains("THROWS: 0"), "board starts at zero throws")
 
 	# --- Backyard Game v1 / Fix Pass 19: one pit, pairs, the opponent ---
@@ -1178,6 +1192,154 @@ func _run() -> void:
 						"head/origin yaw logged at release (~0 facing the stake here: %.2f / %.2f)"
 						% [float(td["head_yaw_deg"]), float(td["origin_yaw_deg"])])
 	check(found_throw, "smoke recorder holds a throw record")
+
+	# --- Fix Pass 21: the grip cycle ---
+	# (a) A toe grab in the RIGHT hand starts at TOE GRIP, and
+	# the label naming it rides visibly by the shoe.
+	main.test_hand_tf.erase("L")
+	main.test_hand_tf.erase("R")
+	var gtoe: Vector3 = main.shoe.zone_world_center("toe")
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, gtoe)
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	check(main.state == "HELD" and main.grip_label.text == "TOE GRIP · FLIP",
+		"FP21: a toe grab starts at TOE GRIP, labelled (got '%s')" % main.grip_label.text)
+	check(main.grip_label.visible, "FP21: the grip label rides visible while the shoe is held")
+	# (b) The FREE hand's button (left X) walks the cycle through
+	# every named position and wraps; the holding hand's own
+	# button never cycles.
+	await pulse_hand_button("L", "A")
+	check(main.grip_label.text == "SHANK · TOE · 1⅛ TURN" and main._grip_index() == 1,
+		"FP21: tap 1 walks to SHANK · TOE (got '%s')" % main.grip_label.text)
+	await pulse_hand_button("L", "A")
+	check(main.grip_label.text == "SHANK · MID · 1¼ TURN" and main._grip_index() == 2,
+		"FP21: tap 2 walks to SHANK · MID (got '%s')" % main.grip_label.text)
+	await pulse_hand_button("L", "A")
+	check(main.grip_label.text == "SHANK · HEEL · 1⅜ TURN" and main._grip_index() == 3,
+		"FP21: tap 3 walks to SHANK · HEEL (got '%s')" % main.grip_label.text)
+	await pulse_hand_button("L", "A")
+	check(main.grip_label.text == "TOE GRIP · FLIP" and main._grip_index() == 0,
+		"FP21: tap 4 wraps back to TOE GRIP (got '%s')" % main.grip_label.text)
+	main.test_button_hand["R"] = {"A": true}
+	await frames(4)
+	main.test_button_hand.erase("R")
+	await frames(4)
+	check(main._grip_index() == 0 and main.grip_label.text == "TOE GRIP · FLIP",
+		"FP21: the HOLDING hand's own button does not cycle")
+	# (c) A thrown cycled grip lands with its declared count:
+	# walk to SHANK · MID and pitch its 1-1/4 through the
+	# production release; the cache and the throw record must
+	# carry the grip's name and declared count, and the governed
+	# total must be the declaration.
+	await pulse_hand_button("L", "A")
+	await pulse_hand_button("L", "A")
+	check(main._grip_index() == 2, "FP21: cycled to SHANK · MID for the throw")
+	var line_z21: float = main.game_line_z()
+	var target21: Vector3 = main.target_stake_pos()
+	var rp21 := Vector3(0.25, 1.25, line_z21 + 0.35)
+	var tf21: float = 1.15
+	var vel21 := Vector3((target21.x - rp21.x) / tf21,
+		(0.50 - rp21.y + 4.9 * tf21 * tf21) / tf21,
+		(target21.z - rp21.z) / tf21)
+	var om21 := Vector3(0.0, -TAU * 1.25 / tf21, 0.0)
+	var rel21: Transform3D = main.rel_tf
+	var hand_pos21: Vector3 = rp21 - rel21.origin
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, hand_pos21)
+	await frames(4)
+	main.samples = build_stream(hand_pos21, Quaternion.IDENTITY, vel21, om21, 999)
+	main._release_shoe(main.samples)
+	main.grab_state.reset()
+	main.test_grip["R"] = 0.0
+	check(main.state == "FLYING", "FP21: the cycled grip throws through the production path")
+	check(String(main.release_cache.get("grip_name", "")) == "SHANK · MID"
+		and absf(float(main.release_cache.get("grip_nominal", 0.0)) - 1.25) <= 0.001,
+		"FP21: the release cache carries the cycled grip (got %s / %.3f)"
+		% [String(main.release_cache.get("grip_name", "")), float(main.release_cache.get("grip_nominal", 0.0))])
+	check(absf(float(main.release_cache.get("spin_applied_total", 0.0)) + 1.25) <= 0.15,
+		"FP21: the thrown cycled grip lands with its declared count (applied %.2f rev, declared -1.25)"
+		% float(main.release_cache.get("spin_applied_total", 0.0)))
+	check(await wait_state("STAND", 12.0), "FP21: the cycled throw settles and returns")
+	var last_throw21: Dictionary = {}
+	var f21: FileAccess = FileAccess.open(rec_path, FileAccess.READ)
+	if f21 != null:
+		for line: String in f21.get_as_text().split("\n", false):
+			var parsed21: Variant = JSON.parse_string(line)
+			if parsed21 is Dictionary and String(parsed21.get("type", "")) == "throw":
+				last_throw21 = parsed21
+	check(String(last_throw21.get("grip_name", "")) == "SHANK · MID"
+		and absf(float(last_throw21.get("grip_nominal", 0.0)) - 1.25) <= 0.001,
+		"FP21: the throw record carries grip_name / grip_nominal (got %s / %.3f)"
+		% [String(last_throw21.get("grip_name", "")), float(last_throw21.get("grip_nominal", 0.0))])
+	# (d) The LEFT hand: a shank grab starts at SHANK · MID (the
+	# stop nearest the grab point), the RIGHT hand's A walks the
+	# cycle, and the left hand's own A does NOT - A yields to
+	# the cycle only as the free hand, and while the left hand
+	# holds, its A must not fire a game job either.
+	main.test_hand_tf.erase("R")
+	var gshank: Vector3 = main.shoe.zone_world_center("shank_left")
+	main.test_hand_tf["L"] = Transform3D(Basis.IDENTITY, gshank)
+	main.test_grip["L"] = 1.0
+	await frames(6)
+	check(main.state == "HELD" and main.held_hand == "L"
+		and main.grip_label.text == "SHANK · MID · 1¼ TURN",
+		"FP21: a left-hand shank grab starts at SHANK · MID (got '%s')" % main.grip_label.text)
+	await pulse_hand_button("R", "A")
+	check(main.grip_label.text == "SHANK · HEEL · 1⅜ TURN",
+		"FP21: the right hand's A cycles the left hand's grip (got '%s')" % main.grip_label.text)
+	main.test_button_hand["L"] = {"A": true}
+	await frames(4)
+	main.test_button_hand.erase("L")
+	await frames(4)
+	check(main._grip_index() == 3 and main.mode == "PRACTICE",
+		"FP21: the holding left hand's own A neither cycles nor starts a game (A yields while it holds)")
+	await wait_hand_still("L")
+	main.test_grip["L"] = 0.0
+	await frames(4)
+	check(main.state == "DROPPED" and not main.grip_label.visible,
+		"FP21: the label is gone the instant the shoe is released")
+	check(await wait_state("STAND", 6.0), "FP21: the dropped shoe returns")
+	# (e) A settled slide re-names the grip: grab the shank
+	# (MID), slide heel-ward past the midpoint, lock - the
+	# label follows the nearest stop. (The other hand's test
+	# transform is erased first: a stale hand parked on a zone
+	# centre wins the grab candidacy and the grab never lands.)
+	main.test_hand_tf.erase("L")
+	var gshank2: Vector3 = main.shoe.zone_world_center("shank_right")
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, gshank2)
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	check(main.grip_label.text == "SHANK · MID · 1¼ TURN",
+		"FP21: the slide test starts at SHANK · MID (got '%s')" % main.grip_label.text)
+	await wait_hand_still("R")
+	main.test_trigger["R"] = 1.0
+	await frames(4)
+	check(main.grab_state.slide_mode, "FP21: the slide engages for the settle test")
+	for i: int in 6:
+		var tf_s: Transform3D = main.test_hand_tf["R"]
+		tf_s.origin += Vector3(-0.005, 0.0, 0.0) # heel-ward for the R-hand turn seat
+		main.test_hand_tf["R"] = tf_s
+		await frames(2)
+	main.test_trigger["R"] = 0.0
+	await frames(4)
+	check(main._grip_index() == 3 and main.grip_label.text == "SHANK · HEEL · 1⅜ TURN",
+		"FP21: a slide settled past the midpoint re-names the grip SHANK · HEEL (got '%s', offset %.3f)"
+		% [main.grip_label.text, main.slide_offset])
+	await wait_hand_still("R")
+	main.test_grip["R"] = 0.0
+	await frames(4)
+	check(await wait_state("STAND", 6.0), "FP21: the slide test shoe returns")
+	# (f) With nothing held, A still starts a game and B still
+	# returns to practice - the cycle never stole them.
+	await pulse_button("A")
+	check(main.mode == "GAME", "FP21: A still starts a game when nothing is held")
+	await pulse_button("B")
+	check(main.mode == "PRACTICE", "FP21: B still returns to practice (unchanged)")
+	# Leave the test transports as this section found them: a
+	# stale test hand parked on a zone centre wins the grab
+	# candidacy (hands iterate L first) and silently blocks
+	# every later grab in the suite.
+	main.test_hand_tf.erase("L")
+	main.test_hand_tf.erase("R")
 
 	# --- Fix Pass 7: the shoe waits where you are ---
 	# The defect: the home pedestal was set only at latch time from

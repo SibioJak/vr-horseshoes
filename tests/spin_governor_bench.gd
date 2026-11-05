@@ -9,9 +9,8 @@ extends SceneTree
 ## restores the finger-drag brake real pitching has and a VR
 ## controller lacks: on the STYLE AXIS ONLY, the hand's total
 ## revolutions over the predicted flight are pulled toward the
-## hold's regulation nominal (flip 1.00; turns 0.75 / 1.25 /
-## 1.75, nearest in the hand's direction), keeping a 0.30
-## residual share of the hand's own deviation.
+## hold's regulation nominal, keeping a 0.30 residual share of
+## the hand's own deviation.
 ##
 ## Fix Pass 17: the predicted flight is counted HAND-TO-STAKE
 ## (Smith 1946, Chris's ruling): the shared governor clock is
@@ -22,9 +21,22 @@ extends SceneTree
 ## map to themselves on BOTH branches because the mechanism
 ## and this bench share the one flight-time function.
 ##
+## Fix Pass 21 (THIS RE-DERIVATION): the nominal no longer
+## comes from the FP16 nearest-basin snap {0.75, 1.25, 1.75} -
+## it comes from the GRIP POSITION held at release, which
+## DECLARES its count (TOE GRIP 1.00; SHANK · TOE 1.125;
+## SHANK · MID 1.25; SHANK · HEEL 1.375). Every part below
+## passes a declared nominal, exactly as the production path
+## does; the 0.75 and 1.75 standards retire with their basins
+## (the 3/4 was Smith's documented trap; no grip declares it).
+## Part C keeps ONE undeclared case proving the basin fallback
+## still serves direct callers that declare nothing - and
+## nothing else.
+##
 ## A. STANDARDS INTACT: synthetic releases totalling exactly a
-##    regulation count come out unchanged (within 0.02 rev),
-##    off-axis spin components pass through untouched.
+##    DECLARED count (one per grip position, plus signs) come
+##    out unchanged (within 0.02 rev), off-axis spin
+##    components pass through untouched.
 ## A2. STAKE CLOCK (Fix Pass 17): the same standards built on a
 ##    geometry whose stake-plane crossing precedes ground
 ##    return still map to themselves, the reported flight time
@@ -32,26 +44,31 @@ extends SceneTree
 ##    clock, and a dirt-bound release whose ground return
 ##    precedes the plane is counted over the ground cap.
 ## B. NEGATIVE CONTROL: governor disabled -> the release spin
-##    is the input spin, component-exact, totals unaltered.
-## C. FORMULA SHAPE: the residual rule on non-standard inputs,
-##    including nearest-nominal selection in both directions.
+##    is the input spin, component-exact, totals unaltered -
+##    and the declared nominal is still reported as evidence.
+## C. FORMULA SHAPE: the residual rule on non-standard inputs
+##    against DECLARED nominals (both directions, sign still
+##    following the hand), plus the undeclared fallback case.
 ## D. REPLAY: Chris's 22 throws-14 releases (the sub-step
 ##    session of 2026-11-03 16:11-16:15, all shank / turn holds)
 ##    fed through the governor from the file's own release
-##    state. The harness is pinned to the independent desktop
-##    census of the same file (recorded total SD 1.17, raw
-##    style-axis SD 0.58) so a replay bug fails loudly. NOTE,
-##    printed not hidden: those 22 are TURN holds whose actual
-##    tumble lives on the FLIP axis (recorded flip total
-##    -1.90 +- 1.12) - off-axis for their hold, so it passes
-##    through by design; the governed style-axis SD is what it
-##    is (see the printed line), and the compression the term
-##    exists for is proven on the standards and formula parts.
+##    state. The file predates the grip cycle, so each throw's
+##    declaration is derived from its recorded zone + slide
+##    offset by the production rule (ThrowMath.grip_index_for).
+##    The harness is pinned to the independent desktop census
+##    of the same file (recorded total SD 1.17, raw style-axis
+##    SD 0.58) so a replay bug fails loudly. NOTE, printed not
+##    hidden: those 22 are TURN holds whose actual tumble lives
+##    on the FLIP axis (recorded flip total -1.90 +- 1.12) -
+##    off-axis for their hold, so it passes through by design;
+##    the governed style-axis SD is what it is (see the printed
+##    line), and the compression the term exists for is proven
+##    on the standards and formula parts.
 ## E. PRODUCTION PATH: a scripted grab and release through
 ##    main's _release_shoe with the governor on (the cache
-##    carries the drag account and the flown spin is the
-##    governed one) and off (flown spin == estimator spin,
-##    component-exact).
+##    carries the drag account, the grip's name and declared
+##    count, and the flown spin is the governed one) and off
+##    (flown spin == estimator spin, component-exact).
 ##
 ## Run: godot --headless --path . --script tests/spin_governor_bench.gd
 
@@ -113,7 +130,7 @@ func wait_state(want: String, timeout_sec: float) -> bool:
 ## builder below). "off" must be perpendicular to the style
 ## axis - it is the off-axis contamination that has to pass
 ## through untouched.
-func synth_ev(hold: String, total: float, basis: Basis, off: Vector3, enabled: bool = true) -> Dictionary:
+func synth_ev(hold: String, total: float, basis: Basis, off: Vector3, enabled: bool = true, declared: float = -1.0) -> Dictionary:
 	var tof: float = 1.10
 	var y0: float = 1.30
 	var vy: float = (0.5 * ThrowMath.SPIN_GRAVITY * tof * tof - y0) / tof
@@ -122,7 +139,7 @@ func synth_ev(hold: String, total: float, basis: Basis, off: Vector3, enabled: b
 	var axis: Vector3 = basis.x.normalized() if hold == "flip" else Vector3.UP
 	var rate: float = total * TAU / tof
 	var ang: Vector3 = axis * rate + off
-	var ev: Dictionary = ThrowMath.govern_spin(ang, Transform3D(basis, pos), vel, hold, FAR_STAKE_POS, enabled)
+	var ev: Dictionary = ThrowMath.govern_spin(ang, Transform3D(basis, pos), vel, hold, FAR_STAKE_POS, enabled, declared)
 	ev["ang_in"] = ang
 	ev["axis"] = axis
 	ev["off"] = off
@@ -134,7 +151,7 @@ func synth_ev(hold: String, total: float, basis: Basis, off: Vector3, enabled: b
 ## its ground return (1.27 s): the hand's total is built on the
 ## stake clock, so a regulation count must map to itself with
 ## the stake time reported as the flight time.
-func synth_ev_stake(hold: String, total: float, basis: Basis, off: Vector3) -> Dictionary:
+func synth_ev_stake(hold: String, total: float, basis: Basis, off: Vector3, declared: float = -1.0) -> Dictionary:
 	var ts: float = 1.20
 	var pos := Vector3(0.0, 1.30, -0.30)
 	var vz: float = (FAR_STAKE_POS.z - pos.z) / ts
@@ -142,7 +159,7 @@ func synth_ev_stake(hold: String, total: float, basis: Basis, off: Vector3) -> D
 	var axis: Vector3 = basis.x.normalized() if hold == "flip" else Vector3.UP
 	var rate: float = total * TAU / ts
 	var ang: Vector3 = axis * rate + off
-	var ev: Dictionary = ThrowMath.govern_spin(ang, Transform3D(basis, pos), vel, hold, FAR_STAKE_POS, true)
+	var ev: Dictionary = ThrowMath.govern_spin(ang, Transform3D(basis, pos), vel, hold, FAR_STAKE_POS, true, declared)
 	ev["ang_in"] = ang
 	ev["axis"] = axis
 	ev["off"] = off
@@ -150,8 +167,8 @@ func synth_ev_stake(hold: String, total: float, basis: Basis, off: Vector3) -> D
 	return ev
 
 
-func check_standard(hold: String, total: float, basis: Basis, off: Vector3, label: String) -> void:
-	var ev: Dictionary = synth_ev(hold, total, basis, off)
+func check_standard(hold: String, total: float, basis: Basis, off: Vector3, label: String, declared: float = -1.0) -> void:
+	var ev: Dictionary = synth_ev(hold, total, basis, off, true, declared)
 	var applied: float = float(ev["applied_total"])
 	check(absf(applied - total) <= 0.02,
 		"%s: standard total %.2f rev comes out %.3f (within 0.02)" % [label, total, applied])
@@ -163,29 +180,31 @@ func check_standard(hold: String, total: float, basis: Basis, off: Vector3, labe
 
 
 func part_a() -> void:
-	check_standard("flip", 1.00, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2), "A flip +1.00")
-	check_standard("flip", -1.00, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2), "A flip -1.00")
+	# Fix Pass 21: a hand AT the declared count for each of the
+	# four grip positions exits at that count.
+	check_standard("flip", 1.00, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2), "A TOE GRIP flip +1.00", 1.0)
+	check_standard("flip", -1.00, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2), "A TOE GRIP flip -1.00", 1.0)
 	var yawed := Basis(Vector3.UP, 0.7)
-	check_standard("flip", 1.00, yawed, yawed.z * 0.4, "A flip +1.00, yawed release basis")
-	check_standard("turn", 0.75, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), "A turn +0.75")
-	check_standard("turn", 1.25, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), "A turn +1.25")
-	check_standard("turn", 1.75, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), "A turn +1.75")
-	check_standard("turn", -1.25, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), "A turn -1.25")
+	check_standard("flip", 1.00, yawed, yawed.z * 0.4, "A TOE GRIP flip +1.00, yawed release basis", 1.0)
+	check_standard("turn", 1.125, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), "A SHANK · TOE turn +1.125", 1.125)
+	check_standard("turn", 1.25, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), "A SHANK · MID turn +1.25", 1.25)
+	check_standard("turn", 1.375, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), "A SHANK · HEEL turn +1.375", 1.375)
+	check_standard("turn", -1.25, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), "A SHANK · MID turn -1.25", 1.25)
 
 
 func part_a2() -> void:
-	var f: Dictionary = synth_ev_stake("flip", 1.00, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2))
+	var f: Dictionary = synth_ev_stake("flip", 1.00, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2), 1.0)
 	check(absf(float(f["flight_time"]) - float(f["stake_time"])) <= 0.01,
 		"A2: the stake clock is the live clock (flight time %.3f s == stake crossing %.2f s, ground return later)"
 		% [float(f["flight_time"]), float(f["stake_time"])])
 	check(absf(float(f["applied_total"]) - 1.00) <= 0.02,
-		"A2 flip +1.00 on the stake clock comes out %.3f (within 0.02)" % float(f["applied_total"]))
-	var t: Dictionary = synth_ev_stake("turn", -1.25, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15))
+		"A2 TOE GRIP flip +1.00 on the stake clock comes out %.3f (within 0.02)" % float(f["applied_total"]))
+	var t: Dictionary = synth_ev_stake("turn", -1.25, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), 1.25)
 	check(absf(float(t["applied_total"]) + 1.25) <= 0.02,
-		"A2 turn -1.25 on the stake clock comes out %.3f (within 0.02)" % float(t["applied_total"]))
-	var f2: Dictionary = synth_ev_stake("flip", 2.00, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2))
+		"A2 SHANK · MID turn -1.25 on the stake clock comes out %.3f (within 0.02)" % float(t["applied_total"]))
+	var f2: Dictionary = synth_ev_stake("flip", 2.00, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2), 1.0)
 	check(absf(float(f2["applied_total"]) - 1.30) <= 0.01,
-		"A2: the residual rule runs on the stake clock - hand 2.00 -> %.3f" % float(f2["applied_total"]))
+		"A2: the residual rule runs on the stake clock - hand 2.00 declared 1.00 -> %.3f" % float(f2["applied_total"]))
 	# The cap: a dirt-bound lob whose ground return (0.63 s)
 	# precedes its stake-plane crossing (1.32 s) is counted over
 	# the ground return - a standard built on the ground clock
@@ -194,41 +213,51 @@ func part_a2() -> void:
 	var vel := Vector3(0.0, 1.00, -9.0)
 	var t_ground: float = ThrowMath.predicted_flight_time(pos, vel)
 	var ang: Vector3 = Vector3(1.00 * TAU / t_ground, 0.0, 0.0)
-	var ev: Dictionary = ThrowMath.govern_spin(ang, Transform3D(Basis.IDENTITY, pos), vel, "flip", FAR_STAKE_POS, true)
+	var ev: Dictionary = ThrowMath.govern_spin(ang, Transform3D(Basis.IDENTITY, pos), vel, "flip", FAR_STAKE_POS, true, 1.0)
 	check(absf(float(ev["flight_time"]) - t_ground) <= 0.01,
 		"A2: dirt-bound release is capped at ground return (flight time %.3f s)" % float(ev["flight_time"]))
 	check(absf(float(ev["applied_total"]) - 1.00) <= 0.02,
-		"A2: the 1.00 standard built on the ground cap comes out %.3f (within 0.02)" % float(ev["applied_total"]))
+		"A2: the TOE GRIP 1.00 standard built on the ground cap comes out %.3f (within 0.02)" % float(ev["applied_total"]))
 
 
 func part_b() -> void:
-	var ev: Dictionary = synth_ev("flip", 2.20, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2), false)
+	var ev: Dictionary = synth_ev("flip", 2.20, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2), false, 1.0)
 	var ang_in: Vector3 = ev["ang_in"]
 	var ang_out: Vector3 = ev["ang"]
 	check(ang_out == ang_in,
 		"B: governor disabled - release spin is the input spin, component-exact")
 	check(float(ev["applied_total"]) == float(ev["hand_total"]),
 		"B: governor disabled - applied total == hand total, exact")
-	var ev2: Dictionary = synth_ev("turn", -1.60, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), false)
+	check(absf(float(ev["nominal"]) - 1.00) <= 0.001,
+		"B: governor disabled - the declared nominal is still reported (%.3f)" % float(ev["nominal"]))
+	var ev2: Dictionary = synth_ev("turn", -1.60, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), false, 1.25)
 	var ang2_in: Vector3 = ev2["ang_in"]
 	var ang2_out: Vector3 = ev2["ang"]
 	check(ang2_out == ang2_in and float(ev2["applied_total"]) == float(ev2["hand_total"]),
 		"B: governor disabled (turn) - spin and total untouched, exact")
+	check(absf(float(ev2["nominal"]) + 1.25) <= 0.001,
+		"B: governor disabled (turn) - declared nominal reported with the hand's sign (%.3f)" % float(ev2["nominal"]))
 
 
 func part_c() -> void:
-	var f: Dictionary = synth_ev("flip", 2.00, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2))
+	var f: Dictionary = synth_ev("flip", 2.00, Basis.IDENTITY, Vector3(0.0, 0.3, -0.2), true, 1.0)
 	check(absf(float(f["applied_total"]) - 1.30) <= 0.01,
-		"C: flip hand 2.00 -> nominal 1.00 + 0.30 residual = %.3f" % float(f["applied_total"]))
-	var t1: Dictionary = synth_ev("turn", 1.60, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15))
-	check(absf(float(t1["applied_total"]) - 1.705) <= 0.01,
-		"C: turn hand 1.60 -> nearest nominal 1.75, applied %.3f" % float(t1["applied_total"]))
-	var t2: Dictionary = synth_ev("turn", -0.10, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15))
-	check(absf(float(t2["applied_total"]) + 0.555) <= 0.01,
-		"C: turn hand -0.10 -> nominal -0.75, applied %.3f" % float(t2["applied_total"]))
-	var t3: Dictionary = synth_ev("turn", 0.90, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15))
-	check(absf(float(t3["applied_total"]) - 0.795) <= 0.01,
-		"C: turn hand 0.90 -> nearest nominal 0.75, applied %.3f" % float(t3["applied_total"]))
+		"C: flip hand 2.00, TOE GRIP declares 1.00 -> %.3f" % float(f["applied_total"]))
+	var t1: Dictionary = synth_ev("turn", 1.60, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), true, 1.375)
+	check(absf(float(t1["applied_total"]) - 1.4425) <= 0.01,
+		"C: turn hand 1.60, SHANK · HEEL declares 1.375 -> %.3f" % float(t1["applied_total"]))
+	var t3: Dictionary = synth_ev("turn", 0.90, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), true, 1.125)
+	check(absf(float(t3["applied_total"]) - 1.0575) <= 0.01,
+		"C: turn hand 0.90, SHANK · TOE declares 1.125 -> %.3f" % float(t3["applied_total"]))
+	var t2: Dictionary = synth_ev("turn", -0.10, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15), true, 1.125)
+	check(absf(float(t2["applied_total"]) + 0.8175) <= 0.01,
+		"C: turn hand -0.10, SHANK · TOE declares 1.125 - the SIGN still follows the hand -> %.3f" % float(t2["applied_total"]))
+	# The fallback, labelled as what it is: a caller that
+	# declares NOTHING still gets the FP16 nearest-basin snap.
+	# Production never calls it this way any more.
+	var fb: Dictionary = synth_ev("turn", 1.60, Basis.IDENTITY, Vector3(0.25, 0.0, 0.15))
+	check(absf(float(fb["applied_total"]) - 1.705) <= 0.01,
+		"C: UNDECLARED fallback only - hand 1.60 snaps to the old 1.75 basin -> %.3f" % float(fb["applied_total"]))
 
 
 func part_d() -> void:
@@ -269,8 +298,17 @@ func part_d() -> void:
 		# the pit on the far side of the court's midpoint from
 		# the release.
 		var stake: Vector3 = FAR_STAKE_POS if pos.z > COURT_MID_Z else HOME_STAKE_POS
+		# Fix Pass 21: the file predates the grip cycle, so the
+		# declaration is derived from the recorded zone + slide
+		# offset by the production rule.
+		var rzone: String = String(rec.get("zone", ""))
+		var declared: float = -1.0
+		if Shoe.zones().has(rzone):
+			var zsmax: float = float(Shoe.zones()[rzone]["slide_max"])
+			declared = float(ThrowMath.grip_position(ThrowMath.grip_index_for(
+				rzone, float(rec.get("slide_offset_m", 0.0)), zsmax))["nominal"])
 		var ev: Dictionary = ThrowMath.govern_spin(
-			ang, Transform3D(Basis(quat), pos), vel, String(rec["hold"]), stake, true)
+			ang, Transform3D(Basis(quat), pos), vel, String(rec["hold"]), stake, true, declared)
 		raw_style.append(float(ev["hand_total"]))
 		governed.append(float(ev["applied_total"]))
 	f.close()
@@ -287,7 +325,7 @@ func part_d() -> void:
 		"D: governed total-rev SD %.2f is below the recorded %.2f" % [gov_sd, rec_sd])
 	var gmin: float = governed.min()
 	var gmax: float = governed.max()
-	print("  REPLAY (Fix Pass 17 - totals counted hand-to-stake): raw style SD %.2f -> governed SD %.2f, governed range %.2f..%.2f rev"
+	print("  REPLAY (Fix Pass 17 clock; Fix Pass 21 declared grips): raw style SD %.2f -> governed SD %.2f, governed range %.2f..%.2f rev"
 		% [raw_sd, gov_sd, gmin, gmax])
 	print("  NOTE: the brief's ~0.4 expectation assumed the governed axis carries the")
 	print("  scatter; in this session it does not - the 22 are turn holds whose tumble")
@@ -372,13 +410,19 @@ func part_e() -> void:
 		var hand_t: float = float(cache.get("spin_hand_total", 0.0))
 		var applied_t: float = float(cache.get("spin_applied_total", 0.0))
 		var nominal_t: float = float(cache.get("spin_nominal", 0.0))
+		# Fix Pass 21: the toe grab declares TOE GRIP / 1.00 in
+		# the cache, governor on or off.
+		check(String(cache.get("grip_name", "")) == "TOE GRIP"
+			and absf(float(cache.get("grip_nominal", 0.0)) - 1.0) <= 0.001,
+			"E(%s): the release cache carries the declared grip (TOE GRIP, 1.00; got %s / %.3f)"
+			% [("on" if gov_on else "off"), String(cache.get("grip_name", "")), float(cache.get("grip_nominal", 0.0))])
 		if gov_on:
 			var expect: float = nominal_t + (hand_t - nominal_t) * ThrowMath.SPIN_DRAG_RESIDUAL
 			check(absf(applied_t - expect) <= 0.02,
 				"E(on): cache account obeys the drag rule (hand %.2f, nominal %.2f, applied %.2f)"
 				% [hand_t, nominal_t, applied_t])
 			check(absf(nominal_t) == 1.00 and absf(applied_t - nominal_t) < absf(hand_t - nominal_t),
-				"E(on): flip total pulled toward the 1.00 nominal (hand %.2f -> applied %.2f)"
+				"E(on): flip total pulled toward TOE GRIP's declared 1.00 (hand %.2f -> applied %.2f)"
 				% [hand_t, applied_t])
 			check(flown != est, "E(on): the flown spin is the governed spin, not the estimator's")
 		else:

@@ -19,20 +19,37 @@ extends SceneTree
 ##               scripted spin sign matches Chris's real throws
 ##               (throws-8/9/10: release omega about +X, recorder
 ##               flip total negative, |omega| ~10-12 rad/s).
-##   TURN 3/4  - flat spin, 0.75 rev. Shank hold, "hooks up" grip
-##               phase (release phase pi in this fixture).
+##   TURN 1-1/8 - flat spin, 1.125 rev, from the SHANK · TOE
+##               grip stop (Fix Pass 21).
 ##   TURN 1-1/4 - THE FRANCIS CASE: flat spin, lazy ~1 rev/s,
-##               1.25 rev, the most common grip in the game.
-##   TURN 1-3/4 - flat spin, 1.75 rev, hooks-up phase.
+##               1.25 rev, the most common grip in the game -
+##               the SHANK · MID stop.
+##   TURN 1-3/8 - flat spin, 1.375 rev, from the SHANK · HEEL
+##               grip stop (Fix Pass 21).
 ##   REVERSE 1-1/4 - opposite yaw sign, mirrored (left) hand.
+##
+## Fix Pass 21 note: the cases now throw the game's four
+## DECLARED grip positions, walked to by the production grip
+## cycle (run_case taps it after the grab), and each case also
+## asserts the release cache carries that position's name and
+## declared count. The FP16-era TURN 3/4 and TURN 1-3/4 cases
+## retire with the governor basins they were standards of: no
+## grip declares those counts any more (Smith called the 3/4
+## a trap), so they are no longer fixed points of the drag
+## term - a hand can still throw them, they just arrive with
+## the residual applied against the held grip's declaration.
+## The arrival phases for the new stops follow the Francis
+## anchor (phase - 360*m == 270 deg mod 360 for the R-hand
+## negative-yaw family): 1-1/8 takes phase -pi/4, 1-3/8 takes
+## phase +pi/4.
 ##
 ## Hold geometry (asserted by the logic suite): the R-hand turn
 ## hold leaves the shoe's opening pointing -X at release, the
 ## L-hand hold +X. The spin SIGN that brings the opening onto
 ## the stake is NEGATIVE yaw for the R-hand hold (mirrored:
 ## positive for the L-hand reverse), with grip phase 0 for the
-## 1-1/4 and phase pi for the "hooks up" 3/4 and 1-3/4. This
-## was settled by the APPROACH measurement (see
+## 1-1/4 and phase pi for the "hooks up" 3/4 and 1-3/4 of the
+## FP16 era. This was settled by the APPROACH measurement (see
 ## approach_snapshot): an early version of this suite measured
 ## the opening at the crossing poll, where the direction to
 ## the stake collapses to a near-zero vector and the readings
@@ -249,7 +266,7 @@ func approach_snapshot() -> Dictionary:
 ## watch the whole flight. Returns the measured row.
 func run_case(hand: String, zone: String, line_ft: int,
 		release_pos: Vector3, vel: Vector3, omega: Vector3,
-		phase: float, kind: String, seed_val: int) -> Dictionary:
+		phase: float, grip_taps: int, kind: String, seed_val: int) -> Dictionary:
 	var res: Dictionary = {"fired": false, "held": false, "arrived": false}
 	# Stand the player at the case's line and let the pass-7
 	# watcher stock the shoe on that line's pedestal.
@@ -277,11 +294,20 @@ func run_case(hand: String, zone: String, line_ft: int,
 	res["held"] = String(main.state) == "HELD"
 	if not bool(res["held"]):
 		return res
+	# Fix Pass 21: walk the grip to the case's named position
+	# through the production cycle (the button plumbing that
+	# fronts it is the smoke's subject; the cycle's re-seat is
+	# what this suite judges, because the release derives its
+	# declaration from the re-seated hold).
+	for t: int in grip_taps:
+		main._cycle_grip()
+	res["grip_idx"] = main._grip_index()
 	# Park the hand at the release pose: the shoe's release
 	# transform is the follow cache (hand * hold rel), so solve
 	# the hand pose that puts the SHOE at release_pos with the
-	# planned phase.
-	var rel_tf: Transform3D = Shoe.hold_transform(zone, hand)
+	# planned phase. The rel solved from is main's LIVE hold
+	# transform - post-cycle, it is the named stop's seat.
+	var rel_tf: Transform3D = main.rel_tf
 	var q_hand: Quaternion = Basis.from_euler(Vector3(0.0, phase, 0.0)).get_rotation_quaternion()
 	var hand_pos: Vector3 = release_pos - Basis(q_hand) * rel_tf.origin
 	main.test_hand_tf[hand] = Transform3D(Basis(q_hand), hand_pos)
@@ -302,6 +328,8 @@ func run_case(hand: String, zone: String, line_ft: int,
 	res["w_est"] = main.release_cache.get("estimator_angular_velocity",
 		main.release_cache.get("angular_velocity", Vector3.ZERO))
 	res["w_applied"] = main.release_cache.get("angular_velocity", Vector3.ZERO)
+	res["grip_name"] = String(main.release_cache.get("grip_name", ""))
+	res["grip_nominal"] = float(main.release_cache.get("grip_nominal", 0.0))
 	main.grab_state.reset()
 	main.test_grip[hand] = 0.0
 	res["fired"] = String(main.state) == "FLYING"
@@ -385,9 +413,14 @@ func run_case(hand: String, zone: String, line_ft: int,
 
 
 func judge_case(label: String, res: Dictionary, vel: Vector3, omega: Vector3,
-		kind: String, plan_rev: float) -> void:
+		kind: String, plan_rev: float, want_grip: String, want_declared: float) -> void:
 	check(bool(res.get("held", false)) and bool(res.get("fired", false)),
 		"%s: grabbed and released through the production path" % label)
+	check(String(res.get("grip_name", "")) == want_grip
+		and absf(float(res.get("grip_nominal", 0.0)) - want_declared) <= 0.001,
+		"%s: the release declares %s / %.3f rev (got %s / %.3f)"
+		% [label, want_grip, want_declared,
+			String(res.get("grip_name", "")), float(res.get("grip_nominal", 0.0))])
 	var v_est: Vector3 = res.get("v_est", Vector3.ZERO)
 	var w_est: Vector3 = res.get("w_est", Vector3.ZERO)
 	var v_err: float = v_est.distance_to(vel)
@@ -452,34 +485,46 @@ func _run() -> void:
 	# 1. FLIP, one revolution, 40 ft. Spin about +X - the sign
 	# Chris's own flips impart (recorder total lands at -1.00).
 	var r1: Dictionary = await run_case("R", "toe", 40, rp40, v40,
-		Vector3(TAU / FLIGHT_T_40, 0.0, 0.0), 0.0, "flip", 101)
-	judge_case("FLIP 1 rev, 40 ft", r1, v40, Vector3(TAU / FLIGHT_T_40, 0.0, 0.0), "flip", -1.00)
+		Vector3(TAU / FLIGHT_T_40, 0.0, 0.0), 0.0, 0, "flip", 101)
+	judge_case("FLIP 1 rev, 40 ft", r1, v40, Vector3(TAU / FLIGHT_T_40, 0.0, 0.0), "flip", -1.00,
+		"TOE GRIP", 1.0)
 
 	# 2. FLIP, one revolution, 30 ft (shorter flight, faster rate).
 	var r2: Dictionary = await run_case("R", "toe", 30, rp30, v30,
-		Vector3(TAU / FLIGHT_T_30, 0.0, 0.0), 0.0, "flip", 202)
-	judge_case("FLIP 1 rev, 30 ft", r2, v30, Vector3(TAU / FLIGHT_T_30, 0.0, 0.0), "flip", -1.00)
+		Vector3(TAU / FLIGHT_T_30, 0.0, 0.0), 0.0, 0, "flip", 202)
+	judge_case("FLIP 1 rev, 30 ft", r2, v30, Vector3(TAU / FLIGHT_T_30, 0.0, 0.0), "flip", -1.00,
+		"TOE GRIP", 1.0)
 
-	# 3. TURN 3/4, 40 ft - hooks-up phase, negative yaw (the
-	# sign the approach measurement proves arrives open).
-	var w34: Vector3 = Vector3(0.0, -TAU * 0.75 / FLIGHT_T_40, 0.0)
-	var r3: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, w34, PI, "turn", 303)
-	judge_case("TURN 3/4, 40 ft", r3, v40, w34, "turn", -0.75)
+	# 3. TURN 1-1/8, 40 ft - the SHANK · TOE stop, negative yaw.
+	# A shank grab starts at MID; the cycle walks MID -> HEEL ->
+	# TOE GRIP -> SHANK · TOE (three taps). Arrival phase from
+	# the Francis anchor: phase = -(360*1.125) + 270 == -45 deg.
+	var w118: Vector3 = Vector3(0.0, -TAU * 1.125 / FLIGHT_T_40, 0.0)
+	var r3: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, w118, -PI / 4.0, 3, "turn", 303)
+	judge_case("TURN 1-1/8 (SHANK · TOE), 40 ft", r3, v40, w118, "turn", -1.125,
+		"SHANK · TOE", 1.125)
 
-	# 4. TURN 1-1/4, 40 ft - THE FRANCIS CASE: lazy rate, phase 0.
+	# 4. TURN 1-1/4, 40 ft - THE FRANCIS CASE: lazy rate, phase 0,
+	# the SHANK · MID stop a shank grab starts on (no taps).
 	var w114: Vector3 = Vector3(0.0, -TAU * 1.25 / FLIGHT_T_40, 0.0)
-	var r4: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, w114, 0.0, "turn", 404)
-	judge_case("TURN 1-1/4 (Francis), 40 ft", r4, v40, w114, "turn", -1.25)
+	var r4: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, w114, 0.0, 0, "turn", 404)
+	judge_case("TURN 1-1/4 (Francis), 40 ft", r4, v40, w114, "turn", -1.25,
+		"SHANK · MID", 1.25)
 
-	# 5. TURN 1-3/4, 40 ft - hooks-up phase, negative yaw.
-	var w134: Vector3 = Vector3(0.0, -TAU * 1.75 / FLIGHT_T_40, 0.0)
-	var r5: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, w134, PI, "turn", 505)
-	judge_case("TURN 1-3/4, 40 ft", r5, v40, w134, "turn", -1.75)
+	# 5. TURN 1-3/8, 40 ft - the SHANK · HEEL stop, negative yaw.
+	# One tap from the MID start. Arrival phase from the anchor:
+	# phase = -(360*1.375) + 270 == +45 deg (mod 360).
+	var w138: Vector3 = Vector3(0.0, -TAU * 1.375 / FLIGHT_T_40, 0.0)
+	var r5: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, w138, PI / 4.0, 1, "turn", 505)
+	judge_case("TURN 1-3/8 (SHANK · HEEL), 40 ft", r5, v40, w138, "turn", -1.375,
+		"SHANK · HEEL", 1.375)
 
-	# 6. REVERSE TURN 1-1/4, 40 ft - left hand, positive yaw.
+	# 6. REVERSE TURN 1-1/4, 40 ft - left hand, positive yaw,
+	# SHANK · MID again (the L-hand grab's own start).
 	var wrev: Vector3 = Vector3(0.0, TAU * 1.25 / FLIGHT_T_40, 0.0)
-	var r6: Dictionary = await run_case("L", "shank_right", 40, rp40, v40, wrev, 0.0, "turn", 606)
-	judge_case("REVERSE TURN 1-1/4, 40 ft", r6, v40, wrev, "turn", 1.25)
+	var r6: Dictionary = await run_case("L", "shank_right", 40, rp40, v40, wrev, 0.0, 0, "turn", 606)
+	judge_case("REVERSE TURN 1-1/4, 40 ft", r6, v40, wrev, "turn", 1.25,
+		"SHANK · MID", 1.25)
 
 	# CONTROL: the Francis case with the spin sign flipped. The
 	# physics must still deliver 1.25 rev - but the opening must
@@ -488,7 +533,7 @@ func _run() -> void:
 	# error, the metric or the sign convention is broken, not
 	# the shoe.
 	var wctl: Vector3 = Vector3(0.0, TAU * 1.25 / FLIGHT_T_40, 0.0)
-	var rc: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, wctl, 0.0, "turn", 707)
+	var rc: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, wctl, 0.0, 0, "turn", 707)
 	var carr: Dictionary = rc.get("arr", {})
 	check(bool(rc.get("fired", false)), "CONTROL (wrong-way 1-1/4): fired through the production path")
 	check(absf(float(carr.get("turn", 0.0)) - 1.25) <= 0.15,
