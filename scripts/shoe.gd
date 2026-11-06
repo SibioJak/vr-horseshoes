@@ -64,6 +64,34 @@ const GUARD_MIN_SPEED: float = 3.0 # ghosting needs speed; slow contacts are the
 const GUARD_SUBSTEPS: int = 8
 const GUARD_AXIS_SAMPLES: int = 32
 
+# --- Sand absorption (Fix Pass 23) ---
+# Real sand kills an arrival by MOVING: the shoe plows in
+# and the grains take the energy. The pit body is a rigid
+# slab - it cannot deform - so a tumbling shoe's leading
+# corner grabs its friction-1.0 face and the shoe's own
+# un-damped spin (pinned to zero on purpose: the spin IS
+# the technique) vaults it back out. Measured on the
+# arrival rig (tests/sand_arrival.gd, real pacing): a hot
+# flat arrival rebounded a median 0.33 m and travelled
+# 0.62 m after touchdown, 2 of 16 clean out of the pit.
+# So the shoe eats the impact itself: while it touches the
+# sand body, its velocity bleeds away - downward first,
+# then the tumble - scaled by the speed the contact began
+# at, so a hard arrival is eaten and a soft drop is barely
+# touched. Contact only, sand only: flight, the stake, the
+# timbers and the grass keep their exact behaviour (a shoe
+# that slides off the stake into the sand SHOULD then die
+# there - that is the point).
+var sand_absorb_enabled: bool = true # the arrival rig's pre/post toggle
+var _sand_episode: bool = false
+var _sand_steps: int = 0
+var _sand_strength: float = 0.0
+var _prev_lv := Vector3.ZERO # velocity on the previous step (pre-contact at a touchdown)
+
+const SAND_ABSORB_STEPS: int = 10 # ~0.17 s of dig-in at 60 Hz
+const SAND_SOFT_IMPACT: float = 2.5 # m/s at contact start: at or below, no bleed
+const SAND_FULL_IMPACT: float = 10.0 # m/s at contact start: a game arrival, full bleed
+
 
 static func zones() -> Dictionary:
 	return {
@@ -285,6 +313,8 @@ func reset_stake_guard() -> void:
 	_guard_armed = guard_enabled
 	_guard_saved_this_flight = false
 	_guard_pending.clear()
+	_sand_episode = false
+	_sand_steps = 0
 
 
 func _axis_closest(p: Vector3) -> Vector3:
@@ -370,7 +400,52 @@ func _apply_guard_save(state: PhysicsDirectBodyState3D) -> void:
 	state.angular_velocity = av
 
 
+## Sand absorption, run at the head of _integrate_forces -
+## before the stake guard's early returns, because the bleed
+## must apply whether or not the guard is wired. Contacts
+## here are the step that just finished (the same convention
+## the guard's solver-contact check uses); the impact that
+## scales the bleed is the velocity tracked from the step
+## BEFORE that contact - the true arrival speed, not the
+## solver's post-response remainder.
+func _absorb_sand(state: PhysicsDirectBodyState3D) -> void:
+	var touching_sand: bool = false
+	for ci: int in state.get_contact_count():
+		var obj: Object = state.get_contact_collider_object(ci)
+		if obj != null and (obj as Node).is_in_group("sand"):
+			touching_sand = true
+			break
+	if touching_sand and not _sand_episode:
+		# The impact step just finished: the state velocity is
+		# the solver's answer to the impact - rebound included -
+		# and this is the one moment it can still be eaten.
+		# A hard arrival is buried in one cut (that is what
+		# plowing into real sand does to the energy); the cut
+		# scales with the PRE-impact speed tracked in _prev_lv,
+		# so a soft touchdown is barely touched.
+		_sand_episode = true
+		_sand_steps = 0
+		_sand_strength = clampf(
+			(_prev_lv.length() - SAND_SOFT_IMPACT)
+			/ (SAND_FULL_IMPACT - SAND_SOFT_IMPACT), 0.0, 1.0)
+		if sand_absorb_enabled and _sand_strength > 0.0:
+			state.linear_velocity *= 1.0 - 0.80 * _sand_strength
+			state.angular_velocity *= 1.0 - 0.85 * _sand_strength
+	if _sand_episode:
+		_sand_steps += 1
+		if _sand_steps > SAND_ABSORB_STEPS and not touching_sand:
+			_sand_episode = false
+		elif sand_absorb_enabled and _sand_strength > 0.0 \
+				and _sand_steps > 1 and _sand_steps <= SAND_ABSORB_STEPS:
+			# Continuation: the dig-in finishes over the next
+			# few steps, contact or micro-bounce alike.
+			state.linear_velocity *= 1.0 - 0.15 * _sand_strength
+			state.angular_velocity *= 1.0 - 0.20 * _sand_strength
+	_prev_lv = state.linear_velocity
+
+
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
+	_absorb_sand(state)
 	if not guard_enabled or guard_body == null or _guard_saved_this_flight:
 		return
 	# Contacts from the step that just finished: a solver stake

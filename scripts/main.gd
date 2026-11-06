@@ -30,7 +30,7 @@ extends Node3D
 const STAKE_POS := Vector3(0.0, 0.0, -12.192) # the ONE pit's surface point (Fix Pass 19: sand at grade, y=0)
 const STAKE_VISUAL_RADIUS: float = 0.0127 # the 1 in steel Chris sees
 const STAKE_COLLISION_RADIUS: float = 0.0157 # visual + 3 mm (Fix Pass 8, see _build_pit)
-const PIT_SIZE := Vector3(0.914, 0.05, 1.829) # 36 in x 72 in
+const PIT_SIZE := Vector3(0.914, 0.30, 1.829) # 36 in x 72 in footprint; depth is Fix Pass 23 (see _build_pit)
 # Fix Pass 19: TRUE foul lines at the pitching end - each stands
 # 3 ft in front of where the pitching end's own stake would sit,
 # so the 40 ft class pitches from the 37 ft line (z -0.914) and
@@ -655,16 +655,24 @@ func _build_pit(stake_pos: Vector3, key: String) -> void:
 	# (2 mm proud, only to keep its face off the ground's) -
 	# a shoe sliding in off the grass meets no lip anywhere,
 	# the front included (see the threshold below).
+	# Fix Pass 23: the body is now DEEP - 0.30 m of sand under
+	# the identical top face (centre 0.148 below the stake
+	# base puts the face at the same +2 mm). Before, 5 cm of
+	# rigid slab sat on the ground body and a fast corner
+	# could reach the hard floor inside one physics step and
+	# pop back out. The body also joins the "sand" group:
+	# the shoe's contact absorption (shoe.gd) keys on it.
 	var sand_phys := PhysicsMaterial.new()
 	sand_phys.friction = 1.0
 	sand_phys.rough = true
 	sand_phys.bounce = 0.0
 	sand_phys.absorbent = true
-	var pit_pos := Vector3(stake_pos.x, stake_pos.y - 0.023, stake_pos.z)
+	var pit_pos := Vector3(stake_pos.x, stake_pos.y - 0.148, stake_pos.z)
 	var sand_mat := StandardMaterial3D.new()
 	sand_mat.albedo_color = Color(0.76, 0.66, 0.47)
 	sand_mat.roughness = 1.0
-	_static_box(pit_pos, PIT_SIZE, sand_mat, sand_phys)
+	var sand_body: StaticBody3D = _static_box(pit_pos, PIT_SIZE, sand_mat, sand_phys)
+	sand_body.add_to_group("sand")
 	# The box zone's apron (Fix Pass 19): regulation puts the
 	# pit inside a 6 ft x 6 ft pitcher's box with platforms
 	# flanking it LEVEL with the pit top. Here that whole zone

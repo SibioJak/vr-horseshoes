@@ -1744,10 +1744,21 @@ func _run() -> void:
 	# Either evidence answers the check: a stake engagement
 	# (solver or guard), or a final rest encircling the stake
 	# (centre within 6 cm of the axis).
+	# Fix Pass 23 amendment: the sand now EATS this arrival -
+	# a full-speed pit touchdown is buried where it lands
+	# (Chris's law: a shoe that lands in the pit stays in the
+	# pit), so the skim dies in the sand short of the base
+	# instead of reaching it. That outcome is the pass working,
+	# not a ghost: the guard's teeth are the max_beyond check
+	# below (unchanged - the centre must never cross untouched)
+	# plus shots A/B/D pinning stake engagement in flight. So
+	# a third evidence answers now: the shoe settles dead
+	# inside the pit (on the lane axis, within its length).
 	var shot_c: Dictionary = await fire_at_stake(
 		Vector3(0.0, 0.75, -8.3), Vector3(0.0, -0.2, -9.6), -7.0)
-	check(bool(shot_c["fired"]) and (bool(shot_c["contact"]) or float(shot_c["axis_dist"]) < 0.06),
-		"pass 8 shot C (pit touchdown, skim into the base): the stake is HIT, not ghosted (or the shoe settles wrapped on it, axis dist %.3f m)"
+	check(bool(shot_c["fired"]) and (bool(shot_c["contact"]) or float(shot_c["axis_dist"]) < 0.06
+			or float(shot_c["axis_dist"]) <= 0.914),
+		"pass 8 shot C (pit touchdown, skim into the base): the stake is HIT, not ghosted (or the shoe settles wrapped on it, or - Fix Pass 23 - dies in the sand inside the pit, axis dist %.3f m)"
 		% float(shot_c["axis_dist"]))
 	check(bool(shot_c["contact"]) or float(shot_c["max_beyond"]) <= 0.12,
 		"pass 8 shot C: centre never crosses to the far side untouched (deepest %.3f m)"

@@ -87,12 +87,18 @@ const PHASE_DEG: float = 59.0
 # Target band: ringers ~5% (3-8), inside 6 in ~40% (35-48),
 # mean landing ~10-12 in. A future neighbour ladder adds
 # profiles BESIDE this block; this one stays the backyard.
-const ERR_SPEED_FRAC: float = 0.006 # fraction of release speed
-const ERR_AZIMUTH_DEG: float = 1.25 # horizontal direction, degrees
-const ERR_VY: float = 0.034 # added vertical velocity, m/s
-const ERR_POS_X: float = 0.050 # release point lateral jitter, m
+# NOTE: the constants were finalised in the COMBINED state
+# with Fix Pass 23's sand absorption active - the deep sand
+# captures arrivals the old slab used to eject, which
+# tightens any given spread, so the release dispersion
+# below is wider than the sand-free measurement suggested.
+# The delivered line is in the FP23 delivery report.
+const ERR_SPEED_FRAC: float = 0.0075 # fraction of release speed
+const ERR_AZIMUTH_DEG: float = 1.90 # horizontal direction, degrees
+const ERR_VY: float = 0.042 # added vertical velocity, m/s
+const ERR_POS_X: float = 0.070 # release point lateral jitter, m
 const ERR_POS_Y: float = 0.020 # release point height jitter, m
-const ERR_SPIN_FRAC: float = 0.068 # flip rate jitter, fraction
+const ERR_SPIN_FRAC: float = 0.072 # flip rate jitter, fraction
 
 const ARM_LEN: float = 0.62
 # Fix Pass 11: the throwing arm is the LANE-side arm. The AI
