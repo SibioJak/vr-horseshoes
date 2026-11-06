@@ -612,6 +612,62 @@ func pulse_hand_button(hand: String, btn: String) -> void:
 	await frames(4)
 
 
+## Fix Pass 25: drive a long-arm grab on instance m - park
+## the hand at pos (far-tier range of m's stocked active
+## shoe, NOT on a zone), squeeze, and wait for the latch.
+func long_arm_grab(m: Node, hand: String, pos: Vector3) -> bool:
+	m.test_hand_tf[hand] = Transform3D(Basis.IDENTITY, pos)
+	m.test_grip[hand] = 1.0
+	var t: float = 0.0
+	while t < 3.0:
+		if String(m.state) == "HELD":
+			return true
+		await create_timer(0.05).timeout
+		t += 0.05
+	return String(m.state) == "HELD"
+
+
+## Fix Pass 25: release a held shoe on instance m with a
+## still hand (a drop) and wait for it to restock (STAND).
+func drop_and_restock(m: Node, hand: String) -> bool:
+	var t0: float = 0.0
+	while float(m.hand_speed[hand]) >= 0.3 and t0 < 3.0:
+		await create_timer(0.05).timeout
+		t0 += 0.05
+	m.test_grip[hand] = 0.0
+	var t: float = 0.0
+	while t < 8.0:
+		if String(m.state) == "STAND":
+			return true
+		await create_timer(0.1).timeout
+		t += 0.1
+	return String(m.state) == "STAND"
+
+
+## Fix Pass 25: the last latch record in a recorder file.
+func last_latch_record(rec: String) -> Dictionary:
+	var out: Dictionary = {}
+	var f: FileAccess = FileAccess.open(rec, FileAccess.READ)
+	if f != null:
+		for line: String in f.get_as_text().split("\n", false):
+			var parsed: Variant = JSON.parse_string(line)
+			if parsed is Dictionary and String(parsed.get("event", "")) == "latch":
+				out = parsed
+	return out
+
+
+## Fix Pass 25: a fresh main instance on the given recorder
+## + settings paths - the restart half of the settings
+## round-trip (its _ready reads the settings file itself).
+func spawn_fresh_main(rec: String, setp: String) -> Node:
+	var ps2: PackedScene = load("res://main.tscn")
+	var m2: Node = ps2.instantiate()
+	m2.recorder_path = rec
+	m2.settings_path = setp
+	root.add_child(m2)
+	return m2
+
+
 ## Hold the left stick forward (production walk input, FP4
 ## sign) for the given seconds - a plain straight walk down
 ## the lane from wherever the player stands.
@@ -664,9 +720,16 @@ func _run() -> void:
 	var rec_path: String = "user://smoke_throws.jsonl"
 	if FileAccess.file_exists(rec_path):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))
+	# Fix Pass 25: the settings file is redirected too - the
+	# default-grip round-trip must start from a first run and
+	# must never read (or write) the player's real default.
+	var set_path: String = "user://smoke_settings.json"
+	if FileAccess.file_exists(set_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(set_path))
 	var ps: PackedScene = load("res://main.tscn")
 	main = ps.instantiate()
 	main.recorder_path = rec_path
+	main.settings_path = set_path
 	root.add_child(main)
 	await create_timer(0.3).timeout
 	check(main != null, "main scene instantiated")
@@ -704,6 +767,10 @@ func _run() -> void:
 	check(main.controls_label.text.contains("A / X WHILE HOLDING A SHOE")
 		and main.controls_label.text.contains("A BUTTON (EMPTY HAND)"),
 		"FP22: the board's A/X lines carry their conditions - cycle while holding, game A with an empty hand")
+	check(main.controls_label.text.contains("SQUEEZE FROM YOUR SPOT: SHOE COMES TO YOUR HAND"),
+		"FP25: the board lists the long-arm grab - standing rule: every accepted command is listed")
+	check(main.controls_label.text.contains("DEFAULT GRIP: TOE GRIP - SET BY CYCLING A HELD SHOE"),
+		"FP25: the board names the default grip (smoke settings start clean: TOE GRIP)")
 	check(main.status_label.text.contains("THROWS: 0"), "board starts at zero throws")
 
 	# --- Backyard Game v1 / Fix Pass 19: one pit, pairs, the opponent ---
@@ -1516,6 +1583,242 @@ func _run() -> void:
 	check(await wait_state("STAND", 600),
 		"FP22 battery: the mode-switch shoe settles back to the stand")
 	main.test_hand_tf.erase("R")
+
+	# --- Fix Pass 25: the long-arm grab + the default grip ---
+	# Chris's nugget: two steps to the station to grab a shoe,
+	# two steps back to the spot to throw it, every shoe,
+	# every inning. The far tier ends the commute: squeeze
+	# from the throwing spot and the stocked shoe hops into
+	# the hand, arriving in the DEFAULT GRIP. The cycle is
+	# the default's setting control, persisted to the
+	# settings file (the smoke one, deleted at boot, so the
+	# default starts at TOE GRIP - the first-run default).
+	# The suite's own cycle walks above (FP21/FP22) have been
+	# SETTING the default all along - that is the feature -
+	# so first walk it home deterministically: near-grab the
+	# stocked shoe and cycle until the held grip is TOE,
+	# which lands the default on TOE with it.
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
+		main.shoe.zone_world_center("toe"))
+	main.test_grip["R"] = 1.0
+	var setup_frames: int = 0
+	while main.state != "HELD" and setup_frames < 40:
+		await frames(1)
+		setup_frames += 1
+	check(main.state == "HELD", "FP25: the setup grab latches for the default reset")
+	var guard25: int = 0
+	while main.default_grip != 0 and guard25 < 5:
+		await pulse_hand_button("L", "A")
+		guard25 += 1
+	check(main.default_grip == 0 and main._grip_index() == 0,
+		"FP25: the default is walked back to TOE for the section (got %d)" % main.default_grip)
+	check(await drop_and_restock(main, "R"), "FP25: the reset shoe drops and restocks")
+	main.test_hand_tf.erase("R")
+	var spot40: Vector3 = main.spot_pos(40, false)
+	var hand_r40 := Vector3(spot40.x + 0.25, 0.85, spot40.z)
+	var hand_l40 := Vector3(spot40.x - 0.25, 0.85, spot40.z)
+	var d_far: float = hand_r40.distance_to(main.shoe.global_position)
+	check(d_far > main.CANDIDATE_RADIUS and d_far <= main.LONG_ARM_RADIUS,
+		"FP25: the throwing-spot hand sits in far-tier range of the station pair (%.2f m)" % d_far)
+	# (a) Long-arm from the throwing spot, RIGHT hand.
+	check(await long_arm_grab(main, "R", hand_r40),
+		"FP25: a squeeze from the throwing spot latches the station shoe")
+	check(main.held_zone == "toe" and main._grip_index() == 0
+		and main.grip_label.text == "TOE GRIP · FLIP",
+		"FP25: the long-arm arrival holds the default grip (TOE at first run, got idx %d / '%s')"
+		% [main._grip_index(), main.grip_label.text])
+	var latch_a: Dictionary = last_latch_record(rec_path)
+	check(bool(latch_a.get("long_arm", false)),
+		"FP25: the latch record flags the long-arm grab")
+	# (b) The cycle is the settings control: two taps land
+	# on SHANK · MID, and the default follows - on the board
+	# and on disk, in the same moment.
+	await pulse_hand_button("L", "A")
+	await pulse_hand_button("L", "A")
+	check(main._grip_index() == 2 and main.default_grip == 2,
+		"FP25: cycling to SHANK · MID makes it the default (got %d)" % main.default_grip)
+	check(main.controls_label.text.contains("DEFAULT GRIP: SHANK · MID"),
+		"FP25: the board re-names the default the moment it changes")
+	var set_f: FileAccess = FileAccess.open(set_path, FileAccess.READ)
+	var set_parsed: Variant = JSON.parse_string(set_f.get_as_text()) if set_f != null else null
+	check(set_parsed is Dictionary and int(set_parsed.get("default_grip", -1)) == 2,
+		"FP25: the default is persisted to the settings file")
+	check(await drop_and_restock(main, "R"), "FP25: the cycled shoe drops and restocks")
+	main.test_hand_tf.erase("R")
+	# (c) LEFT hand long-arm: arrives in the new default, on
+	# the left hand's own shank.
+	check(await long_arm_grab(main, "L", hand_l40),
+		"FP25: a left-hand squeeze from the spot latches too")
+	check(main.held_hand == "L" and main.held_zone == "shank_left"
+		and main._grip_index() == 2
+		and main.grip_label.text == "SHANK · MID · 1¼ TURN",
+		"FP25: the left long-arm arrival holds the default on its own shank (got %s / '%s')"
+		% [main.held_zone, main.grip_label.text])
+	check(await drop_and_restock(main, "L"), "FP25: the left shoe drops and restocks")
+	main.test_hand_tf.erase("L")
+	# (d) A long-arm arrival THROWS its default: the release
+	# cache (and with it the governor) carries the default's
+	# name and declared count (the FP21 (c) stream method).
+	check(await long_arm_grab(main, "R", hand_r40),
+		"FP25: long-arm again, for the throw")
+	var line_z25: float = main.game_line_z()
+	var target25: Vector3 = main.target_stake_pos()
+	var rp25 := Vector3(0.25, 1.25, line_z25 + 0.35)
+	var tf25: float = 1.15
+	var vel25 := Vector3((target25.x - rp25.x) / tf25,
+		(0.50 - rp25.y + 4.9 * tf25 * tf25) / tf25,
+		(target25.z - rp25.z) / tf25)
+	var om25 := Vector3(0.0, -TAU * 1.25 / tf25, 0.0)
+	var rel25: Transform3D = main.rel_tf
+	var hand_pos25: Vector3 = rp25 - rel25.origin
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, hand_pos25)
+	await frames(4)
+	main.samples = build_stream(hand_pos25, Quaternion.IDENTITY, vel25, om25, 25)
+	main._release_shoe(main.samples)
+	main.grab_state.reset()
+	main.test_grip["R"] = 0.0
+	check(main.state == "FLYING", "FP25: the long-arm shoe throws through the production path")
+	check(String(main.release_cache.get("grip_name", "")) == "SHANK · MID"
+		and absf(float(main.release_cache.get("grip_nominal", 0.0)) - 1.25) <= 0.001,
+		"FP25: the release serves the default's declared grip (got %s / %.3f)"
+		% [String(main.release_cache.get("grip_name", "")), float(main.release_cache.get("grip_nominal", 0.0))])
+	check(absf(float(main.release_cache.get("spin_applied_total", 0.0)) + 1.25) <= 0.15,
+		"FP25: the governed total is the default's declaration (applied %.2f rev)"
+		% float(main.release_cache.get("spin_applied_total", 0.0)))
+	# (e) A shoe IN PLAY refuses: squeezed at mid-flight, no
+	# hop starts and nothing latches.
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, hand_r40)
+	main.test_grip["R"] = 1.0
+	await create_timer(0.5).timeout
+	check(main.hop_phase == "" and not main.grab_state.latched,
+		"FP25: a mid-flight squeeze calls nothing (hop '%s')" % main.hop_phase)
+	main.test_grip["R"] = 0.0
+	main.test_hand_tf.erase("R")
+	check(await wait_state("STAND", 12.0), "FP25: the thrown shoe settles and restocks")
+	# (f) RESTART: a fresh instance reads the settings file
+	# itself - the default survived, its board names it, and
+	# its long-arm arrival holds it.
+	var rec_b: String = "user://smoke_settings_throws.jsonl"
+	if FileAccess.file_exists(rec_b):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_b))
+	var m2: Node = spawn_fresh_main(rec_b, set_path)
+	await create_timer(0.3).timeout
+	check(int(m2.default_grip) == 2,
+		"FP25: the default survives a restart (read %d)" % int(m2.default_grip))
+	check(m2.controls_label.text.contains("DEFAULT GRIP: SHANK · MID"),
+		"FP25: the restarted board names the stored default")
+	check(await long_arm_grab(m2, "R", hand_r40),
+		"FP25: the restarted instance long-arms from the spot")
+	check(m2._grip_index() == 2 and m2.held_zone == "shank_right",
+		"FP25: the restarted long-arm arrival holds SHANK · MID (got idx %d / %s)"
+		% [m2._grip_index(), m2.held_zone])
+	m2.test_grip["R"] = 0.0
+	m2.test_hand_tf.erase("R")
+	root.remove_child(m2)
+	m2.free()
+	await frames(3)
+	# (g) A NEAR grab is unchanged - its latch record carries
+	# no long-arm flag - and a full cycle walk on it sets
+	# the default back to TOE.
+	var toe_c25: Vector3 = main.shoe.zone_world_center("toe")
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, toe_c25)
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	check(main.state == "HELD" and main.held_zone == "toe",
+		"FP25: the near grab still latches at the zone")
+	var latch_g: Dictionary = last_latch_record(rec_path)
+	check(not bool(latch_g.get("long_arm", true)),
+		"FP25: the near latch record is NOT flagged long-arm")
+	for i25: int in 4:
+		await pulse_hand_button("L", "A")
+	check(main._grip_index() == 0 and main.default_grip == 0
+		and main.controls_label.text.contains("DEFAULT GRIP: TOE GRIP"),
+		"FP25: a full cycle walk sets the default back to TOE GRIP (got %d)" % main.default_grip)
+	var set_f2: FileAccess = FileAccess.open(set_path, FileAccess.READ)
+	var set_parsed2: Variant = JSON.parse_string(set_f2.get_as_text()) if set_f2 != null else null
+	check(set_parsed2 is Dictionary and int(set_parsed2.get("default_grip", -1)) == 0,
+		"FP25: TOE is persisted")
+	check(await drop_and_restock(main, "R"), "FP25: the walked shoe drops and restocks")
+	main.test_hand_tf.erase("R")
+	# (h) RESTART again: TOE survived the round trip.
+	var m3: Node = spawn_fresh_main(rec_b, set_path)
+	await create_timer(0.3).timeout
+	check(int(m3.default_grip) == 0,
+		"FP25: the round trip ends at TOE (read %d)" % int(m3.default_grip))
+	check(await long_arm_grab(m3, "R", hand_r40),
+		"FP25: the second restart long-arms")
+	check(m3._grip_index() == 0 and m3.grip_label.text == "TOE GRIP · FLIP",
+		"FP25: the second restart arrives at TOE GRIP (got '%s')" % m3.grip_label.text)
+	m3.test_grip["R"] = 0.0
+	m3.test_hand_tf.erase("R")
+	root.remove_child(m3)
+	m3.free()
+	await frames(3)
+	# (i) Refusals. Out of range first: a squeeze ~2.5 m
+	# from the stocked shoe starts nothing.
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
+		Vector3(spot40.x - 1.2, 0.85, spot40.z + 0.8))
+	main.test_grip["R"] = 1.0
+	await create_timer(0.6).timeout
+	check(main.state == "STAND" and main.hop_phase == "" and not main.grab_state.latched,
+		"FP25: an out-of-range squeeze starts nothing")
+	main.test_grip["R"] = 0.0
+	main.test_hand_tf.erase("R")
+	await frames(3)
+	# The AI's pair refuses at ANY range: a hand parked on
+	# the AI's stocked shoe, squeezing - the far tier only
+	# ever measures the player's active shoe.
+	var ai_slot: Vector3 = main.rack_slot_tf(40, true, 0).origin
+	main.test_hand_tf["L"] = Transform3D(Basis.IDENTITY, ai_slot + Vector3(0.1, 0.07, 0.0))
+	main.test_grip["L"] = 1.0
+	await create_timer(0.6).timeout
+	check(main.state == "STAND" and main.hop_phase == "",
+		"FP25: a squeeze parked on the AI's shoe calls nothing")
+	check(main.ai_pair[0].global_position.distance_to(ai_slot) < 0.01,
+		"FP25: the AI's shoe never moved")
+	main.test_grip["L"] = 0.0
+	main.test_hand_tf.erase("L")
+	await frames(3)
+	# A round's down shoes refuse: manufacture a tabulating
+	# round (grab disarmed) and squeeze from the spot.
+	manufacture_round()
+	await frames(3)
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, hand_r40)
+	main.test_grip["R"] = 1.0
+	await create_timer(0.6).timeout
+	check(main.hop_phase == "" and not main.grab_state.latched,
+		"FP25: no long-arm while a round tabulates (the grab is disarmed)")
+	main.test_grip["R"] = 0.0
+	main.test_hand_tf.erase("R")
+	await pulse_button("B")
+	check(main.mode == "PRACTICE" and main.state == "STAND",
+		"FP25: back to practice after the refusal legs")
+	# (j) The peg pair at the short line (the FP7 walk):
+	# the long-arm works there too, then the yard is left
+	# as the next section expects it - player home, shoe
+	# stocked at the standard end.
+	main.test_stick["L"] = Vector2(0.0, 1.0)
+	await create_timer(1.9).timeout
+	main.test_stick["L"] = Vector2.ZERO
+	check(await wait_shoe_at(30, 2.0) >= 0.0,
+		"FP25: the shoe waits at the short line")
+	var spot30: Vector3 = main.spot_pos(30, false)
+	var hand_r30 := Vector3(spot30.x + 0.25, 0.85, spot30.z)
+	check(await long_arm_grab(main, "R", hand_r30),
+		"FP25: a squeeze from the short-line spot latches the peg shoe")
+	check(main._grip_index() == 0 and main.grip_label.text == "TOE GRIP · FLIP",
+		"FP25: the peg arrival holds the default (TOE after the round trip)")
+	check(await drop_and_restock(main, "R"), "FP25: the peg shoe drops and restocks")
+	main.test_hand_tf.erase("R")
+	# Home again: the origin goes to the 40 ft LINE (the
+	# FP7 (d) idiom) - a cam at the world origin reads as
+	# standing at NO line (it is 0.914 m behind the foul
+	# line, outside the follow's proximity), so an identity
+	# teleport would leave the shoe stocked short.
+	main.origin.global_transform = Transform3D(Basis.IDENTITY,
+		Vector3(0.0, 0.0, main.FOUL_40_Z))
+	check(await wait_shoe_at(40, 3.0) >= 0.0,
+		"FP25: the shoe restocks at the standard end for the next section")
 
 	# --- Fix Pass 7: the shoe waits where you are ---
 	# The defect: the home pedestal was set only at latch time from

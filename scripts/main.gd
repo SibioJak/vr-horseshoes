@@ -141,6 +141,11 @@ var hop_hand: String = ""
 var hop_t: float = 0.0 # 0 at the slot, 1 in the hand
 var hop_from: Transform3D = Transform3D.IDENTITY
 var _latch_long_arm: bool = false
+# Fix Pass 25: the far tier answers a FRESH squeeze only -
+# the previous frame's grip per hand, for the edge test in
+# _maybe_start_hop. (The near tier stays level-based, per
+# GrabState's own doctrine.)
+var _grip_prev: Dictionary = {"L": 0.0, "R": 0.0}
 
 var samples: Array = [] # Dictionary samples for the held hand
 var sample_hand: String = ""
@@ -237,6 +242,7 @@ var debug_show_zones: bool = false
 
 func _ready() -> void:
 	recorder = ThrowRecorder.new(recorder_path)
+	_load_settings() # Fix Pass 25: before the board names the default
 	ai_rng.randomize()
 	_init_stands()
 	_build_world()
@@ -253,11 +259,46 @@ func _ready() -> void:
 
 # --- Fix Pass 25: the settings file (the default grip) ---
 
+## The stored default grip: {"default_grip": <GRIP_POSITIONS
+## index>} in a small JSON under user://, surviving restarts.
+## A missing or unreadable file is a first run: TOE GRIP.
+func _load_settings() -> void:
+	default_grip = 0
+	if not FileAccess.file_exists(settings_path):
+		return
+	var f: FileAccess = FileAccess.open(settings_path, FileAccess.READ)
+	if f == null:
+		return
+	var parsed: Variant = JSON.parse_string(f.get_as_text())
+	if parsed is Dictionary and parsed.has("default_grip"):
+		default_grip = clampi(int(parsed["default_grip"]),
+			0, ThrowMath.grip_position_count() - 1)
+
+
+func _save_settings() -> void:
+	var f: FileAccess = FileAccess.open(settings_path, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_string(JSON.stringify({"default_grip": default_grip}))
+
+
+## The default changes exactly one way: a grip cycle lands on
+## a new grip. Persist it and re-name it on the board in the
+## same moment, so the board never names a stale default.
+func _set_default_grip(idx: int) -> void:
+	if idx == default_grip:
+		return
+	default_grip = idx
+	_save_settings()
+	_refresh_controls_label()
+
+
 ## The controls block's full text, rebuilt whenever the
 ## default changes (the block names it). Every line states a
 ## command the game accepts, in the block's established style.
 func _controls_text() -> String:
-	return "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSQUEEZE FROM YOUR SPOT: SHOE COMES TO YOUR HAND\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nA / X WHILE HOLDING A SHOE: CHANGE GRIP\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON (EMPTY HAND): start game / next round / play again\nB BUTTON: back to practice (in a game)\nRECENTER: menu long-press - seated/standing ok"
+	var pos: Dictionary = ThrowMath.grip_position(default_grip)
+	return "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSQUEEZE FROM YOUR SPOT: SHOE COMES TO YOUR HAND\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nA / X WHILE HOLDING A SHOE: CHANGE GRIP\nDEFAULT GRIP: %s - SET BY CYCLING A HELD SHOE\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON (EMPTY HAND): start game / next round / play again\nB BUTTON: back to practice (in a game)\nRECENTER: menu long-press - seated/standing ok" % String(pos["name"])
 
 
 func _refresh_controls_label() -> void:
@@ -1544,6 +1585,9 @@ func _cycle_grip() -> void:
 	var idx: int = (_grip_index() + 1) % ThrowMath.grip_position_count()
 	var pos: Dictionary = ThrowMath.grip_position(idx)
 	_seat_grip(idx)
+	# Fix Pass 25: the cycle is also the settings control -
+	# the grip it lands on becomes the default grip.
+	_set_default_grip(idx)
 	var c: XRController3D = hand_ctrl[held_hand]
 	if c != null:
 		c.trigger_haptic_pulse(&"haptic", 0.0, 0.30 + 0.10 * float(idx),
@@ -1779,6 +1823,8 @@ func _process_grab(delta: float) -> void:
 		# never let it linger into a later, unrelated latch.
 		_latch_long_arm = false
 	_update_carried_slide()
+	for hand: String in ["L", "R"]:
+		_grip_prev[hand] = _grip_value(hand)
 
 
 ## Fix Pass 25: the long-arm grab (Chris's nugget: "two
@@ -1803,7 +1849,16 @@ func _maybe_start_hop() -> void:
 	if String(shoe_status.get(shoe, "")) != "RAILED":
 		return
 	for hand: String in ["L", "R"]:
-		if _grip_value(hand) < GrabState.GRIP_ON:
+		# A FRESH squeeze only: a hand that merely STAYS shut
+		# never calls a shoe. A level trigger boomeranged the
+		# B-to-practice exit (the gathered shoe hopped straight
+		# back into the still-squeezed hand) and fired on any
+		# parked, idly-squeezed hand near the rail; the far
+		# tier is a deliberate gesture, so it takes the edge.
+		var g: float = _grip_value(hand)
+		var fresh: bool = float(_grip_prev[hand]) < GrabState.GRIP_ON \
+			and g >= GrabState.GRIP_ON
+		if not fresh:
 			continue
 		if _hand_tf(hand).origin.distance_to(shoe.global_position) <= LONG_ARM_RADIUS:
 			hop_phase = "out"
