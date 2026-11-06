@@ -598,7 +598,14 @@ func _build_world() -> void:
 	var ground_phys := PhysicsMaterial.new()
 	ground_phys.friction = 0.7
 	ground_phys.bounce = 0.35
-	_static_box(Vector3(0.0, -0.05, -6.0), Vector3(40.0, 0.1, 48.0), _mat(Color(0.32, 0.52, 0.26)), ground_phys)
+	# Fix Pass 24: the ground body joins the "turf" group -
+	# the shoe's surface absorption (shoe.gd) keys its lawn
+	# profile on it, the way Fix Pass 23 keyed the sand's on
+	# the "sand" group. The material itself is NOT retuned:
+	# this body also underlies the pit's box zone, where its
+	# behaviour is the judged one (see shoe.gd).
+	var ground_body: StaticBody3D = _static_box(Vector3(0.0, -0.05, -6.0), Vector3(40.0, 0.1, 48.0), _mat(Color(0.32, 0.52, 0.26)), ground_phys)
+	ground_body.add_to_group("turf")
 
 	# Fix Pass 19: ONE pit - the real backyard form (Chris's
 	# call, verified against NHPA geometry): one timber sand
@@ -1252,6 +1259,12 @@ func _wire_guard(shoe_node: Shoe, stake_key: String) -> void:
 	shoe_node.guard_axis_b = st["axis_b"]
 	shoe_node.guard_radius = STAKE_COLLISION_RADIUS
 	shoe_node.guard_body = st["body"]
+	# Fix Pass 24: the turf exemption's box zone belongs to
+	# the stake being thrown at, so it is wired here, with
+	# the guard: the shoe exempts lawn contacts inside the
+	# 6 ft box centred on this stake (see shoe.gd).
+	shoe_node.turf_zone_center = Vector2(st["pos"].x, st["pos"].z)
+	shoe_node.turf_zone_wired = true
 	# guard_enabled is NOT set here: it is enabled once at spawn
 	# and left alone after, so the Fix Pass 9 negative control
 	# (guard deliberately disabled) survives a release.

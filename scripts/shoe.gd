@@ -64,7 +64,7 @@ const GUARD_MIN_SPEED: float = 3.0 # ghosting needs speed; slow contacts are the
 const GUARD_SUBSTEPS: int = 8
 const GUARD_AXIS_SAMPLES: int = 32
 
-# --- Sand absorption (Fix Pass 23) ---
+# --- Surface absorption (Fix Pass 23 sand; Fix Pass 24 turf) ---
 # Real sand kills an arrival by MOVING: the shoe plows in
 # and the grains take the energy. The pit body is a rigid
 # slab - it cannot deform - so a tumbling shoe's leading
@@ -82,15 +82,67 @@ const GUARD_AXIS_SAMPLES: int = 32
 # timbers and the grass keep their exact behaviour (a shoe
 # that slides off the stake into the sand SHOULD then die
 # there - that is the point).
+#
+# Fix Pass 24: the grass had the same disease. The ground
+# body is a hard slab with grass numbers (friction 0.7,
+# bounce 0.35), and a shoe that landed on the lane kept its
+# roll for metres - Chris's evidence (throws-17): a throw
+# first-touched at z = -9.4, travelled 2.66 m and settled
+# IN the pit 6 in from the stake, conducted there by the
+# lawn. His law: a shoe that lands on the grass dies in the
+# grass. So the same contact path runs a second profile
+# for ground-body ("turf") contacts - the bounce eaten at
+# the contact step, the roll bled out with its spin - with
+# ONE exemption: contacts inside the pit's 6 ft x 6 ft box
+# zone are untouched, because a shoe landing a body-length
+# short and tumbling into the sand is a legal horseshoe.
+# The exemption is by the shoe's position at the contact,
+# evaluated per contact. (The ground body's material is
+# NOT retuned: the same body underlies the box zone, where
+# its behaviour is the judged one - the lawn's bounce dies
+# in the velocity bleed, not in the material.)
 var sand_absorb_enabled: bool = true # the arrival rig's pre/post toggle
-var _sand_episode: bool = false
-var _sand_steps: int = 0
-var _sand_strength: float = 0.0
+var turf_absorb_enabled: bool = true # the lawn rig's pre/post toggle
+var _absorb_episode: bool = false
+var _absorb_steps: int = 0
+var _absorb_strength: float = 0.0
+var _absorb_kind: int = 0 # ABSORB_* of the running episode
 var _prev_lv := Vector3.ZERO # velocity on the previous step (pre-contact at a touchdown)
 
-const SAND_ABSORB_STEPS: int = 10 # ~0.17 s of dig-in at 60 Hz
+const ABSORB_SAND: int = 1
+const ABSORB_TURF: int = 2
+
+# Sand profile: ~0.17 s of dig-in at 60 Hz; the impact
+# window is a game arrival's speed range.
+const SAND_ABSORB_STEPS: int = 10
 const SAND_SOFT_IMPACT: float = 2.5 # m/s at contact start: at or below, no bleed
 const SAND_FULL_IMPACT: float = 10.0 # m/s at contact start: a game arrival, full bleed
+const SAND_CUT_LIN: float = 0.80 # first-step cut at full strength
+const SAND_CUT_ANG: float = 0.85
+const SAND_CONT_LIN: float = 0.15 # per-step continuation cut
+const SAND_CONT_ANG: float = 0.20
+
+# Turf profile: grass is not sand - a flat skid may travel
+# a few decimetres - but a rolling shoe must die with its
+# spin, so the angular cut is sand-hard and the bleed runs
+# longer (~0.4 s), long enough for a broken roll match to
+# let the lawn's friction finish the job.
+const TURF_ABSORB_STEPS: int = 24
+const TURF_SOFT_IMPACT: float = 1.5
+const TURF_FULL_IMPACT: float = 7.0
+const TURF_CUT_LIN: float = 0.50
+const TURF_CUT_ANG: float = 0.80
+const TURF_CONT_LIN: float = 0.22
+const TURF_CONT_ANG: float = 0.30
+
+# The box zone (the exemption above): a square of this
+# half-extent centred on the target stake, wired by main
+# at spawn and again at every release (_wire_guard - the
+# zone belongs to the stake being thrown at). An unwired
+# shoe has no exemption anywhere.
+var turf_zone_center := Vector2.ZERO
+var turf_zone_wired: bool = false
+const TURF_ZONE_HALF: float = 0.914 # 6 ft box, half-extent
 
 
 static func zones() -> Dictionary:
@@ -313,8 +365,9 @@ func reset_stake_guard() -> void:
 	_guard_armed = guard_enabled
 	_guard_saved_this_flight = false
 	_guard_pending.clear()
-	_sand_episode = false
-	_sand_steps = 0
+	_absorb_episode = false
+	_absorb_steps = 0
+	_absorb_kind = 0
 
 
 func _axis_closest(p: Vector3) -> Vector3:
@@ -400,22 +453,43 @@ func _apply_guard_save(state: PhysicsDirectBodyState3D) -> void:
 	state.angular_velocity = av
 
 
-## Sand absorption, run at the head of _integrate_forces -
+## Is this position inside the pit's box zone (the turf
+## exemption)? Evaluated on the shoe's centre, per contact.
+func _in_box_zone(pos: Vector3) -> bool:
+	if not turf_zone_wired:
+		return false
+	return absf(pos.x - turf_zone_center.x) <= TURF_ZONE_HALF \
+		and absf(pos.z - turf_zone_center.y) <= TURF_ZONE_HALF
+
+
+## Surface absorption, run at the head of _integrate_forces -
 ## before the stake guard's early returns, because the bleed
 ## must apply whether or not the guard is wired. Contacts
 ## here are the step that just finished (the same convention
 ## the guard's solver-contact check uses); the impact that
 ## scales the bleed is the velocity tracked from the step
 ## BEFORE that contact - the true arrival speed, not the
-## solver's post-response remainder.
-func _absorb_sand(state: PhysicsDirectBodyState3D) -> void:
-	var touching_sand: bool = false
+## solver's post-response remainder. One path, two profiles:
+## a sand contact runs the SAND profile; a ground-body
+## ("turf") contact runs the TURF profile - unless the shoe
+## is inside the box zone, where lawn contacts are exempt
+## and nothing bleeds. Sand wins a straddled contact (the
+## pit's edge is sand's business).
+func _absorb_surface(state: PhysicsDirectBodyState3D) -> void:
+	var pos: Vector3 = state.transform.origin
+	var in_zone: bool = _in_box_zone(pos)
+	var touch_kind: int = 0
 	for ci: int in state.get_contact_count():
 		var obj: Object = state.get_contact_collider_object(ci)
-		if obj != null and (obj as Node).is_in_group("sand"):
-			touching_sand = true
+		if obj == null:
+			continue
+		var node := obj as Node
+		if node.is_in_group("sand"):
+			touch_kind = ABSORB_SAND
 			break
-	if touching_sand and not _sand_episode:
+		if touch_kind == 0 and node.is_in_group("turf") and not in_zone:
+			touch_kind = ABSORB_TURF
+	if touch_kind != 0 and not _absorb_episode:
 		# The impact step just finished: the state velocity is
 		# the solver's answer to the impact - rebound included -
 		# and this is the one moment it can still be eaten.
@@ -423,29 +497,52 @@ func _absorb_sand(state: PhysicsDirectBodyState3D) -> void:
 		# plowing into real sand does to the energy); the cut
 		# scales with the PRE-impact speed tracked in _prev_lv,
 		# so a soft touchdown is barely touched.
-		_sand_episode = true
-		_sand_steps = 0
-		_sand_strength = clampf(
-			(_prev_lv.length() - SAND_SOFT_IMPACT)
-			/ (SAND_FULL_IMPACT - SAND_SOFT_IMPACT), 0.0, 1.0)
-		if sand_absorb_enabled and _sand_strength > 0.0:
-			state.linear_velocity *= 1.0 - 0.80 * _sand_strength
-			state.angular_velocity *= 1.0 - 0.85 * _sand_strength
-	if _sand_episode:
-		_sand_steps += 1
-		if _sand_steps > SAND_ABSORB_STEPS and not touching_sand:
-			_sand_episode = false
-		elif sand_absorb_enabled and _sand_strength > 0.0 \
-				and _sand_steps > 1 and _sand_steps <= SAND_ABSORB_STEPS:
+		var soft: float = SAND_SOFT_IMPACT if touch_kind == ABSORB_SAND \
+			else TURF_SOFT_IMPACT
+		var full: float = SAND_FULL_IMPACT if touch_kind == ABSORB_SAND \
+			else TURF_FULL_IMPACT
+		var cut_lin: float = SAND_CUT_LIN if touch_kind == ABSORB_SAND \
+			else TURF_CUT_LIN
+		var cut_ang: float = SAND_CUT_ANG if touch_kind == ABSORB_SAND \
+			else TURF_CUT_ANG
+		var enabled: bool = sand_absorb_enabled if touch_kind == ABSORB_SAND \
+			else turf_absorb_enabled
+		_absorb_episode = true
+		_absorb_kind = touch_kind
+		_absorb_steps = 0
+		_absorb_strength = clampf(
+			(_prev_lv.length() - soft) / (full - soft), 0.0, 1.0)
+		if enabled and _absorb_strength > 0.0:
+			state.linear_velocity *= 1.0 - cut_lin * _absorb_strength
+			state.angular_velocity *= 1.0 - cut_ang * _absorb_strength
+	if _absorb_episode:
+		_absorb_steps += 1
+		var ep_steps: int = SAND_ABSORB_STEPS if _absorb_kind == ABSORB_SAND \
+			else TURF_ABSORB_STEPS
+		var cont_lin: float = SAND_CONT_LIN if _absorb_kind == ABSORB_SAND \
+			else TURF_CONT_LIN
+		var cont_ang: float = SAND_CONT_ANG if _absorb_kind == ABSORB_SAND \
+			else TURF_CONT_ANG
+		var ep_enabled: bool = sand_absorb_enabled if _absorb_kind == ABSORB_SAND \
+			else turf_absorb_enabled
+		if _absorb_kind == ABSORB_TURF and in_zone:
+			# The shoe has tumbled into the box zone: from
+			# here its ground contacts are exempt, so the
+			# lawn's claim on it ends.
+			_absorb_episode = false
+		elif _absorb_steps > ep_steps and touch_kind != _absorb_kind:
+			_absorb_episode = false
+		elif ep_enabled and _absorb_strength > 0.0 \
+				and _absorb_steps > 1 and _absorb_steps <= ep_steps:
 			# Continuation: the dig-in finishes over the next
 			# few steps, contact or micro-bounce alike.
-			state.linear_velocity *= 1.0 - 0.15 * _sand_strength
-			state.angular_velocity *= 1.0 - 0.20 * _sand_strength
+			state.linear_velocity *= 1.0 - cont_lin * _absorb_strength
+			state.angular_velocity *= 1.0 - cont_ang * _absorb_strength
 	_prev_lv = state.linear_velocity
 
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
-	_absorb_sand(state)
+	_absorb_surface(state)
 	if not guard_enabled or guard_body == null or _guard_saved_this_flight:
 		return
 	# Contacts from the step that just finished: a solver stake
