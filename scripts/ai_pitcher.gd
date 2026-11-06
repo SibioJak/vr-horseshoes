@@ -73,12 +73,26 @@ const PHASE_DEG: float = 59.0
 # misses roll out across flat grass past the grade-level
 # pit instead of dying against a raised frame. Ringers and
 # self-play, the character numbers, are in the family.)
-const ERR_SPEED_FRAC: float = 0.007 # fraction of release speed
-const ERR_AZIMUTH_DEG: float = 0.20 # horizontal direction, degrees
-const ERR_VY: float = 0.021 # added vertical velocity, m/s
-const ERR_POS_X: float = 0.011 # release point lateral jitter, m
-const ERR_POS_Y: float = 0.009 # release point height jitter, m
-const ERR_SPIN_FRAC: float = 0.014 # flip rate jitter, fraction
+#
+# --- BACKYARD profile (Fix Pass 23, 2026-11-05) ---
+# The FP19 line above was a tournament band, and under NHPA
+# cancellation it blanketed the player completely: Chris's
+# best session (4 ringers, 14 of 33 inside 6 in) scored zero
+# points against it. Under the casual scope the robot is
+# neighbour #1 - a beatable backyard player, not a club pro.
+# The constants below ARE that profile: roughly double the
+# FP19 dispersion, and ~4x the spin jitter, because ringers
+# live in a narrow arrival-phase corridor (~45-82 deg) and
+# phase spread is what lets a mortal's ringer stay rare.
+# Target band: ringers ~5% (3-8), inside 6 in ~40% (35-48),
+# mean landing ~10-12 in. A future neighbour ladder adds
+# profiles BESIDE this block; this one stays the backyard.
+const ERR_SPEED_FRAC: float = 0.006 # fraction of release speed
+const ERR_AZIMUTH_DEG: float = 1.25 # horizontal direction, degrees
+const ERR_VY: float = 0.034 # added vertical velocity, m/s
+const ERR_POS_X: float = 0.050 # release point lateral jitter, m
+const ERR_POS_Y: float = 0.020 # release point height jitter, m
+const ERR_SPIN_FRAC: float = 0.068 # flip rate jitter, fraction
 
 const ARM_LEN: float = 0.62
 # Fix Pass 11: the throwing arm is the LANE-side arm. The AI
