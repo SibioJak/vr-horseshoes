@@ -55,6 +55,15 @@ const PLAYER_PAIR_COLOR := Color(0.92, 0.75, 0.16) # yellow (photo feed)
 const AI_PAIR_COLOR := Color(0.18, 0.36, 0.85) # blue (photo feed)
 const WIN_SCORE: int = 21
 const CANDIDATE_RADIUS: float = 0.14
+# Fix Pass 25: the long-arm grab's far tier - a stocked player
+# shoe within this reach of a squeezing hand hops into it (see
+# _maybe_start_hop). Sized to cover stance-to-station and
+# stance-to-peg (the FP13 slot geometry sits ~1.2-1.5 m from
+# the hand at the spot) and nothing further: the lines are
+# ~3 m apart and the far end is ~12 m away, so nothing across
+# the court can ever be in range.
+const LONG_ARM_RADIUS: float = 1.6
+const LONG_ARM_HOP_SEC: float = 0.2 # the hop into the hand
 const BOARD_POS := Vector3(-2.4, 0.0, -16.2) # Fix Pass 10: beyond the pit, left of the stake
 const BOARD_YAW_DEG: float = 10.0 # face turned back at the pitching end
 const THROW_MIN_SPEED: float = 0.9
@@ -113,6 +122,25 @@ var grip_label: Label3D = null
 var grip_hint_label: Label3D = null
 var candidate_hand: String = ""
 var candidate_zone: String = ""
+
+# Fix Pass 25: the DEFAULT GRIP - a stored player preference
+# (a GRIP_POSITIONS index; TOE GRIP on first run) persisted
+# under user://. A long-arm grab arrives already holding it;
+# cycling any held shoe to a grip makes that grip the default
+# (the cycle is the settings control - the board names it).
+var default_grip: int = 0
+var settings_path: String = "user://settings.json"
+# Fix Pass 25: the long-arm hop - while it runs, the stocked
+# shoe eases from its slot to the squeezing hand ("out"), or
+# back home if the squeeze is let go early ("back"). On
+# arrival the latch goes through the ordinary GrabState path
+# with _latch_long_arm set, so the hold that follows is the
+# ordinary hold in every respect.
+var hop_phase: String = "" # "" idle | "out" | "back"
+var hop_hand: String = ""
+var hop_t: float = 0.0 # 0 at the slot, 1 in the hand
+var hop_from: Transform3D = Transform3D.IDENTITY
+var _latch_long_arm: bool = false
 
 var samples: Array = [] # Dictionary samples for the held hand
 var sample_hand: String = ""
@@ -221,6 +249,20 @@ func _ready() -> void:
 	head_tracking_ok = _head_tracking_ok()
 	print("VR Horseshoes backyard game ready. xr_ok=", xr_ok, " head_tracking=", head_tracking_ok)
 	_update_board()
+
+
+# --- Fix Pass 25: the settings file (the default grip) ---
+
+## The controls block's full text, rebuilt whenever the
+## default changes (the block names it). Every line states a
+## command the game accepts, in the block's established style.
+func _controls_text() -> String:
+	return "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSQUEEZE FROM YOUR SPOT: SHOE COMES TO YOUR HAND\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nA / X WHILE HOLDING A SHOE: CHANGE GRIP\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON (EMPTY HAND): start game / next round / play again\nB BUTTON: back to practice (in a game)\nRECENTER: menu long-press - seated/standing ok"
+
+
+func _refresh_controls_label() -> void:
+	if controls_label != null:
+		controls_label.text = _controls_text()
 
 
 func _mat(c: Color, emission: float = 0.0) -> StandardMaterial3D:
@@ -1168,7 +1210,10 @@ func _build_board() -> void:
 	status_label.position = Vector3(0.0, 2.06, 0.01)
 	board_root.add_child(status_label)
 	controls_label = Label3D.new()
-	controls_label.text = "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nA / X WHILE HOLDING A SHOE: CHANGE GRIP\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON (EMPTY HAND): start game / next round / play again\nB BUTTON: back to practice (in a game)\nRECENTER: menu long-press - seated/standing ok"
+	# Fix Pass 25: the text is built by _controls_text() - it
+	# names the long-arm grab and the current default grip,
+	# and is rebuilt the moment the default changes.
+	controls_label.text = _controls_text()
 	controls_label.font_size = 30
 	controls_label.pixel_size = 0.00095
 	controls_label.line_spacing = 1.0
@@ -1456,20 +1501,28 @@ func _build_grip_label() -> void:
 ## shank on the holding hand's own side (the per-hand mirrored
 ## turn setups Shoe.hold_transform builds); moving within the
 ## shank family keeps the grabbed shank.
-func _cycle_grip() -> void:
-	if state != "HELD" or held_hand == "" or shoe == null:
-		return
-	# Fix Pass 22: no mid-slide refusal any more - under the
-	# carried slide the shoe is in the hand, so a cycle
-	# mid-slide just re-bases the offset at the tapped stop
-	# and the slide keeps adjusting from there.
-	var idx: int = (_grip_index() + 1) % ThrowMath.grip_position_count()
+## The zone a grip position seats on for a hand coming from
+## a given zone: the flip always takes the toe; entering the
+## shank family takes the hand's own shank (Fix Pass 21's
+## convention - the per-hand mirrored turn setups
+## Shoe.hold_transform builds); staying in the family keeps
+## the shank already in the hand. An empty from_zone (a grab
+## arriving, Fix Pass 25) reads as entering the family.
+func _grip_zone_for(hand: String, idx: int, from_zone: String) -> String:
 	var pos: Dictionary = ThrowMath.grip_position(idx)
-	var zone: String = held_zone
 	if String(pos["hold"]) == "flip":
-		zone = "toe"
-	elif held_zone == "toe":
-		zone = "shank_right" if held_hand == "R" else "shank_left"
+		return "toe"
+	if from_zone != "toe" and from_zone != "":
+		return from_zone
+	return "shank_right" if hand == "R" else "shank_left"
+
+
+## Seat the held shoe at grip position idx: its zone (above)
+## at the position's own slide offset, the hold pose
+## re-seated against the hand. Shared by the cycle (Fix
+## Pass 21) and the long-arm arrival (Fix Pass 25).
+func _seat_grip(idx: int) -> void:
+	var zone: String = _grip_zone_for(held_hand, idx, held_zone)
 	var z: Dictionary = Shoe.zones()[zone]
 	slide_offset = ThrowMath.grip_slide_offset(idx, float(z["slide_max"]))
 	if zone != held_zone:
@@ -1479,6 +1532,18 @@ func _cycle_grip() -> void:
 		shoe.set_highlight(zone, true)
 	rel_tf = Shoe.hold_transform(zone, held_hand, slide_offset)
 	shoe.global_transform = _hand_tf(held_hand) * rel_tf
+
+
+func _cycle_grip() -> void:
+	if state != "HELD" or held_hand == "" or shoe == null:
+		return
+	# Fix Pass 22: no mid-slide refusal any more - under the
+	# carried slide the shoe is in the hand, so a cycle
+	# mid-slide just re-bases the offset at the tapped stop
+	# and the slide keeps adjusting from there.
+	var idx: int = (_grip_index() + 1) % ThrowMath.grip_position_count()
+	var pos: Dictionary = ThrowMath.grip_position(idx)
+	_seat_grip(idx)
 	var c: XRController3D = hand_ctrl[held_hand]
 	if c != null:
 		c.trigger_haptic_pulse(&"haptic", 0.0, 0.30 + 0.10 * float(idx),
@@ -1626,7 +1691,7 @@ func _process(_delta: float) -> void:
 	_track_hand_speed("R")
 	if state == "HELD":
 		_add_sample()
-	_process_grab()
+	_process_grab(_delta)
 	# Fix Pass 22: the follow is unconditional while held -
 	# the carried slide (see _update_carried_slide) means
 	# even mid-slide the shoe rides the hand.
@@ -1643,9 +1708,27 @@ func _process(_delta: float) -> void:
 			grip_label.visible = false
 
 
-func _process_grab() -> void:
+func _process_grab(delta: float) -> void:
 	var prev_zone: String = candidate_zone
-	_find_candidate()
+	# Fix Pass 25: the long-arm hop runs ahead of the near
+	# tier. On its arrival frame the arrived shoe is presented
+	# as this frame's candidate (the default grip's zone for
+	# the hop hand), so the latch below is the ordinary
+	# GrabState latch, flagged for _do_latch to seat the
+	# default. Mid-hop there is no candidate at all: the
+	# squeeze is spoken for by the incoming shoe.
+	var hop_ev: String = _advance_hop(delta)
+	if hop_ev == "done":
+		candidate_hand = hop_hand
+		candidate_zone = _grip_zone_for(hop_hand, default_grip, "")
+		_latch_long_arm = true
+		prev_zone = candidate_zone # arrives quietly - no zone_acquired
+	elif hop_phase != "":
+		candidate_hand = ""
+		candidate_zone = ""
+	else:
+		_find_candidate()
+		_maybe_start_hop()
 	if candidate_zone != prev_zone:
 		shoe.clear_highlights()
 		if candidate_zone != "" and state == "STAND":
@@ -1690,7 +1773,100 @@ func _process_grab() -> void:
 			_do_slide_end()
 		"release":
 			_do_release()
+	if ev != "latch":
+		# Fix Pass 25: the long-arm flag is set only on a hop's
+		# arrival frame and the latch it arms is that frame's -
+		# never let it linger into a later, unrelated latch.
+		_latch_long_arm = false
 	_update_carried_slide()
+
+
+## Fix Pass 25: the long-arm grab (Chris's nugget: "two
+## steps to grab a shoe and then two steps back... thumbstick
+## movement or actually walking, doesn't matter"). The near
+## tier above is untouched; beneath it, a squeeze the near
+## tier cannot serve - no stocked shoe under the hand - calls
+## the ACTIVE player shoe from its stock point instead: it
+## makes a short hop (~0.2 s, a slight arc, tracking the
+## hand) and latches through the ordinary path, arriving in
+## the DEFAULT GRIP. Only the active shoe can ever be called
+## (it is the player's by construction - the AI's pair is
+## never the active shoe, and a shoe in play is never
+## RAILED), and only while it sits stocked.
+func _maybe_start_hop() -> void:
+	if hop_phase != "" or grab_state.latched:
+		return
+	if state != "STAND" or not grab_armed or shoe == null:
+		return
+	if candidate_hand != "":
+		return # the near tier is serving a hand - it owns the grab
+	if String(shoe_status.get(shoe, "")) != "RAILED":
+		return
+	for hand: String in ["L", "R"]:
+		if _grip_value(hand) < GrabState.GRIP_ON:
+			continue
+		if _hand_tf(hand).origin.distance_to(shoe.global_position) <= LONG_ARM_RADIUS:
+			hop_phase = "out"
+			hop_hand = hand
+			hop_t = 0.0
+			hop_from = shoe.global_transform
+			return
+
+
+## Advance the hop one frame; returns "done" on the arrival
+## frame (the caller latches), "aborted" when the shoe has
+## been put back on its slot, "running" mid-hop, "" idle.
+## Letting the squeeze go mid-hop sends the shoe home the
+## way it came; a squeeze that dies exactly at the door
+## (below the latch threshold on the arrival frame) does
+## the same - the shoe never hangs in the air unheld.
+func _advance_hop(delta: float) -> String:
+	if hop_phase == "":
+		return ""
+	if state != "STAND" or not grab_armed:
+		# The world moved on mid-hop (a gather, a mode
+		# change): put the shoe back and end quietly.
+		shoe.global_transform = hop_from
+		hop_phase = ""
+		return "aborted"
+	if hop_phase == "out" and _grip_value(hop_hand) <= GrabState.GRIP_OFF:
+		hop_phase = "back"
+	if hop_phase == "out":
+		hop_t = minf(1.0, hop_t + delta / LONG_ARM_HOP_SEC)
+		_apply_hop_pose()
+		if hop_t >= 1.0:
+			if _grip_value(hop_hand) >= GrabState.GRIP_ON:
+				hop_phase = ""
+				return "done"
+			hop_phase = "back" # the squeeze died at the door
+		return "running"
+	# "back": ease home; the grip is not consulted again.
+	hop_t = maxf(0.0, hop_t - delta / LONG_ARM_HOP_SEC)
+	if hop_t <= 0.0:
+		shoe.global_transform = hop_from
+		hop_phase = ""
+		return "aborted"
+	_apply_hop_pose()
+	return "running"
+
+
+## The hop's pose at the current progress: a smoothstep ease
+## from the slot transform toward the hand's live hold pose
+## (the target tracks the hand, so a still-moving hand is
+## met where it is), with a small lift on the way scaled by
+## the distance travelled. At progress 1 the pose IS the
+## hold pose, exactly - no pop at the latch.
+func _apply_hop_pose() -> void:
+	var zone: String = _grip_zone_for(hop_hand, default_grip, "")
+	var z: Dictionary = Shoe.zones()[zone]
+	var rel: Transform3D = Shoe.hold_transform(zone, hop_hand,
+		ThrowMath.grip_slide_offset(default_grip, float(z["slide_max"])))
+	var target: Transform3D = _hand_tf(hop_hand) * rel
+	var e: float = hop_t * hop_t * (3.0 - 2.0 * hop_t)
+	var tf: Transform3D = hop_from.interpolate_with(target, e)
+	var dist: float = hop_from.origin.distance_to(target.origin)
+	tf.origin.y += sin(e * PI) * clampf(dist * 0.08, 0.0, 0.08)
+	shoe.global_transform = tf
 
 
 ## Fix Pass 22: the CARRIED slide (replaces the world-freeze
@@ -1738,6 +1914,11 @@ func _update_carried_slide() -> void:
 
 
 func _do_latch(hand: String, zone: String) -> void:
+	# Fix Pass 25: a long-arm arrival latches through this
+	# same door, flagged - the hold it becomes is the
+	# ordinary hold; only its first seat differs.
+	var long_arm: bool = _latch_long_arm
+	_latch_long_arm = false
 	# Home starts as the pedestal the shoe was just grabbed from.
 	# It does not stay glued there: a throw re-homes to the line
 	# it was released from (see _settle_throw), a drop returns
@@ -1761,9 +1942,16 @@ func _do_latch(hand: String, zone: String) -> void:
 	_grip_hist.clear()
 	sample_hand = hand
 	shoe.set_highlight(zone, true)
+	if long_arm:
+		# Fix Pass 25: the long-arm arrival holds the DEFAULT
+		# grip - the seat (zone, offset, pose, label, and with
+		# them the governor's declared grip at release) is the
+		# default's from the first frame of the hold.
+		_seat_grip(default_grip)
 	recorder.log_record({
-		"type": "grab", "event": "latch", "hand": hand, "zone": zone,
-		"hold": held_hold, "ts": Time.get_datetime_string_from_system(),
+		"type": "grab", "event": "latch", "hand": hand, "zone": held_zone,
+		"hold": held_hold, "long_arm": long_arm,
+		"ts": Time.get_datetime_string_from_system(),
 	})
 	_refresh_grip_label()
 
@@ -2114,6 +2302,13 @@ func game_line_z() -> float:
 ## Clean reset: every shoe frozen onto its rail slot at the
 ## given stock point, the player's first shoe active.
 func _gather_to_rail(line_ft: int) -> void:
+	# Fix Pass 25: end any hop first - the gather below seats
+	# every shoe itself, and a live hop would fight it for
+	# its shoe. (The hop's own guard aborts on the state
+	# change anyway; this keeps the order explicit.)
+	if hop_phase != "":
+		shoe.global_transform = hop_from
+		hop_phase = ""
 	for s: Shoe in _all_shoes():
 		s.freeze = true
 		# Fix Pass 18: an AI shoe gathers to the 40 ft game
