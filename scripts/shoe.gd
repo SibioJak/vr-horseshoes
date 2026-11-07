@@ -201,7 +201,18 @@ static func hold_transform(zone: String, hand: String, slide_off: float = 0.0) -
 		# Shank in the fingers, shoe flat, opening to the side away
 		# from the palm: right hand -> opening to the left (the
 		# right-handed 1 1/4 turn setup), left hand mirrored.
-		var yaw: float = -PI * 0.5 if hand == "R" else PI * 0.5
+		# Fix Pass 26: that is the HOME shank's seat (the shank on
+		# the hand's own side). A hold on the FAR shank - the
+		# reverse-turn grip - seats mirrored: the yaw flips, so
+		# the opening points to the hand's other side and the
+		# shoe's body sweeps the other way across the fingers.
+		var home: bool = (hand == "R" and zone == "shank_right") \
+			or (hand == "L" and zone == "shank_left")
+		var yaw: float
+		if hand == "R":
+			yaw = -PI * 0.5 if home else PI * 0.5
+		else:
+			yaw = PI * 0.5 if home else -PI * 0.5
 		basis = Basis.from_euler(Vector3(0.0, yaw, 0.0))
 	var origin: Vector3 = basis * (-center) + Vector3(0.0, -0.018, 0.0)
 	return Transform3D(basis, origin)

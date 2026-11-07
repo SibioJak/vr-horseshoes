@@ -328,6 +328,18 @@ func test_zone_audit(shoe_node: Shoe) -> void:
 	var turn_rel_l: Transform3D = Shoe.hold_transform("shank_left", "L")
 	var open_dir_turn_l: Vector3 = turn_rel_l.basis * Vector3(0.0, 0.0, 1.0)
 	check(open_dir_turn_l.x > 0.99, "turn hold (L): shoe open end points to hand +X (right)")
+	# Fix Pass 26: the FAR hold (the other shank in the same
+	# hand - the reverse-turn grip) seats mirrored: its open
+	# end points to the OPPOSITE side from the same hand's
+	# home hold, not the same way with a different anchor.
+	var far_rel_r: Transform3D = Shoe.hold_transform("shank_left", "R")
+	var open_dir_far_r: Vector3 = far_rel_r.basis * Vector3(0.0, 0.0, 1.0)
+	check(open_dir_far_r.x > 0.99,
+		"far turn hold (R): shoe open end points to hand +X - flipped from the home hold's -X (the reverse setup)")
+	var far_rel_l: Transform3D = Shoe.hold_transform("shank_right", "L")
+	var open_dir_far_l: Vector3 = far_rel_l.basis * Vector3(0.0, 0.0, 1.0)
+	check(open_dir_far_l.x < -0.99,
+		"far turn hold (L): shoe open end points to hand -X - flipped from the home hold's +X")
 
 
 func test_locomotion_math() -> void:
@@ -611,11 +623,15 @@ func test_grip_positions() -> void:
 	# Fix Pass 21: the grip cycle's named positions - the table
 	# itself (cycle order, declared counts, families) and the
 	# derivation that names a hold from its zone + slide offset.
-	check(ThrowMath.grip_position_count() == 4, "grip cycle: four named positions")
-	var want_names: Array = ["TOE GRIP", "SHANK · TOE", "SHANK · MID", "SHANK · HEEL"]
-	var want_nom: Array = [1.0, 1.125, 1.25, 1.375]
-	var want_hold: Array = ["flip", "turn", "turn", "turn"]
-	for i: int in 4:
+	# Fix Pass 26: the circuit is seven stops - the far shank's
+	# three (the reverse family) follow the home shank's three.
+	check(ThrowMath.grip_position_count() == 7, "grip cycle: seven named positions")
+	var want_names: Array = ["TOE GRIP", "SHANK · TOE", "SHANK · MID", "SHANK · HEEL",
+		"FAR SHANK · TOE", "FAR SHANK · MID", "FAR SHANK · HEEL"]
+	var want_nom: Array = [1.0, 1.125, 1.25, 1.375, 1.125, 1.25, 1.375]
+	var want_hold: Array = ["flip", "turn", "turn", "turn", "turn", "turn", "turn"]
+	var want_side: Array = ["none", "home", "home", "home", "far", "far", "far"]
+	for i: int in 7:
 		var p: Dictionary = ThrowMath.grip_position(i)
 		check(String(p["name"]) == String(want_names[i]),
 			"grip cycle: position %d is %s (got %s)" % [i, want_names[i], p["name"]])
@@ -623,24 +639,42 @@ func test_grip_positions() -> void:
 			"grip cycle: %s declares %.3f rev" % [want_names[i], want_nom[i]])
 		check(String(p["hold"]) == String(want_hold[i]),
 			"grip cycle: %s is the %s family" % [want_names[i], want_hold[i]])
+		check(String(p["side"]) == String(want_side[i]),
+			"grip cycle: %s is on the %s side" % [want_names[i], want_side[i]])
 	# Derivation at the stops and across the neighbourhood
 	# boundaries (stops at frac -1/0/+1, split at +-0.5).
+	# The R hand's home shank is shank_right; the same zones in
+	# the L hand mirror (its home shank is shank_left), and the
+	# other zone in either hand names the FAR family.
 	var smax: float = 0.045 # the shank zones' slide_max (Shoe.zones)
-	check(ThrowMath.grip_index_for("toe", 0.0, 0.022) == 0, "grip derive: the toe zone is TOE GRIP")
-	check(ThrowMath.grip_index_for("shank_right", -smax, smax) == 1, "grip derive: shank toe-end stop")
-	check(ThrowMath.grip_index_for("shank_left", 0.0, smax) == 2, "grip derive: shank middle stop")
-	check(ThrowMath.grip_index_for("shank_right", smax, smax) == 3, "grip derive: shank heel-end stop")
-	check(ThrowMath.grip_index_for("shank_right", -0.49 * smax, smax) == 2,
+	check(ThrowMath.grip_index_for("toe", "R", 0.0, 0.022) == 0, "grip derive: the toe zone is TOE GRIP")
+	check(ThrowMath.grip_index_for("shank_right", "R", -smax, smax) == 1, "grip derive: shank toe-end stop")
+	check(ThrowMath.grip_index_for("shank_left", "L", 0.0, smax) == 2, "grip derive: shank middle stop (L home)")
+	check(ThrowMath.grip_index_for("shank_right", "R", smax, smax) == 3, "grip derive: shank heel-end stop")
+	check(ThrowMath.grip_index_for("shank_right", "R", -0.49 * smax, smax) == 2,
 		"grip derive: just inside the toe/mid boundary names MID")
-	check(ThrowMath.grip_index_for("shank_right", -0.51 * smax, smax) == 1,
+	check(ThrowMath.grip_index_for("shank_right", "R", -0.51 * smax, smax) == 1,
 		"grip derive: just past the toe/mid boundary names TOE")
-	check(ThrowMath.grip_index_for("shank_left", 0.51 * smax, smax) == 3,
+	check(ThrowMath.grip_index_for("shank_left", "L", 0.51 * smax, smax) == 3,
 		"grip derive: just past the mid/heel boundary names HEEL")
+	check(ThrowMath.grip_index_for("shank_left", "R", -smax, smax) == 4,
+		"grip derive: the far shank's toe-end stop (R hand across the shoe)")
+	check(ThrowMath.grip_index_for("shank_left", "R", 0.0, smax) == 5,
+		"grip derive: the far shank's middle stop")
+	check(ThrowMath.grip_index_for("shank_right", "L", 0.0, smax) == 5,
+		"grip derive: the far shank's middle stop, mirrored (L hand)")
+	check(ThrowMath.grip_index_for("shank_left", "R", smax, smax) == 6,
+		"grip derive: the far shank's heel-end stop")
+	check(ThrowMath.grip_index_for("shank_left", "R", 0.51 * smax, smax) == 6,
+		"grip derive: just past the far mid/heel boundary names FAR HEEL")
 	# The stops' slide offsets are the slide range's ends and middle.
 	check(is_equal_approx(ThrowMath.grip_slide_offset(1, smax), -smax), "grip stops: TOE stop at -slide_max")
 	check(is_equal_approx(ThrowMath.grip_slide_offset(2, smax), 0.0), "grip stops: MID stop at 0")
 	check(is_equal_approx(ThrowMath.grip_slide_offset(3, smax), smax), "grip stops: HEEL stop at +slide_max")
 	check(is_equal_approx(ThrowMath.grip_slide_offset(0, 0.022), 0.0), "grip stops: TOE GRIP carries no slide")
+	check(is_equal_approx(ThrowMath.grip_slide_offset(4, smax), -smax), "grip stops: FAR TOE stop at -slide_max")
+	check(is_equal_approx(ThrowMath.grip_slide_offset(5, smax), 0.0), "grip stops: FAR MID stop at 0")
+	check(is_equal_approx(ThrowMath.grip_slide_offset(6, smax), smax), "grip stops: FAR HEEL stop at +slide_max")
 
 
 func test_scoring() -> void:

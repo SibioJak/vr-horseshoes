@@ -300,13 +300,18 @@ func part_d() -> void:
 		var stake: Vector3 = FAR_STAKE_POS if pos.z > COURT_MID_Z else HOME_STAKE_POS
 		# Fix Pass 21: the file predates the grip cycle, so the
 		# declaration is derived from the recorded zone + slide
-		# offset by the production rule.
+		# offset by the production rule. (Fix Pass 26: the rule
+		# also takes the recorded hand - a shank zone names its
+		# family by side now; the declared count per stop is the
+		# same on both sides, so the census derivation is
+		# unchanged in value.)
 		var rzone: String = String(rec.get("zone", ""))
 		var declared: float = -1.0
 		if Shoe.zones().has(rzone):
 			var zsmax: float = float(Shoe.zones()[rzone]["slide_max"])
 			declared = float(ThrowMath.grip_position(ThrowMath.grip_index_for(
-				rzone, float(rec.get("slide_offset_m", 0.0)), zsmax))["nominal"])
+				rzone, String(rec.get("hand", "R")),
+				float(rec.get("slide_offset_m", 0.0)), zsmax))["nominal"])
 		var ev: Dictionary = ThrowMath.govern_spin(
 			ang, Transform3D(Basis(quat), pos), vel, String(rec["hold"]), stake, true, declared)
 		raw_style.append(float(ev["hand_total"]))

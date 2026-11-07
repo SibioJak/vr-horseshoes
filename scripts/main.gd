@@ -1490,7 +1490,7 @@ func _grip_index() -> int:
 	if held_zone == "":
 		return 0
 	var z: Dictionary = Shoe.zones()[held_zone]
-	return ThrowMath.grip_index_for(held_zone, slide_offset, float(z["slide_max"]))
+	return ThrowMath.grip_index_for(held_zone, held_hand, slide_offset, float(z["slide_max"]))
 
 
 func _refresh_grip_label() -> void:
@@ -1538,24 +1538,29 @@ func _build_grip_label() -> void:
 ## TOE GRIP ...). The shoe re-seats in the hand at the new
 ## position's hold pose - zone plus the stop's slide offset -
 ## with a haptic tick from the zone tick's family, deepened
-## per stop. Entering the shank family from the toe takes the
-## shank on the holding hand's own side (the per-hand mirrored
-## turn setups Shoe.hold_transform builds); moving within the
-## shank family keeps the grabbed shank.
-## The zone a grip position seats on for a hand coming from
-## a given zone: the flip always takes the toe; entering the
-## shank family takes the hand's own shank (Fix Pass 21's
-## convention - the per-hand mirrored turn setups
-## Shoe.hold_transform builds); staying in the family keeps
-## the shank already in the hand. An empty from_zone (a grab
-## arriving, Fix Pass 25) reads as entering the family.
+## per stop.
+## Fix Pass 26: the circuit crosses the shoe - after the home
+## shank's three stops it walks the FAR shank's three (FAR
+## SHANK · TOE / MID / HEEL, the reverse family) before
+## wrapping to the toe. The zone a grip position seats on is
+## the position's own side resolved per hand: the flip always
+## takes the toe; a home stop takes the hand's own shank; a
+## far stop takes the other shank. (Fix Pass 21 resolved the
+## zone from the zone the hand came from, because its index
+## could not name a side; the seven positions each carry
+## their side, so the zone is the position's, full stop -
+## which is also what lets a near-grab on either shank enter
+## that shank's family and stay in it as the cycle walks.)
+## from_zone is kept in the signature for the callers that
+## pass their context (a grab arriving, Fix Pass 25); the
+## position decides now, not the path taken to it.
 func _grip_zone_for(hand: String, idx: int, from_zone: String) -> String:
 	var pos: Dictionary = ThrowMath.grip_position(idx)
 	if String(pos["hold"]) == "flip":
 		return "toe"
-	if from_zone != "toe" and from_zone != "":
-		return from_zone
-	return "shank_right" if hand == "R" else "shank_left"
+	if String(pos["side"]) == "far":
+		return ThrowMath.grip_far_zone(hand)
+	return ThrowMath.grip_home_zone(hand)
 
 
 ## Seat the held shoe at grip position idx: its zone (above)
@@ -2091,7 +2096,7 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 	# declared count is what the governor serves.
 	var zone_data: Dictionary = Shoe.zones()[zone_was]
 	var grip_was: Dictionary = ThrowMath.grip_position(
-		ThrowMath.grip_index_for(zone_was, slide_was, float(zone_data["slide_max"])))
+		ThrowMath.grip_index_for(zone_was, hand_was, slide_was, float(zone_data["slide_max"])))
 	# Fix Pass 16: the finger-drag term. The estimator's spin is
 	# kept verbatim for the record's estimator evidence; what
 	# flies is the governed spin (style axis pulled toward the

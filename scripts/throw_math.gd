@@ -539,7 +539,7 @@ static func evaluate_release_at(samples: Array, release_basis: Basis, t_star: fl
 # Fix Pass 21: the grip cycle - named positions around the shoe.
 #
 # While a shoe is held, the free hand's face button walks the
-# grip through four NAMED positions, each declaring the total
+# grip through NAMED positions, each declaring the total
 # it is meant to throw (Smith, "Science at the Stake": the
 # grip names the count - a shank hold toward the toe end
 # declares 1 1/8 turns, mid-shank 1 1/4, toward the heel
@@ -551,17 +551,35 @@ static func evaluate_release_at(samples: Array, release_basis: Basis, t_star: fl
 # position's seat as a fraction of the zone's slide_max -
 # toe end -1, middle 0, heel end +1 - and the grip+trigger
 # slide stays the fine trim between stops.
+#
+# Fix Pass 26: the circuit crosses the shoe. Fix Pass 21's
+# cycle only ever walked the holding hand's HOME shank (the
+# shank on the hand's own side); the OTHER shank - the
+# reverse-turn hold, a real grip - was reachable only by a
+# cross-reach near-grab. The circuit is now seven stops:
+# the toe, the home shank's three, then the FAR shank's
+# three (the reverse family - the shoe seats with its
+# opening flipped, Shoe.hold_transform mirrors the far
+# hold's yaw), and back to the toe. Each position carries
+# its side ("home" / "far"); a side resolves to a zone per
+# hand (grip_home_zone / grip_far_zone below).
 # ============================================================
 
 const GRIP_POSITIONS: Array = [
 	{"id": "toe", "name": "TOE GRIP", "label": "TOE GRIP · FLIP",
-		"hold": "flip", "nominal": 1.0, "slide_frac": 0.0},
+		"hold": "flip", "nominal": 1.0, "slide_frac": 0.0, "side": "none"},
 	{"id": "shank_toe", "name": "SHANK · TOE", "label": "SHANK · TOE · 1⅛ TURN",
-		"hold": "turn", "nominal": 1.125, "slide_frac": -1.0},
+		"hold": "turn", "nominal": 1.125, "slide_frac": -1.0, "side": "home"},
 	{"id": "shank_mid", "name": "SHANK · MID", "label": "SHANK · MID · 1¼ TURN",
-		"hold": "turn", "nominal": 1.25, "slide_frac": 0.0},
+		"hold": "turn", "nominal": 1.25, "slide_frac": 0.0, "side": "home"},
 	{"id": "shank_heel", "name": "SHANK · HEEL", "label": "SHANK · HEEL · 1⅜ TURN",
-		"hold": "turn", "nominal": 1.375, "slide_frac": 1.0},
+		"hold": "turn", "nominal": 1.375, "slide_frac": 1.0, "side": "home"},
+	{"id": "far_toe", "name": "FAR SHANK · TOE", "label": "FAR SHANK · TOE · 1⅛ TURN · REVERSE",
+		"hold": "turn", "nominal": 1.125, "slide_frac": -1.0, "side": "far"},
+	{"id": "far_mid", "name": "FAR SHANK · MID", "label": "FAR SHANK · MID · 1¼ TURN · REVERSE",
+		"hold": "turn", "nominal": 1.25, "slide_frac": 0.0, "side": "far"},
+	{"id": "far_heel", "name": "FAR SHANK · HEEL", "label": "FAR SHANK · HEEL · 1⅜ TURN · REVERSE",
+		"hold": "turn", "nominal": 1.375, "slide_frac": 1.0, "side": "far"},
 ]
 
 
@@ -573,22 +591,37 @@ static func grip_position(idx: int) -> Dictionary:
 	return GRIP_POSITIONS[clampi(idx, 0, GRIP_POSITIONS.size() - 1)]
 
 
+## Fix Pass 26: the shank zone on the holding hand's own side
+## (the home shank) and the one across the shoe (the far
+## shank, the reverse hold). Mirrored per hand, as the turn
+## hold setups in Shoe.hold_transform are.
+static func grip_home_zone(hand: String) -> String:
+	return "shank_right" if hand == "R" else "shank_left"
+
+
+static func grip_far_zone(hand: String) -> String:
+	return "shank_left" if hand == "R" else "shank_right"
+
+
 ## The position a hold currently declares, from the zone under
 ## the hand and the slide offset along the zone's axis
 ## (Shoe.zones, main's slide_offset): the toe zone always
 ## declares TOE GRIP; a shank hold declares the stop nearest
 ## its slide fraction (stops at -1, 0, +1, split at the
-## +-0.5 midpoints). A grab starts here; the cycle advances
-## from here; a slide settle re-derives here.
-static func grip_index_for(zone: String, slide_offset: float, slide_max: float) -> int:
+## +-0.5 midpoints) in the family its side names - the home
+## shank's stops are 1-3, the far shank's 4-6 (Fix Pass 26).
+## A grab starts here; the cycle advances from here; a slide
+## settle re-derives here.
+static func grip_index_for(zone: String, hand: String, slide_offset: float, slide_max: float) -> int:
 	if zone == "toe" or slide_max <= 0.0:
 		return 0
+	var base: int = 1 if zone == grip_home_zone(hand) else 4
 	var frac: float = clampf(slide_offset / slide_max, -1.0, 1.0)
 	if frac < -0.5:
-		return 1
+		return base
 	if frac > 0.5:
-		return 3
-	return 2
+		return base + 2
+	return base + 1
 
 
 ## The slide offset a position declares on a zone with the
