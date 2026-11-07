@@ -39,6 +39,18 @@ extends SceneTree
 ##     round's end: the live pit closeup (all four settled shoes
 ##     parked around the stake, one dud wide) over the round's
 ##     score breakdown, seen from the player's eye.
+##   proofs/perimeter_from_40.png - Stage A from the 40 ft line
+##     at eye height: beds and stone framing the lane, the tree
+##     line beyond the far fence.
+##   proofs/perimeter_from_pit.png - Stage A from behind the
+##     pit looking back: the planted yard behind the player.
+##   proofs/bed_closeup.png - a right-hand bed at arm's length:
+##     stones, shrubs, tufts, flower dots.
+##   proofs/sway_a.png / sway_b.png - the sway pair: one
+##     designated background canopy against the sky, shot twice
+##     ~6 s apart; the suite MEASURES the canopy's displacement
+##     between the frames (see _canopy_centroid) and asserts it
+##     moved a little - present, small, never a lurch.
 ## These prove the rendered path + input path work together; they do
 ## NOT prove headset feel. The XR interaction layer is only verified
 ## when Chris runs it in the headset.
@@ -107,6 +119,42 @@ func snap(cam: Camera3D, out_rel: String) -> void:
 	check(distinct.size() > 25, "frame at %s is a real scene (%d sampled colors)" % [out_rel, distinct.size()])
 
 
+## Like snap(), but hands back the frame for measurement.
+func snap_image(out_rel: String) -> Image:
+	await RenderingServer.frame_post_draw
+	var img: Image = root.get_texture().get_image()
+	var out_path: String = ProjectSettings.globalize_path(out_rel)
+	var err: Error = img.save_png(out_path)
+	check(err == OK, "screenshot saved to %s" % out_rel)
+	return img
+
+
+## The canopy's green run on one scanline: the run of
+## canopy-green pixels (green dominant over blue and red -
+## the sky behind is blue, the fence brown) that CONTAINS the
+## image centre column, returned as (centroid_x, width), or
+## (-1, 0) when no such run exists. The sway camera aims at
+## the canopy's centre, so its run is the centre one; grass
+## and beds sit far below the chosen scanline.
+func canopy_centroid(img: Image, y: int) -> Vector2:
+	var cx: int = img.get_width() / 2
+	var run_start: int = -1
+	var found := Vector2(-1.0, 0.0)
+	for x: int in img.get_width():
+		var px: Color = img.get_pixel(x, y)
+		var green: bool = px.g > px.b + 0.03 and px.g >= px.r
+		if green and run_start < 0:
+			run_start = x
+		elif not green and run_start >= 0:
+			if run_start <= cx and x - 1 >= cx:
+				found = Vector2(float(run_start) + float(x - run_start) * 0.5, float(x - run_start))
+			run_start = -1
+	if run_start >= 0 and run_start <= cx:
+		found = Vector2(float(run_start) + float(img.get_width() - run_start) * 0.5,
+			float(img.get_width() - run_start))
+	return found
+
+
 func _init() -> void:
 	_run()
 
@@ -157,6 +205,65 @@ func _run() -> void:
 	await settle(6)
 	await snap(cam_a, "res://proofs/court_view.png")
 	cam_a.queue_free()
+
+	# --- Proof A3: the STAGE A perimeter (Stage 2) ---
+	# From the 40 ft line at standing eye height, down-court:
+	# the beds and their stone frame the lane, and the tree
+	# line stands beyond the far fence behind the pit.
+	var cam_p := Camera3D.new()
+	cam_p.fov = 55.0
+	cam_p.position = Vector3(0.8, 1.62, 0.6)
+	main.add_child(cam_p)
+	cam_p.look_at(Vector3(0.0, 0.4, -12.192), Vector3.UP)
+	cam_p.current = true
+	await settle(6)
+	await snap(cam_p, "res://proofs/perimeter_from_40.png")
+	# From behind the pit, looking back the way the player
+	# came: lane rows, beds, both stations, and the tree line
+	# over the pitching end.
+	cam_p.position = Vector3(0.0, 1.7, -15.0)
+	cam_p.look_at(Vector3(0.0, 0.9, 3.0), Vector3.UP)
+	await settle(6)
+	await snap(cam_p, "res://proofs/perimeter_from_pit.png")
+	# A bed close-up: stone edge, tufts, shrubs and flower
+	# dots in the right-hand bed, mid-lane.
+	cam_p.position = Vector3(2.1, 0.75, -4.4)
+	cam_p.look_at(Vector3(3.9, 0.10, -6.6), Vector3.UP)
+	await settle(6)
+	await snap(cam_p, "res://proofs/bed_closeup.png")
+	cam_p.queue_free()
+
+	# --- Proof A4: the sway pair (Stage A) ---
+	# BGTree3 - the big far tree at (-5, -22.8), canopy centre
+	# ~(-5, 5.9) - framed against the sky and shot twice ~6 s
+	# apart. The canopy run on a mid-canopy scanline must MOVE
+	# between frames, a little: at this distance (8.6 m, fov
+	# 55, 1280 wide) a pixel is ~7.0 mm, and the shader leans
+	# the crown a degree or two - single-digit to low-double-
+	# digit pixels, never a lurch, never a statue.
+	var cam_s := Camera3D.new()
+	cam_s.fov = 55.0
+	cam_s.position = Vector3(-5.0, 5.4, -14.2)
+	main.add_child(cam_s)
+	cam_s.look_at(Vector3(-5.0, 5.9, -22.8), Vector3.UP)
+	cam_s.current = true
+	await settle(6)
+	var sway_img_a: Image = await snap_image("res://proofs/sway_a.png")
+	await create_timer(6.0).timeout
+	var sway_img_b: Image = await snap_image("res://proofs/sway_b.png")
+	cam_s.queue_free()
+	var scan_y: int = int(float(sway_img_a.get_height()) * 0.45)
+	var run_a: Vector2 = canopy_centroid(sway_img_a, scan_y)
+	var run_b: Vector2 = canopy_centroid(sway_img_b, scan_y)
+	check(run_a.x >= 0.0 and run_b.x >= 0.0,
+		"sway pair: the designated canopy fills the frame centre in both shots (runs %.0f / %.0f px wide)"
+		% [run_a.y, run_b.y])
+	if run_a.x >= 0.0 and run_b.x >= 0.0:
+		var shift_px: float = absf(run_b.x - run_a.x)
+		var m_per_px: float = 2.0 * 8.61 * tan(deg_to_rad(27.5)) / 1280.0
+		check(shift_px >= 1.0 and shift_px <= 30.0,
+			"sway pair: canopy displaced %.1f px = %.3f m in ~6 s - moving, and small"
+			% [shift_px, shift_px * m_per_px])
 
 	# --- Proof A2: board close-up, MID-GAME (Backyard Game v1) ---
 	# Seed a game in progress, so the board renders its game

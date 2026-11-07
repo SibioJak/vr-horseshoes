@@ -1393,10 +1393,10 @@ func _build_stage_a_beds(parent: Node, rng: RandomNumberGenerator) -> void:
 	var flower_tfs: Array = []
 	var flower_cols: Array = []
 	for pt: Vector3 in shrub_pts:
-		if rng.randf() > 0.65:
+		if rng.randf() > 0.80:
 			continue
 		var fc: Color = flower_pal[rng.randi_range(0, flower_pal.size() - 1)]
-		var n_dots: int = rng.randi_range(4, 7)
+		var n_dots: int = rng.randi_range(5, 8)
 		for i: int in n_dots:
 			var off := Vector3(rng.randf_range(-0.34, 0.34), 0.0,
 				rng.randf_range(-0.34, 0.34))
@@ -1440,6 +1440,9 @@ func _build_stage_a_trees(parent: Node, rng: RandomNumberGenerator) -> void:
 		var sm := ShaderMaterial.new()
 		sm.shader = sway_shader
 		sm.set_shader_parameter("albedo", c)
+		# Set explicitly (not left to the shader default) so
+		# the value has one home and the suites can read it.
+		sm.set_shader_parameter("sway_amp", 0.045)
 		leaf_mats.append(sm)
 	var blobs: Array = [
 		[Vector3(0.0, 3.1, 0.0), 1.6],

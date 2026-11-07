@@ -963,6 +963,73 @@ func _run() -> void:
 						% [row_name, top, h_line])
 				check(n_shrubs >= 9,
 					"FP18: %s carries its dotted plants (%d shrubs)" % [row_name, n_shrubs])
+	# --- Stage A: the planted perimeter (Stage 2, the ground) ---
+	# Beds, stone and the tree line are VISUAL ONLY - the
+	# structural guards: the stage exists fully planted, no
+	# collision hides anywhere under it, the tree line stands
+	# on its surveyed spots, and every background canopy wears
+	# the sway shader with a live amplitude. (Footprints are
+	# guarded numerically in the logic suite.)
+	var stage_a: Node = null
+	if main.scenery_root != null:
+		stage_a = main.scenery_root.get_node_or_null("StageA")
+	check(stage_a != null, "Stage A: the planted perimeter exists")
+	if stage_a != null:
+		var n_colliders: int = 0
+		var stack: Array = [stage_a]
+		while not stack.is_empty():
+			var nd: Node = stack.pop_back()
+			if nd is CollisionObject3D or nd is CollisionShape3D:
+				n_colliders += 1
+			for ch: Node in nd.get_children():
+				stack.append(ch)
+		check(n_colliders == 0,
+			"Stage A: no collision anywhere in the planted perimeter (%d found)" % n_colliders)
+		var beds_node: Node = stage_a.get_node_or_null("Beds")
+		check(beds_node != null, "Stage A: the beds are built")
+		if beds_node != null:
+			var n_mulch: int = 0
+			for ch: Node in beds_node.get_children():
+				if ch is MeshInstance3D:
+					n_mulch += 1
+			check(n_mulch == 3, "Stage A: three mulch beds (%d)" % n_mulch)
+			var stones: Node = beds_node.get_node_or_null("Stones")
+			check(stones != null and (stones as MultiMeshInstance3D).multimesh.instance_count >= 200,
+				"Stage A: stone edging rings the beds (%d stones)"
+				% ((stones as MultiMeshInstance3D).multimesh.instance_count if stones != null else 0))
+			var n_shrubs_a: int = 0
+			for fi: int in 3:
+				var sh: Node = beds_node.get_node_or_null("Shrubs%d" % fi)
+				if sh != null:
+					n_shrubs_a += (sh as MultiMeshInstance3D).multimesh.instance_count
+			check(n_shrubs_a >= 24, "Stage A: the beds are planted with shrubs (%d)" % n_shrubs_a)
+			var tufts: Node = beds_node.get_node_or_null("Tufts")
+			check(tufts != null and (tufts as MultiMeshInstance3D).multimesh.instance_count >= 120,
+				"Stage A: ornamental grass tufts fill the beds (%d)"
+				% ((tufts as MultiMeshInstance3D).multimesh.instance_count if tufts != null else 0))
+			var flowers: Node = beds_node.get_node_or_null("Flowers")
+			check(flowers != null and (flowers as MultiMeshInstance3D).multimesh.instance_count >= 80,
+				"Stage A: flowering accents dot the beds (%d)"
+				% ((flowers as MultiMeshInstance3D).multimesh.instance_count if flowers != null else 0))
+		var trees_node: Node = stage_a.get_node_or_null("Trees")
+		check(trees_node != null and trees_node.get_child_count() == main.stage_a_tree_spots().size(),
+			"Stage A: the tree line stands beyond the fence (%d trees)"
+			% (trees_node.get_child_count() if trees_node != null else 0))
+		if trees_node != null:
+			var spot0: Array = main.stage_a_tree_spots()[0]
+			var want0: Vector3 = spot0[0]
+			check((trees_node.get_child(0) as Node3D).global_position.distance_to(want0) < 0.01,
+				"Stage A: tree line stands on its surveyed spots")
+			var sway_ok: bool = true
+			for t: Node in trees_node.get_children():
+				for cn: Node in t.get_children():
+					if cn.name == "Canopy":
+						var m: ShaderMaterial = (cn as MeshInstance3D).material_override as ShaderMaterial
+						if m == null or m.get_shader_parameter("sway_amp") == null \
+								or float(m.get_shader_parameter("sway_amp")) <= 0.0:
+							sway_ok = false
+			check(sway_ok, "Stage A: every background canopy wears the sway shader")
+
 	var sky_ok: bool = false
 	for child: Node in main.get_children():
 		if child is WorldEnvironment:
