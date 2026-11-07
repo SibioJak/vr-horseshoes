@@ -932,6 +932,23 @@ func test_stage_b_layout() -> void:
 		for ei: int in station_envs.size():
 			check(circle_rect_clear(opos, orad, station_envs[ei]),
 				"Stage B: %s keeps clear of station envelope %d" % [String(spot[0]), ei])
+	# The patio chairs face the table they ring: each
+	# chair's seat front (local -Z - its backrest stands at
+	# local +Z) under the builder's yaw must point at the
+	# table centre from the chair's own spot (Fix Pass 28).
+	var chair_angles: Array = main_script.stage_b_chair_angles()
+	check(chair_angles.size() == 3,
+		"Stage B: three patio chairs ring the table (%d)" % chair_angles.size())
+	for cav: Variant in chair_angles:
+		var ca: float = deg_to_rad(float(cav))
+		var cpos: Vector3 = (Vector3(sin(ca), 0.0, cos(ca))
+			* float(main_script.STAGE_B_CHAIR_R))
+		var cyaw: float = float(main_script.stage_b_chair_yaw(cpos))
+		var cfacing := Vector3(-sin(cyaw), 0.0, -cos(cyaw))
+		var cdot: float = cfacing.dot(-cpos.normalized())
+		check(cdot >= 0.99,
+			"Stage B: the patio chair at %.0f deg faces the table centre (dot %.3f)"
+			% [float(cav), cdot])
 	# The gate: in the right fence, mid-yard, a doorway wide.
 	var gate: Dictionary = main_script.stage_b_gate()
 	check(absf(float(gate["x"]) - 13.0) < 0.01,

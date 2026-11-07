@@ -1598,6 +1598,32 @@ static func stage_b_object_spots() -> Array:
 	]
 
 
+## Patio chairs ring the table at STAGE_B_CHAIR_R on these
+## placement angles (degrees, table-local; the table itself
+## is never rotated, so table-local reads as world). Each
+## chair is yawed from its own spot by stage_b_chair_yaw so
+## its seat front faces the table centre.
+const STAGE_B_CHAIR_R: float = 0.80
+
+
+static func stage_b_chair_angles() -> Array[float]:
+	return [35.0, 145.0, 250.0]
+
+
+## The yaw a patio chair takes at table-local spot cp so
+## its SEAT FRONT faces the table centre. The chair
+## builder's forward convention: the backrest stands at
+## local +Z, so the seat front (the way a seated person
+## looks) is local -Z, which under yaw t reads
+## (-sin t, 0, -cos t). Facing the centre from cp means
+## that vector is -cp.normalized() - solved by
+## t = atan2(cp.x, cp.z). (Fix Pass 28: the shipped yaw
+## added PI to this, which put every chair's backrest to
+## the table and its seat front out to the yard.)
+static func stage_b_chair_yaw(cp: Vector3) -> float:
+	return atan2(cp.x, cp.z)
+
+
 ## The gate: a gap in the right fence run (x = 13) between
 ## the hinge post (z_hinge) and the latch post (z_latch),
 ## centred mid-yard at z -6.0. The panel group pivots at
@@ -1801,17 +1827,20 @@ func _build_patio_table(parent: Node, pos: Vector3) -> void:
 	table.add_child(base)
 	# Three chairs around it, backs out - angles chosen so
 	# no chair backs into the walk corridor (the yard side
-	# of the table stays open toward the court).
+	# of the table stays open toward the court). Each chair
+	# is yawed from its own spot so its seat front (local
+	# -Z; the backrest stands at local +Z) faces the table
+	# centre - stage_b_chair_yaw carries the derivation.
 	var chair_mat := _mat(Color(0.45, 0.50, 0.55))
 	var chair_i: int = 0
-	for ang_deg: float in [35.0, 145.0, 250.0]:
+	for ang_deg: float in stage_b_chair_angles():
 		chair_i += 1
 		var a: float = deg_to_rad(ang_deg)
-		var cp := Vector3(sin(a), 0.0, cos(a)) * 0.80
+		var cp := Vector3(sin(a), 0.0, cos(a)) * STAGE_B_CHAIR_R
 		var chair := Node3D.new()
 		chair.name = "Chair%d" % chair_i
 		chair.position = cp
-		chair.rotation.y = a + PI
+		chair.rotation.y = stage_b_chair_yaw(cp)
 		table.add_child(chair)
 		_box(chair, Vector3(0.0, 0.46, 0.0), Vector3(0.42, 0.04, 0.40), chair_mat)
 		_box(chair, Vector3(0.0, 0.72, 0.21), Vector3(0.42, 0.52, 0.04), chair_mat)

@@ -1106,6 +1106,21 @@ func _run() -> void:
 						n_chairs += 1
 			check(n_pots == 2, "Stage B: potted plants flank the back door (%d)" % n_pots)
 			check(n_chairs == 3, "Stage B: three chairs ring the patio table (%d)" % n_chairs)
+			# Fix Pass 28: each built chair's seat front
+			# (-Z of its own basis) points at the table
+			# centre in the world, not just in the data.
+			var table_w: Node = patio_n.get_node_or_null("Table")
+			if table_w != null:
+				var centre_w: Vector3 = (table_w as Node3D).global_position
+				for chw: Node in table_w.get_children():
+					if chw.name.begins_with("Chair"):
+						var ch3: Node3D = chw as Node3D
+						var fw: Vector3 = -ch3.global_transform.basis.z
+						fw.y = 0.0
+						var tw: Vector3 = centre_w - ch3.global_position
+						tw.y = 0.0
+						check(fw.normalized().dot(tw.normalized()) >= 0.99,
+							"Stage B: %s faces the table centre in the built yard" % chw.name)
 		# Fountain: built in its nook, ringed, watered.
 		var fountain_n: Node = stage_b.get_node_or_null("Fountain")
 		check(fountain_n != null, "Stage B: the fountain stands in the left bed")
