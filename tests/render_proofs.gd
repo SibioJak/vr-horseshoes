@@ -27,6 +27,10 @@ extends SceneTree
 ##     real tracker grip input, grab-zone markers visible.
 ##   proofs/grip_label.png - the Fix Pass 21 grip label riding the
 ##     held shoe after a free-hand X cycle (SHANK · TOE).
+##   proofs/grip_far.png - the Fix Pass 26 far hold: the circuit
+##     walked across the shoe to FAR SHANK · MID, the label
+##     naming the reverse grip and the shoe seated the other
+##     way (opening flipped vs the home hold).
 ##   proofs/insert_view.png - the Fix Pass 20 insert cam UP at a
 ##     round's end: the live pit closeup (all four settled shoes
 ##     parked around the stake, one dud wide) over the round's
@@ -314,6 +318,36 @@ func _run() -> void:
 	await settle(4)
 	await snap(cam_b2, "res://proofs/grip_label.png")
 	cam_b2.queue_free()
+
+	# --- Proof B3: the FAR hold (Fix Pass 26) ---
+	# Four more X presses through the same tracker input walk
+	# the circuit across the shoe to FAR SHANK · MID. The far
+	# hold must seat as the reverse setup: with the tracker
+	# hand at identity basis, the home hold's opening points
+	# -X (Proof B2's seat); the far hold's must point +X -
+	# flipped, not the same pose on a different anchor.
+	for i26: int in 4:
+		set_button(&"left_hand", &"ax_button", true)
+		await settle(5)
+		set_button(&"left_hand", &"ax_button", false)
+		await settle(5)
+	check(main._grip_index() == 5 and main.held_zone == "shank_left"
+		and main.grip_label.text == "FAR SHANK · MID · 1¼ TURN · REVERSE",
+		"the circuit crosses to FAR SHANK · MID on the far zone (got idx %d / %s / '%s')"
+		% [main._grip_index(), main.held_zone, main.grip_label.text])
+	var open_far: Vector3 = main.shoe.global_transform.basis * Vector3(0.0, 0.0, 1.0)
+	check(open_far.x > 0.9,
+		"the far hold seats as the reverse setup - opening flipped to +X (got %s)" % str(open_far))
+	var shoe_pos3: Vector3 = main.shoe.global_position
+	var cam_b3 := Camera3D.new()
+	cam_b3.fov = 70.0
+	cam_b3.position = shoe_pos3 + Vector3(0.45, 0.25, 0.62)
+	main.add_child(cam_b3)
+	cam_b3.look_at(shoe_pos3 + Vector3(0.0, 0.05, 0.0), Vector3.UP)
+	cam_b3.current = true
+	await settle(4)
+	await snap(cam_b3, "res://proofs/grip_far.png")
+	cam_b3.queue_free()
 
 	# --- Proof C: locomotion through the REAL tracker stick inputs ---
 	# (the same "primary" action the headset's thumbsticks feed).

@@ -26,11 +26,13 @@ extends SceneTree
 ##               the SHANK · MID stop.
 ##   TURN 1-3/8 - flat spin, 1.375 rev, from the SHANK · HEEL
 ##               grip stop (Fix Pass 21).
-##   REVERSE 1-1/4 - opposite yaw sign, mirrored (left) hand.
+##   REVERSE 1-1/4 - the FAR · MID hold (Fix Pass 26): the
+##               other shank in the same (right) hand, the
+##               shoe seated mirrored, opposite yaw sign.
 ##
-## Fix Pass 21 note: the cases now throw the game's four
-## DECLARED grip positions, walked to by the production grip
-## cycle (run_case taps it after the grab), and each case also
+## Fix Pass 21 note: the cases now throw the game's DECLARED
+## grip positions, walked to by the production grip cycle
+## (run_case taps it after the grab), and each case also
 ## asserts the release cache carries that position's name and
 ## declared count. The FP16-era TURN 3/4 and TURN 1-3/4 cases
 ## retire with the governor basins they were standards of: no
@@ -42,6 +44,21 @@ extends SceneTree
 ## anchor (phase - 360*m == 270 deg mod 360 for the R-hand
 ## negative-yaw family): 1-1/8 takes phase -pi/4, 1-3/8 takes
 ## phase +pi/4.
+##
+## Fix Pass 26 note: the circuit is seven positions now, and
+## the cases throw BOTH shank families from their honest
+## holds. The home set grabs the R hand's home shank
+## (shank_right) - before this pass those cases grabbed
+## shank_left, which the side-blind derivation read as the
+## same stops; shank_left in the R hand is the FAR family
+## now, and it gets its own set: 1-1/8, 1-1/4 (the REVERSE
+## case - re-thrown from the far grip itself instead of a
+## mirrored left hand faking the hold), and 1-3/8, all with
+## the spin sign flipped and the arrival phases mirrored
+## against the Francis anchor (phase +pi/4 for 1-1/8, 0 for
+## 1-1/4, -pi/4 for 1-3/8). Cycle taps are counted around
+## the full seven-stop circuit from the grab's derived stop
+## (a shank grab starts at its family's MID).
 ##
 ## Hold geometry (asserted by the logic suite): the R-hand turn
 ## hold leaves the shoe's opening pointing -X at release, the
@@ -496,18 +513,19 @@ func _run() -> void:
 		"TOE GRIP", 1.0)
 
 	# 3. TURN 1-1/8, 40 ft - the SHANK · TOE stop, negative yaw.
-	# A shank grab starts at MID; the cycle walks MID -> HEEL ->
-	# TOE GRIP -> SHANK · TOE (three taps). Arrival phase from
+	# A home-shank grab starts at MID; the seven-stop circuit
+	# walks MID -> HEEL -> FAR TOE -> FAR MID -> FAR HEEL ->
+	# TOE GRIP -> SHANK · TOE (six taps). Arrival phase from
 	# the Francis anchor: phase = -(360*1.125) + 270 == -45 deg.
 	var w118: Vector3 = Vector3(0.0, -TAU * 1.125 / FLIGHT_T_40, 0.0)
-	var r3: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, w118, -PI / 4.0, 3, "turn", 303)
+	var r3: Dictionary = await run_case("R", "shank_right", 40, rp40, v40, w118, -PI / 4.0, 6, "turn", 303)
 	judge_case("TURN 1-1/8 (SHANK · TOE), 40 ft", r3, v40, w118, "turn", -1.125,
 		"SHANK · TOE", 1.125)
 
 	# 4. TURN 1-1/4, 40 ft - THE FRANCIS CASE: lazy rate, phase 0,
-	# the SHANK · MID stop a shank grab starts on (no taps).
+	# the SHANK · MID stop a home-shank grab starts on (no taps).
 	var w114: Vector3 = Vector3(0.0, -TAU * 1.25 / FLIGHT_T_40, 0.0)
-	var r4: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, w114, 0.0, 0, "turn", 404)
+	var r4: Dictionary = await run_case("R", "shank_right", 40, rp40, v40, w114, 0.0, 0, "turn", 404)
 	judge_case("TURN 1-1/4 (Francis), 40 ft", r4, v40, w114, "turn", -1.25,
 		"SHANK · MID", 1.25)
 
@@ -515,16 +533,38 @@ func _run() -> void:
 	# One tap from the MID start. Arrival phase from the anchor:
 	# phase = -(360*1.375) + 270 == +45 deg (mod 360).
 	var w138: Vector3 = Vector3(0.0, -TAU * 1.375 / FLIGHT_T_40, 0.0)
-	var r5: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, w138, PI / 4.0, 1, "turn", 505)
+	var r5: Dictionary = await run_case("R", "shank_right", 40, rp40, v40, w138, PI / 4.0, 1, "turn", 505)
 	judge_case("TURN 1-3/8 (SHANK · HEEL), 40 ft", r5, v40, w138, "turn", -1.375,
 		"SHANK · HEEL", 1.375)
 
-	# 6. REVERSE TURN 1-1/4, 40 ft - left hand, positive yaw,
-	# SHANK · MID again (the L-hand grab's own start).
+	# 6. REVERSE TURN 1-1/4, 40 ft - Fix Pass 26: thrown from
+	# the honest hold - the FAR · MID grip in the pitcher's own
+	# (right) hand, the far shank grabbed directly. Positive
+	# yaw, phase 0 (the Francis anchor mirrored with the seat).
+	# Before this pass the case faked the hold with a mirrored
+	# left hand on the home-family stop.
 	var wrev: Vector3 = Vector3(0.0, TAU * 1.25 / FLIGHT_T_40, 0.0)
-	var r6: Dictionary = await run_case("L", "shank_right", 40, rp40, v40, wrev, 0.0, 0, "turn", 606)
-	judge_case("REVERSE TURN 1-1/4, 40 ft", r6, v40, wrev, "turn", 1.25,
-		"SHANK · MID", 1.25)
+	var r6: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, wrev, 0.0, 0, "turn", 606)
+	judge_case("REVERSE TURN 1-1/4 (FAR · MID), 40 ft", r6, v40, wrev, "turn", 1.25,
+		"FAR SHANK · MID", 1.25)
+
+	# 7. FAR TURN 1-1/8, 40 ft - the FAR · TOE stop, positive
+	# yaw. A far-shank grab starts at FAR · MID; the circuit
+	# walks it FAR HEEL -> TOE -> SHANK TOE/MID/HEEL -> FAR
+	# TOE (six taps). Arrival phase mirrors the home 1-1/8:
+	# +45 deg.
+	var wf118: Vector3 = Vector3(0.0, TAU * 1.125 / FLIGHT_T_40, 0.0)
+	var r7: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, wf118, PI / 4.0, 6, "turn", 808)
+	judge_case("FAR TURN 1-1/8 (FAR · TOE), 40 ft", r7, v40, wf118, "turn", 1.125,
+		"FAR SHANK · TOE", 1.125)
+
+	# 8. FAR TURN 1-3/8, 40 ft - the FAR · HEEL stop, positive
+	# yaw, one tap from the FAR · MID start. Arrival phase
+	# mirrors the home 1-3/8: -45 deg.
+	var wf138: Vector3 = Vector3(0.0, TAU * 1.375 / FLIGHT_T_40, 0.0)
+	var r8: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, wf138, -PI / 4.0, 1, "turn", 909)
+	judge_case("FAR TURN 1-3/8 (FAR · HEEL), 40 ft", r8, v40, wf138, "turn", 1.375,
+		"FAR SHANK · HEEL", 1.375)
 
 	# CONTROL: the Francis case with the spin sign flipped. The
 	# physics must still deliver 1.25 rev - but the opening must
@@ -533,7 +573,7 @@ func _run() -> void:
 	# error, the metric or the sign convention is broken, not
 	# the shoe.
 	var wctl: Vector3 = Vector3(0.0, TAU * 1.25 / FLIGHT_T_40, 0.0)
-	var rc: Dictionary = await run_case("R", "shank_left", 40, rp40, v40, wctl, 0.0, 0, "turn", 707)
+	var rc: Dictionary = await run_case("R", "shank_right", 40, rp40, v40, wctl, 0.0, 0, "turn", 707)
 	var carr: Dictionary = rc.get("arr", {})
 	check(bool(rc.get("fired", false)), "CONTROL (wrong-way 1-1/4): fired through the production path")
 	check(absf(float(carr.get("turn", 0.0)) - 1.25) <= 0.15,

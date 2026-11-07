@@ -1314,9 +1314,25 @@ func _run() -> void:
 	await pulse_hand_button("L", "A")
 	check(main.grip_label.text == "SHANK · HEEL · 1⅜ TURN" and main._grip_index() == 3,
 		"FP21: tap 3 walks to SHANK · HEEL (got '%s')" % main.grip_label.text)
+	# Fix Pass 26: the circuit crosses the shoe - the far
+	# shank's three stops (the reverse family) follow the home
+	# shank's, each seated on the OTHER zone, then the wrap.
+	await pulse_hand_button("L", "A")
+	check(main.grip_label.text == "FAR SHANK · TOE · 1⅛ TURN · REVERSE" and main._grip_index() == 4
+		and main.held_zone == "shank_left",
+		"FP26: tap 4 crosses to FAR SHANK · TOE, seated on the far zone (got '%s' / %s)"
+		% [main.grip_label.text, main.held_zone])
+	await pulse_hand_button("L", "A")
+	check(main.grip_label.text == "FAR SHANK · MID · 1¼ TURN · REVERSE" and main._grip_index() == 5
+		and main.held_zone == "shank_left",
+		"FP26: tap 5 walks to FAR SHANK · MID (got '%s')" % main.grip_label.text)
+	await pulse_hand_button("L", "A")
+	check(main.grip_label.text == "FAR SHANK · HEEL · 1⅜ TURN · REVERSE" and main._grip_index() == 6
+		and main.held_zone == "shank_left",
+		"FP26: tap 6 walks to FAR SHANK · HEEL (got '%s')" % main.grip_label.text)
 	await pulse_hand_button("L", "A")
 	check(main.grip_label.text == "TOE GRIP · FLIP" and main._grip_index() == 0,
-		"FP21: tap 4 wraps back to TOE GRIP (got '%s')" % main.grip_label.text)
+		"FP26: tap 7 wraps the full circuit back to TOE GRIP (got '%s')" % main.grip_label.text)
 	await pulse_hand_button("R", "A")
 	check(main._grip_index() == 1 and main.grip_label.text == "SHANK · TOE · 1⅛ TURN",
 		"FP22: the HOLDING hand's own button cycles too - A or X, either hand (got '%s')"
@@ -1380,10 +1396,24 @@ func _run() -> void:
 	await pulse_hand_button("R", "A")
 	check(main.grip_label.text == "SHANK · HEEL · 1⅜ TURN",
 		"FP21: the right hand's A cycles the left hand's grip (got '%s')" % main.grip_label.text)
+	# Fix Pass 26: the left hand's circuit crosses too - its
+	# far shank is shank_right - and the walk wraps the full
+	# seven stops home.
+	await pulse_hand_button("L", "A")
+	check(main._grip_index() == 4 and main.held_zone == "shank_right"
+		and main.grip_label.text == "FAR SHANK · TOE · 1⅛ TURN · REVERSE",
+		"FP26: the left hand crosses to its far shank (got '%s' / %s)"
+		% [main.grip_label.text, main.held_zone])
+	await pulse_hand_button("R", "A")
+	check(main._grip_index() == 5 and main.grip_label.text == "FAR SHANK · MID · 1¼ TURN · REVERSE",
+		"FP26: the left hand's far walk continues to FAR SHANK · MID (got '%s')" % main.grip_label.text)
+	await pulse_hand_button("R", "A")
+	check(main._grip_index() == 6 and main.grip_label.text == "FAR SHANK · HEEL · 1⅜ TURN · REVERSE",
+		"FP26: the left hand's far walk ends at FAR SHANK · HEEL (got '%s')" % main.grip_label.text)
 	await pulse_hand_button("L", "A")
 	check(main._grip_index() == 0 and main.grip_label.text == "TOE GRIP · FLIP"
 		and main.mode == "PRACTICE",
-		"FP22: the holding left hand's own A cycles too (wraps to TOE GRIP) - and still cannot start a game while it holds")
+		"FP22: the holding left hand's own A cycles too (wraps the full circuit to TOE GRIP) - and still cannot start a game while it holds")
 	await wait_hand_still("L")
 	main.test_grip["L"] = 0.0
 	await frames(4)
@@ -1607,7 +1637,7 @@ func _run() -> void:
 		setup_frames += 1
 	check(main.state == "HELD", "FP25: the setup grab latches for the default reset")
 	var guard25: int = 0
-	while main.default_grip != 0 and guard25 < 5:
+	while main.default_grip != 0 and guard25 < 10:
 		await pulse_hand_button("L", "A")
 		guard25 += 1
 	check(main.default_grip == 0 and main._grip_index() == 0,
@@ -1729,7 +1759,7 @@ func _run() -> void:
 	var latch_g: Dictionary = last_latch_record(rec_path)
 	check(not bool(latch_g.get("long_arm", true)),
 		"FP25: the near latch record is NOT flagged long-arm")
-	for i25: int in 4:
+	for i25: int in 7:
 		await pulse_hand_button("L", "A")
 	check(main._grip_index() == 0 and main.default_grip == 0
 		and main.controls_label.text.contains("DEFAULT GRIP: TOE GRIP"),
@@ -1819,6 +1849,119 @@ func _run() -> void:
 		Vector3(0.0, 0.0, main.FOUL_40_Z))
 	check(await wait_shoe_at(40, 3.0) >= 0.0,
 		"FP25: the shoe restocks at the standard end for the next section")
+
+	# --- Fix Pass 26: the full circuit - cross-grabs enter
+	# the far family, the far grip throws its declaration, and
+	# a far default survives a restart. ---
+	# (a) A near CROSS-grab enters the far family at its MID:
+	# the right hand reaches across the shoe to shank_left.
+	main.test_hand_tf.erase("L")
+	main.test_hand_tf.erase("R")
+	var gfar26: Vector3 = main.shoe.zone_world_center("shank_left")
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, gfar26)
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	check(main.state == "HELD" and main.held_zone == "shank_left"
+		and main._grip_index() == 5
+		and main.grip_label.text == "FAR SHANK · MID · 1¼ TURN · REVERSE",
+		"FP26: a right-hand cross-grab enters the far family at FAR · MID (got %s / '%s')"
+		% [main.held_zone, main.grip_label.text])
+	# (b) The far throw: the production release serves the far
+	# grip's declared count - the FP21 (c) stream with the
+	# spin sign flipped (the reverse family's direction).
+	var line_z26: float = main.game_line_z()
+	var target26: Vector3 = main.target_stake_pos()
+	var rp26 := Vector3(0.25, 1.25, line_z26 + 0.35)
+	var tf26: float = 1.15
+	var vel26 := Vector3((target26.x - rp26.x) / tf26,
+		(0.50 - rp26.y + 4.9 * tf26 * tf26) / tf26,
+		(target26.z - rp26.z) / tf26)
+	var om26 := Vector3(0.0, TAU * 1.25 / tf26, 0.0)
+	var rel26: Transform3D = main.rel_tf
+	var hand_pos26: Vector3 = rp26 - rel26.origin
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, hand_pos26)
+	await frames(4)
+	main.samples = build_stream(hand_pos26, Quaternion.IDENTITY, vel26, om26, 26)
+	main._release_shoe(main.samples)
+	main.grab_state.reset()
+	main.test_grip["R"] = 0.0
+	check(main.state == "FLYING", "FP26: the far grip throws through the production path")
+	check(String(main.release_cache.get("grip_name", "")) == "FAR SHANK · MID"
+		and absf(float(main.release_cache.get("grip_nominal", 0.0)) - 1.25) <= 0.001,
+		"FP26: the release cache carries the far grip (got %s / %.3f)"
+		% [String(main.release_cache.get("grip_name", "")), float(main.release_cache.get("grip_nominal", 0.0))])
+	check(absf(float(main.release_cache.get("spin_applied_total", 0.0)) - 1.25) <= 0.15,
+		"FP26: the thrown far grip lands with its declared count (applied %.2f rev, declared +1.25)"
+		% float(main.release_cache.get("spin_applied_total", 0.0)))
+	check(await wait_state("STAND", 12.0), "FP26: the far throw settles and returns")
+	var last_throw26: Dictionary = {}
+	var f26: FileAccess = FileAccess.open(rec_path, FileAccess.READ)
+	if f26 != null:
+		for line26: String in f26.get_as_text().split("\n", false):
+			var parsed26: Variant = JSON.parse_string(line26)
+			if parsed26 is Dictionary and String(parsed26.get("type", "")) == "throw":
+				last_throw26 = parsed26
+	check(String(last_throw26.get("grip_name", "")) == "FAR SHANK · MID",
+		"FP26: the throw record carries the far grip_name (got %s)"
+		% String(last_throw26.get("grip_name", "")))
+	main.test_hand_tf.erase("R")
+	# (c) The left hand's cross-grab mirrors: shank_right is
+	# ITS far zone, and it enters the same far MID.
+	var gfar26l: Vector3 = main.shoe.zone_world_center("shank_right")
+	main.test_hand_tf["L"] = Transform3D(Basis.IDENTITY, gfar26l)
+	main.test_grip["L"] = 1.0
+	await frames(6)
+	check(main.state == "HELD" and main.held_hand == "L" and main.held_zone == "shank_right"
+		and main._grip_index() == 5
+		and main.grip_label.text == "FAR SHANK · MID · 1¼ TURN · REVERSE",
+		"FP26: a left-hand cross-grab enters the far family at FAR · MID (got %s / '%s')"
+		% [main.held_zone, main.grip_label.text])
+	check(await drop_and_restock(main, "L"), "FP26: the cross-grabbed shoe drops and restocks")
+	main.test_hand_tf.erase("L")
+	# (d) A FAR default across a restart: cycle a held shoe to
+	# FAR · MID (the default follows), then a fresh instance
+	# must long-arm its arrival onto the far zone.
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
+		main.shoe.zone_world_center("toe"))
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	check(main.state == "HELD", "FP26: the setup grab latches for the far default")
+	for i26: int in 5:
+		await pulse_hand_button("L", "A")
+	check(main._grip_index() == 5 and main.default_grip == 5
+		and main.controls_label.text.contains("DEFAULT GRIP: FAR SHANK · MID"),
+		"FP26: cycling to FAR · MID makes it the default, and the board names it (got %d)" % main.default_grip)
+	check(await drop_and_restock(main, "R"), "FP26: the far-default shoe drops and restocks")
+	main.test_hand_tf.erase("R")
+	var m4: Node = spawn_fresh_main(rec_b, set_path)
+	await create_timer(0.3).timeout
+	check(int(m4.default_grip) == 5,
+		"FP26: the far default survives a restart (read %d)" % int(m4.default_grip))
+	check(await long_arm_grab(m4, "R", hand_r40),
+		"FP26: the restarted instance long-arms from the spot")
+	check(m4.held_zone == "shank_left" and m4._grip_index() == 5
+		and m4.grip_label.text == "FAR SHANK · MID · 1¼ TURN · REVERSE",
+		"FP26: the restarted long-arm arrival seats on the FAR zone (got %s / '%s')"
+		% [m4.held_zone, m4.grip_label.text])
+	m4.test_grip["R"] = 0.0
+	m4.test_hand_tf.erase("R")
+	root.remove_child(m4)
+	m4.free()
+	await frames(3)
+	# Walk the default home to TOE for the sections that
+	# follow (the FP25 setup idiom).
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
+		main.shoe.zone_world_center("toe"))
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	var guard26: int = 0
+	while main.default_grip != 0 and guard26 < 10:
+		await pulse_hand_button("L", "A")
+		guard26 += 1
+	check(main.default_grip == 0 and main._grip_index() == 0,
+		"FP26: the default is walked back to TOE after the far legs (got %d)" % main.default_grip)
+	check(await drop_and_restock(main, "R"), "FP26: the restored shoe drops and restocks")
+	main.test_hand_tf.erase("R")
 
 	# --- Fix Pass 7: the shoe waits where you are ---
 	# The defect: the home pedestal was set only at latch time from
