@@ -790,6 +790,63 @@ func test_ai_release() -> void:
 		"AI release: one flip revolution per flight at the FLIGHT_T cadence, about the travel frame's lateral axis")
 
 
+## Stage A layout guards (Stage 2, the ground): the planting
+## beds and background tree line are visual-only dressing whose
+## layout lives as data tables in main.gd - guard the DATA
+## numerically here (the smoke suite guards the built tree):
+## no bed may touch the lane corridor, the pitcher's box zone,
+## a station envelope, the peg envelope, or the pit itself,
+## and every background trunk must stand outside the fence and
+## on the ground plane.
+func rects_overlap(a: Array, b: Array) -> bool:
+	return float(a[0]) < float(b[2]) and float(a[2]) > float(b[0]) \
+		and float(a[1]) < float(b[3]) and float(a[3]) > float(b[1])
+
+
+func test_stage_a_layout() -> void:
+	var main_script: GDScript = load("res://scripts/main.gd")
+	var beds: Array = main_script.stage_a_bed_rects()
+	check(beds.size() == 3, "Stage A: three planting beds ring the yard (%d)" % beds.size())
+	# Keep-out rects [x0, z0, x1, z1], each already carrying
+	# its safety margin: the lane corridor (the apron the FP10
+	# dressing rules keep bare), the pitcher's box zone around
+	# the stake, both stations' timber envelopes, the 30 ft
+	# peg post's envelope, and the pit + ties themselves.
+	var keep_outs: Array = [
+		[-2.30, -11.30, 2.30, 1.60],
+		[-1.22, -13.41, 1.22, -10.98],
+		[-2.62, -1.62, 2.62, -0.28],
+		[1.78, -4.52, 2.58, -3.42],
+		[-0.70, -13.40, 0.70, -10.99],
+	]
+	for bi: int in beds.size():
+		var bed: Array = beds[bi]
+		for ki: int in keep_outs.size():
+			var ko: Array = keep_outs[ki]
+			check(not rects_overlap(bed, ko),
+				"Stage A: bed %d clears keep-out %d" % [bi, ki])
+	# Side beds: inner edge outside the berm toe (|x| 2.60)
+	# and the station timbers' reach (2.54).
+	for bi: int in 2:
+		var bed: Array = beds[bi]
+		check(float(bed[2]) <= -2.70 or float(bed[0]) >= 2.70,
+			"Stage A: side bed %d inner edge clears the berms and stations" % bi)
+	# Far bed: behind the pit's back tie (outer face -13.35),
+	# short of the board (z -16.2).
+	var far_bed: Array = beds[2]
+	check(float(far_bed[3]) <= -13.80 and float(far_bed[1]) >= -15.90,
+		"Stage A: the far bed sits behind the pit, clear of pit and board")
+	# Tree line: outside the fence rectangle, on the ground.
+	var spots: Array = main_script.stage_a_tree_spots()
+	check(spots.size() == 17, "Stage A: the tree line stands (%d trees)" % spots.size())
+	for spot: Array in spots:
+		var tp: Vector3 = spot[0]
+		check(absf(tp.x) > 13.2 or tp.z < -20.2 or tp.z > 7.2,
+			"Stage A: tree at %s stands beyond the fence" % str(tp))
+		check(absf(tp.x) <= 19.5 and tp.z >= -29.5 and tp.z <= 17.5,
+			"Stage A: tree at %s stands on the ground plane" % str(tp))
+
+
 func _run() -> void:
 	test_release_math()
 	test_angular_math()
@@ -808,6 +865,7 @@ func _run() -> void:
 	test_api_guard()
 	test_scoring()
 	test_ai_release()
+	test_stage_a_layout()
 	var shoe_node := Shoe.new()
 	root.add_child(shoe_node)
 	await physics_frame

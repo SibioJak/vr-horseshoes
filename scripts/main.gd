@@ -1147,6 +1147,339 @@ func _build_scenery() -> void:
 			shrub.scale = Vector3(sxz, 0.8 if big else 0.85, sxz)
 			row.add_child(shrub)
 
+	_build_stage_a()
+
+
+## Stage 2 / Stage A - THE GROUND (Chris's living perimeter,
+## first judgeable stage): mulched planting beds with irregular
+## stone edging ring the yard outside the berm rows and across
+## the far end behind the pit, and a tree line stands beyond
+## the fence with a slow canopy sway. Stage B (pavilion, fire
+## pit, time of day, birds, sand plume) is a LATER pass - none
+## of it is built here. Everything in this stage is VISUAL
+## ONLY: plain mesh instances and MultiMeshes, no collision
+## anywhere, no script per frame beyond the sway shader's own
+## TIME. The layout lives in the two static tables below so
+## the logic suite can guard every footprint numerically
+## against the corridor, the stations, the peg and the pit.
+## The BUBBA stations, the peg, the board and the berms are
+## untouched in position and function - the stations' fate is
+## Chris's verdict on this stage's look.
+
+## Bed rectangles as [x0, z0, x1, z1]. Side beds sit outside
+## the berm rows (berm outer toe |x| 2.60; station timbers
+## reach |x| 2.54, the peg post 2.31 - both clear of the inner
+## edge at 2.78); the far bed crosses behind the pit, clear of
+## the back tie's outer face (z -13.35) and of the board
+## (z -16.2), with grass gaps both sides of it.
+static func stage_a_bed_rects() -> Array:
+	return [
+		[-4.60, -13.85, -2.78, 1.80],
+		[2.78, -13.85, 4.60, 1.80],
+		[-4.60, -15.70, 4.60, -13.85],
+	]
+
+
+## Background tree line: [position, scale] pairs. Every trunk
+## stands OUTSIDE the fence rectangle (x +/-13, z -20/+7) and
+## on the ground plane (x +/-20, z -30..18).
+static func stage_a_tree_spots() -> Array:
+	return [
+		[Vector3(-16.0, 0.0, -23.5), 1.75],
+		[Vector3(-10.5, 0.0, -24.5), 1.45],
+		[Vector3(-5.0, 0.0, -22.8), 1.90],
+		[Vector3(1.0, 0.0, -24.0), 1.55],
+		[Vector3(6.5, 0.0, -23.2), 1.80],
+		[Vector3(12.0, 0.0, -24.6), 1.40],
+		[Vector3(17.0, 0.0, -23.0), 1.65],
+		[Vector3(-16.5, 0.0, -14.0), 1.50],
+		[Vector3(-17.0, 0.0, -6.0), 1.80],
+		[Vector3(-16.0, 0.0, 3.0), 1.35],
+		[Vector3(16.5, 0.0, -16.0), 1.60],
+		[Vector3(17.0, 0.0, -7.0), 1.45],
+		[Vector3(16.0, 0.0, 2.0), 1.85],
+		[Vector3(-11.0, 0.0, 12.5), 1.55],
+		[Vector3(-3.0, 0.0, 13.5), 1.80],
+		[Vector3(5.0, 0.0, 12.0), 1.40],
+		[Vector3(13.0, 0.0, 13.0), 1.70],
+	]
+
+
+func _build_stage_a() -> void:
+	var stage_a := Node3D.new()
+	stage_a.name = "StageA"
+	scenery_root.add_child(stage_a)
+	# Fixed seed: the yard plants the same way every run, and
+	# the suites count on the placement staying put.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20261107
+	_build_stage_a_beds(stage_a, rng)
+	_build_stage_a_trees(stage_a, rng)
+
+
+## One coloured MultiMesh from parallel transform/colour
+## lists - the stage's workhorse for anything planted or laid
+## by the dozen (stones, shrubs, tufts, flower dots): one
+## node, one mesh, one draw call per family.
+func _stage_a_multimesh(parent: Node, mname: String, mesh: Mesh,
+		tfs: Array, cols: Array) -> MultiMeshInstance3D:
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = mesh
+	mm.instance_count = tfs.size()
+	for i: int in tfs.size():
+		var tf: Transform3D = tfs[i]
+		mm.set_instance_transform(i, tf)
+		var c: Color = cols[i]
+		mm.set_instance_color(i, c)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 1.0, 1.0)
+	mat.vertex_color_use_as_albedo = true
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = mname
+	mmi.multimesh = mm
+	mmi.material_override = mat
+	parent.add_child(mmi)
+	return mmi
+
+
+func _build_stage_a_beds(parent: Node, rng: RandomNumberGenerator) -> void:
+	var beds := Node3D.new()
+	beds.name = "Beds"
+	parent.add_child(beds)
+	var mulch_mat := _mat(Color(0.24, 0.17, 0.11))
+	var rects: Array = stage_a_bed_rects()
+	for rect: Array in rects:
+		var bx0: float = float(rect[0])
+		var bz0: float = float(rect[1])
+		var bx1: float = float(rect[2])
+		var bz1: float = float(rect[3])
+		_box(beds, Vector3((bx0 + bx1) * 0.5, 0.05, (bz0 + bz1) * 0.5),
+			Vector3(bx1 - bx0, 0.10, bz1 - bz0), mulch_mat)
+
+	# --- Stone edging: irregular low-poly stones walked along
+	# the U's inner and outer edges plus the two end caps at
+	# the pitching end - the design feed's hand-laid border.
+	# One unit-sphere mesh squashed per stone; grey varies per
+	# instance.
+	var inner_line: Array = [Vector2(2.78, 1.80), Vector2(2.78, -13.85),
+		Vector2(-2.78, -13.85), Vector2(-2.78, 1.80)]
+	var outer_line: Array = [Vector2(4.60, 1.80), Vector2(4.60, -15.70),
+		Vector2(-4.60, -15.70), Vector2(-4.60, 1.80)]
+	var stone_segs: Array = []
+	for li: int in inner_line.size() - 1:
+		var ia: Vector2 = inner_line[li]
+		var ib: Vector2 = inner_line[li + 1]
+		stone_segs.append([ia, ib])
+	for li: int in outer_line.size() - 1:
+		var oa: Vector2 = outer_line[li]
+		var ob: Vector2 = outer_line[li + 1]
+		stone_segs.append([oa, ob])
+	stone_segs.append([Vector2(2.78, 1.80), Vector2(4.60, 1.80)])
+	stone_segs.append([Vector2(-4.60, 1.80), Vector2(-2.78, 1.80)])
+	var stone_tfs: Array = []
+	var stone_cols: Array = []
+	for seg: Array in stone_segs:
+		var a2: Vector2 = seg[0]
+		var b2: Vector2 = seg[1]
+		var seg_len: float = a2.distance_to(b2)
+		var dir2: Vector2 = (b2 - a2) / seg_len
+		var perp2 := Vector2(-dir2.y, dir2.x)
+		var d: float = 0.15
+		while d < seg_len - 0.05:
+			var p2: Vector2 = a2 + dir2 * d + perp2 * rng.randf_range(-0.03, 0.03)
+			var s: float = rng.randf_range(0.11, 0.17)
+			var eul := Vector3(rng.randf_range(-0.15, 0.15),
+				rng.randf_range(0.0, TAU), rng.randf_range(-0.15, 0.15))
+			stone_tfs.append(Transform3D(
+				Basis.from_euler(eul).scaled(Vector3(s, s * 0.55, s * 0.85)),
+				Vector3(p2.x, 0.085, p2.y)))
+			var g: float = rng.randf_range(0.42, 0.60)
+			stone_cols.append(Color(g, g * 0.99, g * 0.96))
+			d += rng.randf_range(0.26, 0.34)
+	var stone_mesh := SphereMesh.new()
+	stone_mesh.radius = 1.0
+	stone_mesh.height = 2.0
+	stone_mesh.radial_segments = 7
+	stone_mesh.rings = 4
+	_stage_a_multimesh(beds, "Stones", stone_mesh, stone_tfs, stone_cols)
+
+	# --- Shrubs: three low-poly forms in the yard's greens,
+	# dotted down each bed's length - variety by form, scale,
+	# yaw and tint, the lane rows' language grown denser.
+	var shrub_radii: Array = [0.34, 0.26, 0.30]
+	var shrub_pal: Array = [Color(0.22, 0.42, 0.18), Color(0.27, 0.48, 0.21),
+		Color(0.48, 0.54, 0.34), Color(0.17, 0.35, 0.15)]
+	var shrub_tfs: Array = [[], [], []]
+	var shrub_cols: Array = [[], [], []]
+	var shrub_pts: Array = []
+	for rect: Array in rects:
+		var x0: float = float(rect[0])
+		var z0: float = float(rect[1])
+		var x1: float = float(rect[2])
+		var z1: float = float(rect[3])
+		var w: float = x1 - x0
+		var dep: float = z1 - z0
+		var n_shrubs: int = int(maxf(w, dep) / 1.35)
+		for i: int in n_shrubs:
+			var t: float = (float(i) + 0.5 + rng.randf_range(-0.25, 0.25)) / float(n_shrubs)
+			var px: float
+			var pz: float
+			if dep >= w:
+				px = (x0 + x1) * 0.5 + rng.randf_range(-0.45, 0.45)
+				pz = z0 + t * dep
+			else:
+				px = x0 + t * w
+				pz = (z0 + z1) * 0.5 + rng.randf_range(-0.40, 0.40)
+			var form: int = rng.randi_range(0, 2)
+			var r: float = float(shrub_radii[form])
+			var sc: float = rng.randf_range(0.85, 1.35)
+			var ys: float = rng.randf_range(0.72, 0.90)
+			var pos := Vector3(px, 0.10 + r * sc * ys * 0.72, pz)
+			var form_tfs: Array = shrub_tfs[form]
+			form_tfs.append(Transform3D(
+				Basis.from_euler(Vector3(0.0, rng.randf_range(0.0, TAU), 0.0)).scaled(Vector3(sc, sc * ys, sc)),
+				pos))
+			var form_cols: Array = shrub_cols[form]
+			var pc: Color = shrub_pal[rng.randi_range(0, shrub_pal.size() - 1)]
+			form_cols.append(pc)
+			shrub_pts.append(pos)
+	var shrub_segs: Array = [9, 9, 7]
+	var shrub_rings: Array = [6, 6, 5]
+	for form: int in 3:
+		var sm := SphereMesh.new()
+		var sr: float = float(shrub_radii[form])
+		sm.radius = sr
+		sm.height = sr * 2.0
+		sm.radial_segments = int(shrub_segs[form])
+		sm.rings = int(shrub_rings[form])
+		_stage_a_multimesh(beds, "Shrubs%d" % form, sm, shrub_tfs[form], shrub_cols[form])
+
+	# --- Ornamental grass tufts: tapered straw-green spikes,
+	# scattered through the beds at ~2 per square metre.
+	var tuft_tfs: Array = []
+	var tuft_cols: Array = []
+	var tuft_straw := Color(0.52, 0.55, 0.28)
+	var tuft_green := Color(0.38, 0.50, 0.22)
+	for rect: Array in rects:
+		var x0: float = float(rect[0])
+		var z0: float = float(rect[1])
+		var x1: float = float(rect[2])
+		var z1: float = float(rect[3])
+		var n_tufts: int = int((x1 - x0) * (z1 - z0) * 2.0)
+		for i: int in n_tufts:
+			var sc: float = rng.randf_range(0.8, 1.35)
+			var eul := Vector3(rng.randf_range(-0.12, 0.12),
+				rng.randf_range(0.0, TAU), rng.randf_range(-0.12, 0.12))
+			tuft_tfs.append(Transform3D(
+				Basis.from_euler(eul).scaled(Vector3(sc, sc, sc)),
+				Vector3(rng.randf_range(x0 + 0.18, x1 - 0.18),
+					0.10 + 0.21 * sc - 0.05,
+					rng.randf_range(z0 + 0.18, z1 - 0.18))))
+			tuft_cols.append(tuft_straw.lerp(tuft_green, rng.randf()))
+	var tuft_mesh := CylinderMesh.new()
+	tuft_mesh.top_radius = 0.02
+	tuft_mesh.bottom_radius = 0.09
+	tuft_mesh.height = 0.42
+	tuft_mesh.radial_segments = 7
+	_stage_a_multimesh(beds, "Tufts", tuft_mesh, tuft_tfs, tuft_cols)
+
+	# --- Flowering accents: small dot clusters at shrub bases,
+	# one restrained colour per cluster (white, lavender,
+	# muted coral, soft yellow - the feed's planting palette).
+	var flower_pal: Array = [Color(0.92, 0.90, 0.85), Color(0.62, 0.55, 0.78),
+		Color(0.80, 0.45, 0.38), Color(0.85, 0.72, 0.35)]
+	var flower_tfs: Array = []
+	var flower_cols: Array = []
+	for pt: Vector3 in shrub_pts:
+		if rng.randf() > 0.65:
+			continue
+		var fc: Color = flower_pal[rng.randi_range(0, flower_pal.size() - 1)]
+		var n_dots: int = rng.randi_range(4, 7)
+		for i: int in n_dots:
+			var off := Vector3(rng.randf_range(-0.34, 0.34), 0.0,
+				rng.randf_range(-0.34, 0.34))
+			if off.length() > 0.36:
+				continue
+			var sc: float = rng.randf_range(0.8, 1.3)
+			flower_tfs.append(Transform3D(
+				Basis.from_euler(Vector3.ZERO).scaled(Vector3(sc, sc, sc)),
+				Vector3(pt.x + off.x, rng.randf_range(0.16, 0.36), pt.z + off.z)))
+			flower_cols.append(fc.lightened(rng.randf_range(0.0, 0.15)))
+	var flower_mesh := SphereMesh.new()
+	flower_mesh.radius = 0.035
+	flower_mesh.height = 0.07
+	flower_mesh.radial_segments = 6
+	flower_mesh.rings = 4
+	_stage_a_multimesh(beds, "Flowers", flower_mesh, flower_tfs, flower_cols)
+
+
+func _build_stage_a_trees(parent: Node, rng: RandomNumberGenerator) -> void:
+	var trees := Node3D.new()
+	trees.name = "Trees"
+	parent.add_child(trees)
+	# Yard trees' forms, one shared trunk and one shared unit
+	# canopy; the canopies wear the sway shader (see
+	# sway_canopy.gdshader) - the ONLY thing in the yard that
+	# moves, and it moves on the GPU.
+	var trunk_mat := _mat(Color(0.35, 0.25, 0.16))
+	var trunk_mesh := CylinderMesh.new()
+	trunk_mesh.top_radius = 0.14
+	trunk_mesh.bottom_radius = 0.22
+	trunk_mesh.height = 2.2
+	trunk_mesh.radial_segments = 8
+	var canopy_mesh := SphereMesh.new()
+	canopy_mesh.radius = 1.0
+	canopy_mesh.height = 2.0
+	canopy_mesh.radial_segments = 10
+	canopy_mesh.rings = 7
+	var sway_shader: Shader = load("res://scripts/sway_canopy.gdshader")
+	var leaf_mats: Array = []
+	for c: Color in [Color(0.22, 0.42, 0.18), Color(0.27, 0.48, 0.21)]:
+		var sm := ShaderMaterial.new()
+		sm.shader = sway_shader
+		sm.set_shader_parameter("albedo", c)
+		leaf_mats.append(sm)
+	var blobs: Array = [
+		[Vector3(0.0, 3.1, 0.0), 1.6],
+		[Vector3(0.85, 2.55, 0.3), 1.1],
+		[Vector3(-0.8, 2.65, -0.35), 1.05],
+	]
+	var spots: Array = stage_a_tree_spots()
+	var tree_i: int = 0
+	for spot: Array in spots:
+		tree_i += 1
+		var tp: Vector3 = spot[0]
+		var sc: float = float(spot[1])
+		var tree := Node3D.new()
+		tree.name = "BGTree%d" % tree_i
+		tree.position = tp
+		# A whisper of per-tree yaw so the shared blob layout
+		# never reads as stamped copies down the line.
+		tree.rotation.y = rng.randf_range(0.0, TAU)
+		trees.add_child(tree)
+		var trunk := MeshInstance3D.new()
+		trunk.name = "Trunk"
+		trunk.mesh = trunk_mesh
+		trunk.material_override = trunk_mat
+		trunk.position = Vector3(0.0, 1.1 * sc, 0.0)
+		trunk.scale = Vector3.ONE * sc
+		tree.add_child(trunk)
+		var blob_i: int = 0
+		for blob: Array in blobs:
+			blob_i += 1
+			var bp: Vector3 = blob[0]
+			var br: float = float(blob[1]) * sc
+			var can := MeshInstance3D.new()
+			can.name = "Canopy"
+			can.mesh = canopy_mesh
+			var lm: Material = leaf_mats[(tree_i + blob_i) % leaf_mats.size()]
+			can.material_override = lm
+			can.position = bp * sc
+			can.scale = Vector3.ONE * br
+			tree.add_child(can)
+
 
 func _build_rig() -> void:
 	origin = XROrigin3D.new()
