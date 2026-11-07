@@ -115,6 +115,20 @@ var _slide_prev_valid: bool = false
 # family tag that rides above the held shoe naming the grip
 # position (ThrowMath.GRIP_POSITIONS). Visible only while a
 # shoe is held; gone the instant it is released.
+# Fix Pass 27: ONE uniform pixel size for all seven grips (the
+# label must not pulse as the cycle walks). Sized from the
+# LONGEST label in the set - "FAR SHANK · HEEL · 1⅜ TURN ·
+# REVERSE", 904 fallback-font units at font size 48: at the
+# old 0.00085 it rendered 0.768 m wide and dominated Chris's
+# view at arm's length (his headset shot, 2026-11-07); at
+# 0.00051 (0.60x) it renders 0.461 m, inside the ~0.50 m cap,
+# with the cap height still ~2.4 cm - effortlessly readable
+# at arm's length. The hint line shares the pixel size (its
+# smaller read comes from its font size, 30 vs 48) and its
+# ride offset scales by the same factor, so the two lines
+# keep their Fix Pass 22 proportions exactly.
+const GRIP_LABEL_PIXEL_SIZE: float = 0.00051
+const GRIP_HINT_OFFSET_Y: float = -0.037 # -0.062 at 0.00085, x0.60
 var grip_label: Label3D = null
 # Fix Pass 22: a small second line under the grip name while
 # a shoe is held - the cycle's discoverability lives on the
@@ -1504,7 +1518,7 @@ func _build_grip_label() -> void:
 	grip_label = Label3D.new()
 	grip_label.name = "GripLabel"
 	grip_label.font_size = 48
-	grip_label.pixel_size = 0.00085
+	grip_label.pixel_size = GRIP_LABEL_PIXEL_SIZE
 	grip_label.modulate = Color(1.0, 0.93, 0.75)
 	grip_label.outline_size = 8
 	grip_label.outline_modulate = Color(0.1, 0.07, 0.03)
@@ -1520,7 +1534,7 @@ func _build_grip_label() -> void:
 	grip_hint_label = Label3D.new()
 	grip_hint_label.name = "GripHintLabel"
 	grip_hint_label.font_size = 30
-	grip_hint_label.pixel_size = 0.00085
+	grip_hint_label.pixel_size = GRIP_LABEL_PIXEL_SIZE
 	grip_hint_label.modulate = Color(1.0, 0.93, 0.75, 0.85)
 	grip_hint_label.outline_size = 6
 	grip_hint_label.outline_modulate = Color(0.1, 0.07, 0.03)
@@ -1528,7 +1542,7 @@ func _build_grip_label() -> void:
 	grip_hint_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	grip_hint_label.no_depth_test = true
 	grip_hint_label.text = "A/X - CHANGE GRIP"
-	grip_hint_label.position = Vector3(0.0, -0.062, 0.0)
+	grip_hint_label.position = Vector3(0.0, GRIP_HINT_OFFSET_Y, 0.0)
 	grip_label.add_child(grip_hint_label)
 
 

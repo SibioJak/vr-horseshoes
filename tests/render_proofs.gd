@@ -31,6 +31,10 @@ extends SceneTree
 ##     walked across the shoe to FAR SHANK · MID, the label
 ##     naming the reverse grip and the shoe seated the other
 ##     way (opening flipped vs the home hold).
+##   proofs/grip_far_heel.png - the Fix Pass 27 clamp proof:
+##     one more cycle step to FAR SHANK · HEEL, the LONGEST
+##     label in the set, at the same camera as grip_far.png -
+##     the whole string inside the frame at the clamped size.
 ##   proofs/insert_view.png - the Fix Pass 20 insert cam UP at a
 ##     round's end: the live pit closeup (all four settled shoes
 ##     parked around the stake, one dud wide) over the round's
@@ -348,6 +352,38 @@ func _run() -> void:
 	await settle(4)
 	await snap(cam_b3, "res://proofs/grip_far.png")
 	cam_b3.queue_free()
+
+	# --- Proof B4: the longest label at the clamped size ---
+	# (Fix Pass 27). One more X press walks to FAR SHANK ·
+	# HEEL - the longest string the label can ever show. The
+	# FP26 shot above filled Chris's headset view with the
+	# MID string at the old size (0.768 m wide for HEEL); the
+	# clamped label must carry the whole HEEL string at the
+	# same camera, and its measured width must sit inside the
+	# ~0.50 m cap (font metrics, the standing method).
+	set_button(&"left_hand", &"ax_button", true)
+	await settle(5)
+	set_button(&"left_hand", &"ax_button", false)
+	await settle(5)
+	check(main._grip_index() == 6
+		and main.grip_label.text == "FAR SHANK · HEEL · 1⅜ TURN · REVERSE",
+		"the circuit walks on to FAR SHANK · HEEL, the longest label (got idx %d / '%s')"
+		% [main._grip_index(), main.grip_label.text])
+	var fb27p: Font = ThemeDB.fallback_font
+	var w27p: float = fb27p.get_string_size(main.grip_label.text,
+		HORIZONTAL_ALIGNMENT_LEFT, -1.0, main.grip_label.font_size).x * main.grip_label.pixel_size
+	check(w27p <= 0.50,
+		"FP27: the longest grip label measures inside the clamp (%.3f m <= 0.50 m)" % w27p)
+	var shoe_pos4: Vector3 = main.shoe.global_position
+	var cam_b4 := Camera3D.new()
+	cam_b4.fov = 70.0
+	cam_b4.position = shoe_pos4 + Vector3(0.45, 0.25, 0.62)
+	main.add_child(cam_b4)
+	cam_b4.look_at(shoe_pos4 + Vector3(0.0, 0.05, 0.0), Vector3.UP)
+	cam_b4.current = true
+	await settle(4)
+	await snap(cam_b4, "res://proofs/grip_far_heel.png")
+	cam_b4.queue_free()
 
 	# --- Proof C: locomotion through the REAL tracker stick inputs ---
 	# (the same "primary" action the headset's thumbsticks feed).

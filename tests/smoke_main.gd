@@ -1337,6 +1337,28 @@ func _run() -> void:
 	check(main._grip_index() == 1 and main.grip_label.text == "SHANK · TOE · 1⅛ TURN",
 		"FP22: the HOLDING hand's own button cycles too - A or X, either hand (got '%s')"
 		% main.grip_label.text)
+	# Fix Pass 27: the label is CLAMPED - one uniform size for
+	# all seven grips (it must not pulse as the cycle walks),
+	# sized from the longest string so even FAR SHANK · HEEL
+	# fits inside ~0.50 m at the shoe. At the pre-FP27 size
+	# (0.00085) that string rendered 0.768 m wide and filled
+	# Chris's view. Font metrics, the board guard's own method.
+	var fb27: Font = ThemeDB.fallback_font
+	var w27_worst: float = 0.0
+	for i27: int in ThrowMath.grip_position_count():
+		var p27: Dictionary = ThrowMath.grip_position(i27)
+		var lw27: float = fb27.get_string_size(String(p27["label"]),
+			HORIZONTAL_ALIGNMENT_LEFT, -1.0, main.grip_label.font_size).x * main.grip_label.pixel_size
+		w27_worst = maxf(w27_worst, lw27)
+	check(is_equal_approx(main.grip_label.pixel_size, main.GRIP_LABEL_PIXEL_SIZE)
+		and is_equal_approx(main.grip_hint_label.pixel_size, main.GRIP_LABEL_PIXEL_SIZE),
+		"FP27: one uniform label size for name and hint (%.5f)" % main.grip_label.pixel_size)
+	check(w27_worst <= 0.50,
+		"FP27: the longest grip label fits the clamp (worst %.3f m <= 0.50 m)" % w27_worst)
+	check(main.grip_hint_label.font_size < main.grip_label.font_size
+		and is_equal_approx(main.grip_hint_label.position.y, main.GRIP_HINT_OFFSET_Y),
+		"FP27: the hint keeps its proportions - smaller font, scaled ride offset (%.3f)"
+		% main.grip_hint_label.position.y)
 	# (c) A thrown cycled grip lands with its declared count:
 	# walk to SHANK · MID and pitch its 1-1/4 through the
 	# production release; the cache and the throw record must
