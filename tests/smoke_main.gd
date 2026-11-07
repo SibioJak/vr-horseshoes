@@ -125,10 +125,19 @@ func sightline_dist(p: Vector3) -> float:
 ## presenting FACE-ON to the spot. Both slots stay outside
 ## the stance box (|x| <= 0.85 in the box's old court-centre
 ## terms, line z +/- 0.40) and within a reach-over.
+## Stage B re-derivation (the yard pass): the 40 ft racks
+## left the line for the patio behind it - slot 0 now stands
+## STAND_BACK_Z behind the line, its spot reach 1.63-1.80 m:
+## past any arm, inside the re-derived LONG_ARM_RADIUS that
+## serves it (the FP25 far tier is now the station's grab).
+## The FP19 law survives untouched at the 30 ft peg, which
+## did not move; the face-on and down-lane-step laws hold at
+## both lines.
 func check_rack(line_ft: int, is_ai: bool) -> void:
 	var lz: float = main.line_z_for_ft(line_ft)
 	var side: float = main.station_side(is_ai)
 	var who: String = "AI" if is_ai else "player"
+	var on_patio: bool = line_ft == 40
 	var spot: Vector2 = Vector2(main.spot_pos(line_ft, is_ai).x, lz)
 	for idx: int in [0, 1]:
 		var rp: Vector3 = main.rack_slot_tf(line_ft, is_ai, idx).origin
@@ -138,22 +147,37 @@ func check_rack(line_ft: int, is_ai: bool) -> void:
 			"FP19: %s rack slot %d at the %d ft line is OUTSIDE the stance box (at %s)"
 			% [who, idx, line_ft, str(rp)])
 		var reach: float = Vector2(rp.x, rp.z).distance_to(spot)
-		check(reach >= 0.90 and reach <= 1.35,
-			"FP19: %s rack slot %d at the %d ft line is a reach-over grab (%.2f m from its spot)"
-			% [who, idx, line_ft, reach])
+		if on_patio:
+			check(reach >= 1.55 and reach <= 1.90 and reach <= main.LONG_ARM_RADIUS,
+				"Stage B: %s rack slot %d at the 40 ft line is a long-arm grab from its spot (%.2f m, radius %.2f)"
+				% [who, idx, reach, main.LONG_ARM_RADIUS])
+		else:
+			check(reach >= 0.90 and reach <= 1.35,
+				"FP19: %s rack slot %d at the %d ft line is a reach-over grab (%.2f m from its spot)"
+				% [who, idx, line_ft, reach])
 	var rp0: Vector3 = main.rack_slot_tf(line_ft, is_ai, 0).origin
 	var rp1: Vector3 = main.rack_slot_tf(line_ft, is_ai, 1).origin
-	check(absf(rp0.z - lz) < 0.05,
-		"FP19: %s rack at the %d ft line stands AT the line, not behind the player (dz %.2f)"
-		% [who, line_ft, rp0.z - lz])
+	if on_patio:
+		check(absf((rp0.z - lz) - main.STAND_BACK_Z) < 0.05,
+			"Stage B: %s rack at the 40 ft line stands BEHIND the line on the patio (slot 0 %.2f m back)"
+			% [who, rp0.z - lz])
+	else:
+		check(absf(rp0.z - lz) < 0.05,
+			"FP19: %s rack at the %d ft line stands AT the line, not behind the player (dz %.2f)"
+			% [who, line_ft, rp0.z - lz])
 	check(signf(rp0.x) == side
 		and absf(absf(rp0.x) - (absf(spot.x) + main.STAND_SIDE_X)) < 0.05,
 		"FP19: %s rack at the %d ft line sits on its owner's side, a reach-over outboard of its spot (x %.2f)"
 		% [who, line_ft, rp0.x])
 	var reach0: float = Vector2(rp0.x, rp0.z).distance_to(spot)
-	check(reach0 >= 1.15 and reach0 <= 1.30,
-		"FP19: %s rack slot 0 at the %d ft line sits in the 1.15-1.30 m band from its spot (%.2f m)"
-		% [who, line_ft, reach0])
+	if on_patio:
+		check(reach0 >= 1.70 and reach0 <= 1.90,
+			"Stage B: %s rack slot 0 at the 40 ft line sits in the 1.70-1.90 m band from its spot (%.2f m)"
+			% [who, reach0])
+	else:
+		check(reach0 >= 1.15 and reach0 <= 1.30,
+			"FP19: %s rack slot 0 at the %d ft line sits in the 1.15-1.30 m band from its spot (%.2f m)"
+			% [who, line_ft, reach0])
 	check(absf(rp1.x - rp0.x) < 0.01
 		and absf((rp1.z - rp0.z) - (-1.0) * main.SLOT_STEP) < 0.01,
 		"FP19: %s rack at the %d ft line steps slot 1 DOWN-LANE along the turned rail (step %s)"
@@ -992,7 +1016,7 @@ func _run() -> void:
 			for ch: Node in beds_node.get_children():
 				if ch is MeshInstance3D:
 					n_mulch += 1
-			check(n_mulch == 3, "Stage A: three mulch beds (%d)" % n_mulch)
+			check(n_mulch == 4, "Stage A: four mulch beds (%d)" % n_mulch)
 			var stones: Node = beds_node.get_node_or_null("Stones")
 			check(stones != null and (stones as MultiMeshInstance3D).multimesh.instance_count >= 200,
 				"Stage A: stone edging rings the beds (%d stones)"
@@ -1002,9 +1026,14 @@ func _run() -> void:
 				var sh: Node = beds_node.get_node_or_null("Shrubs%d" % fi)
 				if sh != null:
 					n_shrubs_a += (sh as MultiMeshInstance3D).multimesh.instance_count
-			check(n_shrubs_a >= 24, "Stage A: the beds are planted with shrubs (%d)" % n_shrubs_a)
+			# Stage B re-derivation: the beds shrank (the
+			# patio took the rear run, the gate gap took a
+			# bite, the fountain nook clears its circle), so
+			# the planting floors drop with them - shrubs 28
+			# -> 23 planted, tufts 146 -> ~119.
+			check(n_shrubs_a >= 20, "Stage A: the beds are planted with shrubs (%d)" % n_shrubs_a)
 			var tufts: Node = beds_node.get_node_or_null("Tufts")
-			check(tufts != null and (tufts as MultiMeshInstance3D).multimesh.instance_count >= 120,
+			check(tufts != null and (tufts as MultiMeshInstance3D).multimesh.instance_count >= 110,
 				"Stage A: ornamental grass tufts fill the beds (%d)"
 				% ((tufts as MultiMeshInstance3D).multimesh.instance_count if tufts != null else 0))
 			var flowers: Node = beds_node.get_node_or_null("Flowers")
@@ -1029,6 +1058,54 @@ func _run() -> void:
 								or float(m.get_shader_parameter("sway_amp")) <= 0.0:
 							sway_ok = false
 			check(sway_ok, "Stage A: every background canopy wears the sway shader")
+
+	# --- Stage B: the yard pass (Stage 2, second instalment) ---
+	# The patio, house rear and objects are VISUAL ONLY - the
+	# structural guards: the stage exists dressed, no collision
+	# hides anywhere under it, the house wall stands at the
+	# patio's rear edge, and the named objects are all built.
+	# (Footprints are guarded numerically in the logic suite.)
+	var stage_b: Node = null
+	if main.scenery_root != null:
+		stage_b = main.scenery_root.get_node_or_null("StageB")
+	check(stage_b != null, "Stage B: the yard pass exists")
+	if stage_b != null:
+		var n_colliders_b: int = 0
+		var stack_b: Array = [stage_b]
+		while not stack_b.is_empty():
+			var ndb: Node = stack_b.pop_back()
+			if ndb is CollisionObject3D or ndb is CollisionShape3D:
+				n_colliders_b += 1
+			for chb: Node in ndb.get_children():
+				stack_b.append(chb)
+		check(n_colliders_b == 0,
+			"Stage B: no collision anywhere in the yard pass (%d found)" % n_colliders_b)
+		var patio_n: Node = stage_b.get_node_or_null("Patio")
+		check(patio_n != null, "Stage B: the patio is built")
+		if patio_n != null:
+			var pavers: Node = patio_n.get_node_or_null("Pavers")
+			check(pavers != null and (pavers as MultiMeshInstance3D).multimesh.instance_count >= 100,
+				"Stage B: the patio is paved (%d pavers)"
+				% ((pavers as MultiMeshInstance3D).multimesh.instance_count if pavers != null else 0))
+			var house_n: Node = patio_n.get_node_or_null("HouseRear")
+			check(house_n != null and house_n.get_child_count() >= 15,
+				"Stage B: the house rear stands dressed (%d pieces)"
+				% (house_n.get_child_count() if house_n != null else 0))
+			for obj_name: String in ["Grill", "Table", "Cooler"]:
+				check(patio_n.get_node_or_null(obj_name) != null,
+					"Stage B: the patio's %s is built" % obj_name)
+			var n_pots: int = 0
+			var n_chairs: int = 0
+			for chp: Node in patio_n.get_children():
+				if chp.name.begins_with("Pot"):
+					n_pots += 1
+			var table_n: Node = patio_n.get_node_or_null("Table")
+			if table_n != null:
+				for cht: Node in table_n.get_children():
+					if cht.name.begins_with("Chair"):
+						n_chairs += 1
+			check(n_pots == 2, "Stage B: potted plants flank the back door (%d)" % n_pots)
+			check(n_chairs == 3, "Stage B: three chairs ring the patio table (%d)" % n_chairs)
 
 	var sky_ok: bool = false
 	for child: Node in main.get_children():
@@ -1912,6 +1989,34 @@ func _run() -> void:
 	await pulse_button("B")
 	check(main.mode == "PRACTICE" and main.state == "STAND",
 		"FP25: back to practice after the refusal legs")
+	# (i2) Stage B: the long-arm FROM THE A-SEAT. The FP20
+	# continue seats the camera 0.55 m behind the line, and
+	# the stations now stand on the patio behind the seated
+	# player - the far tier must still serve the seat (that
+	# reach is what LONG_ARM_RADIUS was re-derived from).
+	# Seat the origin through the production seat, hands at
+	# throwing height a hand's breadth ahead of the seated
+	# head, and squeeze with each hand in turn.
+	main._seat_behind_line()
+	await frames(3)
+	var seat_z: float = main.game_line_z() + 0.55
+	check(absf(main.cam.global_position.z - seat_z) < 0.05,
+		"Stage B: the seat puts the camera 0.55 m behind the line (cam z %.3f)"
+		% main.cam.global_position.z)
+	var seat_hand_r := Vector3(spot40.x + 0.25, 0.85, seat_z + 0.15)
+	var seat_hand_l := Vector3(spot40.x - 0.25, 0.85, seat_z + 0.15)
+	var slot0_far: Vector3 = main.rack_slot_tf(40, false, 0).origin
+	check(seat_hand_l.distance_to(slot0_far) <= main.LONG_ARM_RADIUS,
+		"Stage B: the far seat hand sits inside the long-arm radius of slot 0 (%.2f m of %.2f)"
+		% [seat_hand_l.distance_to(slot0_far), main.LONG_ARM_RADIUS])
+	check(await long_arm_grab(main, "R", seat_hand_r),
+		"Stage B: a squeeze from the A-seat pulls a station shoe into the right hand")
+	check(await drop_and_restock(main, "R"), "Stage B: the seat grab's shoe drops and restocks")
+	main.test_hand_tf.erase("R")
+	check(await long_arm_grab(main, "L", seat_hand_l),
+		"Stage B: a squeeze from the A-seat pulls a station shoe into the left hand too")
+	check(await drop_and_restock(main, "L"), "Stage B: the left seat grab's shoe drops and restocks")
+	main.test_hand_tf.erase("L")
 	# (j) The peg pair at the short line (the FP7 walk):
 	# the long-arm works there too, then the yard is left
 	# as the next section expects it - player home, shoe

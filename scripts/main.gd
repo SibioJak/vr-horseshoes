@@ -49,6 +49,16 @@ const STANCE_HALF_DEPTH: float = 0.40
 const PLAYER_SPOT_X: float = 0.8
 const AI_SPOT_X: float = -0.8
 const STAND_SIDE_X: float = 1.22 # station slot 0 outboard of the owner's spot (FP11: 1.0 m; FP13: 1.22 m; FP19: measured from the spot)
+# Stage 2 / Stage B (the yard pass): how far BEHIND the
+# 40 ft foul line the game stations stand, slot 0 measured.
+# Chris walked the planted yard and ruled the stations out
+# of the court ("for now, stations should be moved behind
+# the line. right now they're in the middle") - they stand
+# on the patio now, so slot 0 sits 1.32 m behind the line
+# and the rail's midpoint - the station's centre, between
+# its two slots - sits 1.20 m behind it. The 30 ft practice
+# peg does NOT move: the FP7 home stays at its own line.
+const STAND_BACK_Z: float = 1.32
 const STAND_SHOE_Y: float = 0.785
 const SLOT_STEP: float = 0.24 # pair slots along a rail stand (the rail runs down-lane since Fix Pass 13)
 const PLAYER_PAIR_COLOR := Color(0.92, 0.75, 0.16) # yellow (photo feed)
@@ -62,7 +72,19 @@ const CANDIDATE_RADIUS: float = 0.14
 # the hand at the spot) and nothing further: the lines are
 # ~3 m apart and the far end is ~12 m away, so nothing across
 # the court can ever be in range.
-const LONG_ARM_RADIUS: float = 1.6
+# Stage B re-derivation (the 40 ft stations moved behind the
+# line onto the patio, slot 0 now at (spot.x + 1.22, 0.785,
+# FOUL_40_Z + 1.32)): the governing reach is the LEFT hand at
+# the throwing spot (0.55, 0.85, FOUL_40_Z) to the farthest
+# player slot - slot 0 - which measures 1.98 m. From the
+# A-continue seat (camera 0.55 m behind the line) the same
+# hand measures 1.60-1.66 m to slot 0 depending on how far
+# ahead of the face it hangs. The radius is the governing
+# 1.98 m plus a working margin - and it still reaches
+# nothing across the court: the 30 ft peg slot sits 3.19 m
+# from the 40 ft spot hand, the 40 ft station 4.47 m from
+# the 30 ft spot hand, the pit ~12 m.
+const LONG_ARM_RADIUS: float = 2.15
 const LONG_ARM_HOP_SEC: float = 0.2 # the hop into the hand
 const BOARD_POS := Vector3(-2.4, 0.0, -16.2) # Fix Pass 10: beyond the pit, left of the stake
 const BOARD_YAW_DEG: float = 10.0 # face turned back at the pitching end
@@ -428,6 +450,10 @@ static func make_rack_tf(line_ft: int, is_ai: bool) -> Transform3D:
 	# the hang's yaw solve below is the FP13 one with travel
 	# pinned to -1.
 	#
+	# Stage B (the yard pass): "at the line's own z" now holds
+	# only for the 30 ft peg - the 40 ft racks stand back on
+	# the patio by STAND_BACK_Z (see the solve below).
+	#
 	# The yaw is solved per rack (owner's side) so the face
 	# normal (the hang basis applied to +Y) points across the
 	# court at the stance with FP11's slight down-lane slant
@@ -438,10 +464,18 @@ static func make_rack_tf(line_ft: int, is_ai: bool) -> Transform3D:
 	var side: float = station_side(is_ai)
 	var spot: Vector3 = spot_pos(line_ft, is_ai)
 	var yaw: float = atan2(0.8660254 * side, 0.5)
+	# Stage B: at the 40 ft line the rack (and with it the
+	# whole station, built on this origin) stands BACK by
+	# STAND_BACK_Z, on the patio behind the line; the 30 ft
+	# peg rack keeps the line's own z. The yaw solve is
+	# unchanged: from behind the line the spot direction only
+	# steepens toward the solved slant, so the hang still
+	# presents face-on (the smoke suite asserts it).
+	var back: float = STAND_BACK_Z if line_ft == 40 else 0.0
 	return Transform3D(
 		Basis.from_euler(Vector3(deg_to_rad(-78.0), yaw, 0.0)),
 		Vector3(spot.x + side * STAND_SIDE_X,
-			STAND_SHOE_Y, spot.z))
+			STAND_SHOE_Y, spot.z + back))
 
 
 ## World transform of one slot on one owner's rack. Each rack
@@ -722,13 +756,17 @@ func _build_world() -> void:
 	_box(self, Vector3(0.0, 0.006, FOUL_30_Z), Vector3(1.6, 0.012, 0.07), _mat(Color(0.92, 0.92, 0.90)))
 
 	# The pitching end's furniture (Fix Pass 19): one BUBBA
-	# station per owner flanking the pitching area at the
-	# 37 ft line - the player's on his right, the AI's on its
-	# left, each a reach-over outboard of its owner's pitching
-	# spot (the FP13 law, translated to the spots) - and ONE
-	# slim peg post at the 27 ft line for the player's
-	# practice pair (the FP18 pattern). The far end has no
-	# stations any more: nobody pitches from there.
+	# station per owner flanking the pitching area - the
+	# player's on his right, the AI's on its left, each on
+	# its owner's side of its pitching spot (the FP13 law,
+	# translated to the spots) - and ONE slim peg post at
+	# the 27 ft line for the player's practice pair (the
+	# FP18 pattern). The far end has no stations any more:
+	# nobody pitches from there.
+	# Stage B: the two stations no longer stand AT the
+	# 37 ft line - their rack origins (and so the furniture
+	# built on them) stand back on the patio by
+	# STAND_BACK_Z. The peg post stays at its line.
 	_build_station(stand_tfs[40].origin, station_side(false), -1.0)
 	_build_station(ai_stand_tfs[40].origin, station_side(true), -1.0)
 	_build_peg_post(stand_tfs[30].origin, station_side(false), -1.0)
@@ -1148,6 +1186,7 @@ func _build_scenery() -> void:
 			row.add_child(shrub)
 
 	_build_stage_a()
+	_build_stage_b()
 
 
 ## Stage 2 / Stage A - THE GROUND (Chris's living perimeter,
@@ -1164,18 +1203,29 @@ func _build_scenery() -> void:
 ## against the corridor, the stations, the peg and the pit.
 ## The BUBBA stations, the peg, the board and the berms are
 ## untouched in position and function - the stations' fate is
-## Chris's verdict on this stage's look.
+## Chris's verdict on this stage's look. (Stage B delivered
+## that verdict: the stations moved behind the line onto the
+## patio, and the beds were trimmed to the patio's front
+## corners with a gap for the gate path - see Stage B.)
 
 ## Bed rectangles as [x0, z0, x1, z1]. Side beds sit outside
-## the berm rows (berm outer toe |x| 2.60; station timbers
-## reach |x| 2.54, the peg post 2.31 - both clear of the inner
-## edge at 2.78); the far bed crosses behind the pit, clear of
-## the back tie's outer face (z -13.35) and of the board
-## (z -16.2), with grass gaps both sides of it.
+## the berm rows (berm outer toe |x| 2.60; the peg post
+## reaches |x| 2.31 - both clear of the inner edge at 2.78);
+## the far bed crosses behind the pit, clear of the back
+## tie's outer face (z -13.35) and of the board (z -16.2),
+## with grass gaps both sides of it.
+## Stage B (the yard pass) trims the side beds twice: they
+## now END at the patio's front corners (rear edge z -0.60 -
+## the slab takes the whole strip behind the line, and the
+## stations that used to stand in the beds' rear reach now
+## stand on the patio), and the RIGHT bed carries a gap at
+## z -6.55..-5.45 where the gate path crosses (see Stage B's
+## gate, z centre -6.0).
 static func stage_a_bed_rects() -> Array:
 	return [
-		[-4.60, -13.85, -2.78, 1.80],
-		[2.78, -13.85, 4.60, 1.80],
+		[-4.60, -13.85, -2.78, -0.60],
+		[2.78, -13.85, 4.60, -6.55],
+		[2.78, -5.45, 4.60, -0.60],
 		[-4.60, -15.70, 4.60, -13.85],
 	]
 
@@ -1259,25 +1309,27 @@ func _build_stage_a_beds(parent: Node, rng: RandomNumberGenerator) -> void:
 			Vector3(bx1 - bx0, 0.10, bz1 - bz0), mulch_mat)
 
 	# --- Stone edging: irregular low-poly stones walked along
-	# the U's inner and outer edges plus the two end caps at
-	# the pitching end - the design feed's hand-laid border.
-	# One unit-sphere mesh squashed per stone; grey varies per
-	# instance.
-	var inner_line: Array = [Vector2(2.78, 1.80), Vector2(2.78, -13.85),
-		Vector2(-2.78, -13.85), Vector2(-2.78, 1.80)]
-	var outer_line: Array = [Vector2(4.60, 1.80), Vector2(4.60, -15.70),
-		Vector2(-4.60, -15.70), Vector2(-4.60, 1.80)]
-	var stone_segs: Array = []
-	for li: int in inner_line.size() - 1:
-		var ia: Vector2 = inner_line[li]
-		var ib: Vector2 = inner_line[li + 1]
-		stone_segs.append([ia, ib])
-	for li: int in outer_line.size() - 1:
-		var oa: Vector2 = outer_line[li]
-		var ob: Vector2 = outer_line[li + 1]
-		stone_segs.append([oa, ob])
-	stone_segs.append([Vector2(2.78, 1.80), Vector2(4.60, 1.80)])
-	stone_segs.append([Vector2(-4.60, 1.80), Vector2(-2.78, 1.80)])
+	# the beds' edges - inner and outer runs plus end caps -
+	# the design feed's hand-laid border. One unit-sphere
+	# mesh squashed per stone; grey varies per instance.
+	# Stage B: the runs are an explicit segment list matching
+	# the trimmed bed table above - the side beds end at the
+	# patio's front corners (caps at z -0.60) and the right
+	# bed's gate gap gets caps of its own (z -5.45 / -6.55).
+	var stone_segs: Array = [
+		[Vector2(2.78, -0.60), Vector2(2.78, -5.45)],
+		[Vector2(2.78, -6.55), Vector2(2.78, -13.85)],
+		[Vector2(2.78, -13.85), Vector2(-2.78, -13.85)],
+		[Vector2(-2.78, -13.85), Vector2(-2.78, -0.60)],
+		[Vector2(4.60, -0.60), Vector2(4.60, -5.45)],
+		[Vector2(4.60, -6.55), Vector2(4.60, -15.70)],
+		[Vector2(4.60, -15.70), Vector2(-4.60, -15.70)],
+		[Vector2(-4.60, -15.70), Vector2(-4.60, -0.60)],
+		[Vector2(2.78, -0.60), Vector2(4.60, -0.60)],
+		[Vector2(-4.60, -0.60), Vector2(-2.78, -0.60)],
+		[Vector2(2.78, -5.45), Vector2(4.60, -5.45)],
+		[Vector2(2.78, -6.55), Vector2(4.60, -6.55)],
+	]
 	var stone_tfs: Array = []
 	var stone_cols: Array = []
 	for seg: Array in stone_segs:
@@ -1482,6 +1534,312 @@ func _build_stage_a_trees(parent: Node, rng: RandomNumberGenerator) -> void:
 			can.position = bp * sc
 			can.scale = Vector3.ONE * br
 			tree.add_child(can)
+
+
+## Stage 2 / Stage B - THE YARD PASS (Chris's five-item load
+## from walking the planted yard, 2026-11-07): the stations
+## move behind the line onto a new PATIO at the rear of the
+## house (items 1-2, see STAND_BACK_Z and _build_patio); a
+## stacked-rock FOUNTAIN takes a nook in the left bed (item
+## 3); THE GATE opens the right fence mid-yard where the
+## neighbours will come through (item 4); and PHINEAS GAGE,
+## the miner '49er, takes up residence in the far-left
+## corner (item 5). Like Stage A everything here is VISUAL
+## ONLY - no collision anywhere, no per-frame script - and
+## the layout lives in the static tables below so the logic
+## suite can guard every footprint numerically.
+
+## The patio slab as [x0, z0, x1, z1]: behind the 40 ft foul
+## line (front edge 0.36 m behind it), back to the house's
+## rear wall. Both stations stand on it (station timber
+## envelopes reach |x| 2.54, z -0.20..0.77).
+static func stage_b_patio_rect() -> Array:
+	return [-3.50, -0.55, 3.50, 4.90]
+
+
+## The house's rear elevation: wall front face at wall_z
+## (the patio's rear edge), spanning half_x, height tall.
+## The back door centres on door_x; windows on window_x.
+static func stage_b_house() -> Dictionary:
+	return {"wall_z": 4.90, "half_x": 4.50, "height": 3.10,
+		"door_x": 1.90, "window_x": [-2.60, 0.20]}
+
+
+## Patio objects as [name, ground position, footprint
+## radius]. Every spot stands on the slab, clear of the
+## walk line from the patio to the foul line (the corridor
+## the guards use: x -0.30..1.50, z -0.55..3.60) and clear
+## of both stations' reach envelopes.
+static func stage_b_object_spots() -> Array:
+	return [
+		["grill", Vector3(-2.55, 0.0, 3.85), 0.55],
+		["table", Vector3(2.52, 0.0, 3.30), 0.95],
+		["cooler", Vector3(-1.35, 0.0, 1.45), 0.35],
+		["pot_a", Vector3(1.05, 0.0, 4.45), 0.30],
+		["pot_b", Vector3(2.75, 0.0, 4.45), 0.30],
+	]
+
+
+## The gate: a gap in the right fence run (x = 13) between
+## the hinge post (z_hinge) and the latch post (z_latch),
+## centred mid-yard at z -6.0. The panel group pivots at
+## the hinge; it stands CLOSED this pass.
+static func stage_b_gate() -> Dictionary:
+	return {"x": 13.0, "z_hinge": -6.75, "z_latch": -5.25}
+
+
+## The fountain's centre: set into the LEFT side bed
+## (bed rect 0), mid-court, a nook interrupting the
+## planting - its basin (radius FOUNTAIN_R) fits inside the
+## bed's width with stone to spare on both sides.
+const STAGE_B_FOUNTAIN_POS := Vector3(-3.69, 0.0, -6.00)
+const STAGE_B_FOUNTAIN_R: float = 0.80
+
+
+## Phineas Gage's corner: the far-left corner at the pit
+## end, standing in the far bed at the left bed's end,
+## facing the court (the stake) - clear of the pit, the
+## board and the board sightline.
+const STAGE_B_PHINEAS_POS := Vector3(-3.85, 0.0, -14.30)
+
+
+func _build_stage_b() -> void:
+	var stage_b := Node3D.new()
+	stage_b.name = "StageB"
+	scenery_root.add_child(stage_b)
+	_build_patio(stage_b)
+
+
+func _build_patio(parent: Node) -> void:
+	var patio := Node3D.new()
+	patio.name = "Patio"
+	parent.add_child(patio)
+	var rect: Array = stage_b_patio_rect()
+	var px0: float = float(rect[0])
+	var pz0: float = float(rect[1])
+	var px1: float = float(rect[2])
+	var pz1: float = float(rect[3])
+	# Grout bed under the pavers: one dark slab the grid
+	# sits on, its top a whisper above the grass (y 0) so
+	# the paver field reads as a laid patio, flush to walk.
+	_box(patio, Vector3((px0 + px1) * 0.5, 0.012, (pz0 + pz1) * 0.5),
+		Vector3(px1 - px0, 0.024, pz1 - pz0), _mat(Color(0.42, 0.39, 0.35)))
+	# Pavers: one MultiMesh of warm stone tiles on a 0.56 m
+	# grid, colour jittered per stone - the Stage A edging's
+	# language, laid flat.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20261108
+	var paver_mesh := BoxMesh.new()
+	paver_mesh.size = Vector3(0.52, 0.018, 0.52)
+	var paver_tfs: Array = []
+	var paver_cols: Array = []
+	var gx: float = px0 + 0.28
+	while gx < px1 - 0.20:
+		var gz: float = pz0 + 0.28
+		while gz < pz1 - 0.20:
+			paver_tfs.append(Transform3D(Basis.IDENTITY,
+				Vector3(gx, 0.030, gz)))
+			var warm: float = rng.randf_range(-0.04, 0.04)
+			paver_cols.append(Color(0.63 + warm, 0.59 + warm, 0.52 + warm * 0.8))
+			gz += 0.56
+		gx += 0.56
+	_stage_a_multimesh(patio, "Pavers", paver_mesh, paver_tfs, paver_cols)
+
+	# --- The house's rear elevation at the patio's back
+	# edge: siding wall, back door, two windows, an eave and
+	# a roofline hint - the yard's low-poly language at
+	# house scale.
+	var house := Node3D.new()
+	house.name = "HouseRear"
+	patio.add_child(house)
+	var hd: Dictionary = stage_b_house()
+	var wall_z: float = float(hd["wall_z"])
+	var half_x: float = float(hd["half_x"])
+	var wall_h: float = float(hd["height"])
+	var siding := _mat(Color(0.78, 0.72, 0.60))
+	var trim := _mat(Color(0.87, 0.84, 0.76))
+	_box(house, Vector3(0.0, wall_h * 0.5, wall_z + 0.20),
+		Vector3(half_x * 2.0, wall_h, 0.40), siding)
+	# Siding grooves: thin shadow lines up the wall face.
+	var groove_mat := _mat(Color(0.69, 0.63, 0.52))
+	var gy: float = 0.55
+	while gy < wall_h - 0.2:
+		_box(house, Vector3(0.0, gy, wall_z - 0.006),
+			Vector3(half_x * 2.0, 0.022, 0.012), groove_mat)
+		gy += 0.50
+	# The back door on its step, trim around it, knob on.
+	var door_x: float = float(hd["door_x"])
+	_box(house, Vector3(door_x, 0.06, wall_z - 0.28),
+		Vector3(1.20, 0.12, 0.55), _mat(Color(0.55, 0.52, 0.47)))
+	_box(house, Vector3(door_x, 1.05, wall_z - 0.025),
+		Vector3(0.95, 2.10, 0.05), _mat(Color(0.24, 0.34, 0.27)))
+	_box(house, Vector3(door_x - 0.53, 1.05, wall_z - 0.012),
+		Vector3(0.09, 2.16, 0.03), trim)
+	_box(house, Vector3(door_x + 0.53, 1.05, wall_z - 0.012),
+		Vector3(0.09, 2.16, 0.03), trim)
+	_box(house, Vector3(door_x, 2.13, wall_z - 0.012),
+		Vector3(1.15, 0.09, 0.03), trim)
+	var knob := MeshInstance3D.new()
+	var knob_mesh := SphereMesh.new()
+	knob_mesh.radius = 0.035
+	knob_mesh.height = 0.07
+	knob_mesh.radial_segments = 8
+	knob_mesh.rings = 6
+	knob.mesh = knob_mesh
+	knob.material_override = _mat(Color(0.55, 0.48, 0.30))
+	knob.position = Vector3(door_x + 0.36, 1.02, wall_z - 0.06)
+	house.add_child(knob)
+	# Two windows: trim frame, glass, a cross of mullions.
+	var glass_mat := _mat(Color(0.60, 0.70, 0.76))
+	var win_xs: Array = hd["window_x"]
+	for wv: Variant in win_xs:
+		var wx: float = float(wv)
+		_box(house, Vector3(wx, 1.75, wall_z - 0.015),
+			Vector3(1.16, 1.16, 0.04), trim)
+		_box(house, Vector3(wx, 1.75, wall_z - 0.030),
+			Vector3(1.02, 1.02, 0.03), glass_mat)
+		_box(house, Vector3(wx, 1.75, wall_z - 0.038),
+			Vector3(0.045, 1.02, 0.012), trim)
+		_box(house, Vector3(wx, 1.75, wall_z - 0.038),
+			Vector3(1.02, 0.045, 0.012), trim)
+	# Eave + roofline hint: a dark overhang and one shallow
+	# slope rising away from the yard.
+	var roof_mat := _mat(Color(0.32, 0.29, 0.27))
+	_box(house, Vector3(0.0, wall_h + 0.10, wall_z + 0.10),
+		Vector3(half_x * 2.0 + 0.60, 0.10, 1.30), roof_mat)
+	var slope: MeshInstance3D = _box(house,
+		Vector3(0.0, wall_h + 0.62, wall_z + 1.05),
+		Vector3(half_x * 2.0 + 0.60, 0.08, 2.30), roof_mat)
+	slope.rotation_degrees = Vector3(-24.0, 0.0, 0.0)
+
+	# --- Patio objects (positions are stage_b_object_spots
+	# data; each builder stands its object on the slab).
+	var spots: Array = stage_b_object_spots()
+	for spot: Array in spots:
+		var oname: String = String(spot[0])
+		var opos: Vector3 = spot[1]
+		match oname:
+			"grill":
+				_build_patio_grill(patio, opos)
+			"table":
+				_build_patio_table(patio, opos)
+			"cooler":
+				_build_patio_cooler(patio, opos)
+			"pot_a":
+				_build_patio_pot(patio, opos, "PotA")
+			"pot_b":
+				_build_patio_pot(patio, opos, "PotB")
+
+
+func _build_patio_grill(parent: Node, pos: Vector3) -> void:
+	var grill := Node3D.new()
+	grill.name = "Grill"
+	grill.position = pos
+	grill.rotation.y = deg_to_rad(24.0)
+	parent.add_child(grill)
+	var dark := _mat(Color(0.16, 0.16, 0.17))
+	var steel := _mat(Color(0.45, 0.46, 0.48))
+	_box(grill, Vector3(0.0, 0.60, 0.0), Vector3(0.62, 0.40, 0.45), dark)
+	_box(grill, Vector3(0.0, 0.86, 0.0), Vector3(0.64, 0.15, 0.47), dark)
+	_box(grill, Vector3(0.0, 0.97, 0.0), Vector3(0.30, 0.03, 0.05), steel)
+	for lx: float in [-0.26, 0.26]:
+		for lz: float in [-0.17, 0.17]:
+			_box(grill, Vector3(lx, 0.20, lz), Vector3(0.04, 0.40, 0.04), steel)
+	_box(grill, Vector3(0.46, 0.74, 0.0), Vector3(0.28, 0.03, 0.40), steel)
+	_box(grill, Vector3(-0.40, 0.30, 0.0), Vector3(0.16, 0.24, 0.30),
+		_mat(Color(0.62, 0.64, 0.66)))
+
+
+func _build_patio_table(parent: Node, pos: Vector3) -> void:
+	var table := Node3D.new()
+	table.name = "Table"
+	table.position = pos
+	parent.add_child(table)
+	var top_mat := _mat(Color(0.85, 0.84, 0.80))
+	var leg_mat := _mat(Color(0.40, 0.40, 0.42))
+	var top := MeshInstance3D.new()
+	var top_mesh := CylinderMesh.new()
+	top_mesh.top_radius = 0.55
+	top_mesh.bottom_radius = 0.55
+	top_mesh.height = 0.04
+	top_mesh.radial_segments = 20
+	top.mesh = top_mesh
+	top.material_override = top_mat
+	top.position = Vector3(0.0, 0.73, 0.0)
+	table.add_child(top)
+	_cyl(table, Vector3(0.0, 0.37, 0.0), 0.035, 0.70, leg_mat)
+	var base := MeshInstance3D.new()
+	var base_mesh := CylinderMesh.new()
+	base_mesh.top_radius = 0.30
+	base_mesh.bottom_radius = 0.32
+	base_mesh.height = 0.035
+	base_mesh.radial_segments = 16
+	base.mesh = base_mesh
+	base.material_override = leg_mat
+	base.position = Vector3(0.0, 0.055, 0.0)
+	table.add_child(base)
+	# Three chairs around it, backs out - angles chosen so
+	# no chair backs into the walk corridor (the yard side
+	# of the table stays open toward the court).
+	var chair_mat := _mat(Color(0.45, 0.50, 0.55))
+	var chair_i: int = 0
+	for ang_deg: float in [35.0, 145.0, 250.0]:
+		chair_i += 1
+		var a: float = deg_to_rad(ang_deg)
+		var cp := Vector3(sin(a), 0.0, cos(a)) * 0.80
+		var chair := Node3D.new()
+		chair.name = "Chair%d" % chair_i
+		chair.position = cp
+		chair.rotation.y = a + PI
+		table.add_child(chair)
+		_box(chair, Vector3(0.0, 0.46, 0.0), Vector3(0.42, 0.04, 0.40), chair_mat)
+		_box(chair, Vector3(0.0, 0.72, 0.21), Vector3(0.42, 0.52, 0.04), chair_mat)
+		_box(chair, Vector3(-0.19, 0.23, 0.17), Vector3(0.04, 0.46, 0.04), chair_mat)
+		_box(chair, Vector3(0.19, 0.23, 0.17), Vector3(0.04, 0.46, 0.04), chair_mat)
+		_box(chair, Vector3(-0.19, 0.23, -0.17), Vector3(0.04, 0.46, 0.04), chair_mat)
+		_box(chair, Vector3(0.19, 0.23, -0.17), Vector3(0.04, 0.46, 0.04), chair_mat)
+
+
+func _build_patio_cooler(parent: Node, pos: Vector3) -> void:
+	var cooler := Node3D.new()
+	cooler.name = "Cooler"
+	cooler.position = pos
+	cooler.rotation.y = deg_to_rad(-12.0)
+	parent.add_child(cooler)
+	_box(cooler, Vector3(0.0, 0.23, 0.0), Vector3(0.55, 0.38, 0.35),
+		_mat(Color(0.88, 0.88, 0.86)))
+	_box(cooler, Vector3(0.0, 0.455, 0.0), Vector3(0.57, 0.07, 0.37),
+		_mat(Color(0.55, 0.65, 0.72)))
+	_box(cooler, Vector3(0.0, 0.50, 0.0), Vector3(0.20, 0.025, 0.10),
+		_mat(Color(0.45, 0.55, 0.64)))
+
+
+func _build_patio_pot(parent: Node, pos: Vector3, node_name: String) -> void:
+	var pot := Node3D.new()
+	pot.name = node_name
+	pot.position = pos
+	parent.add_child(pot)
+	var pot_mesh := CylinderMesh.new()
+	pot_mesh.top_radius = 0.20
+	pot_mesh.bottom_radius = 0.14
+	pot_mesh.height = 0.34
+	pot_mesh.radial_segments = 12
+	var pot_mi := MeshInstance3D.new()
+	pot_mi.mesh = pot_mesh
+	pot_mi.material_override = _mat(Color(0.62, 0.36, 0.24))
+	pot_mi.position = Vector3(0.0, 0.20, 0.0)
+	pot.add_child(pot_mi)
+	var blob := MeshInstance3D.new()
+	var blob_mesh := SphereMesh.new()
+	blob_mesh.radius = 0.24
+	blob_mesh.height = 0.48
+	blob_mesh.radial_segments = 10
+	blob_mesh.rings = 6
+	blob.mesh = blob_mesh
+	blob.material_override = _mat(Color(0.27, 0.48, 0.21))
+	blob.position = Vector3(0.0, 0.55, 0.0)
+	blob.scale = Vector3(1.0, 0.82, 1.0)
+	pot.add_child(blob)
 
 
 func _build_rig() -> void:

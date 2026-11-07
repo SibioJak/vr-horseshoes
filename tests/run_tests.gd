@@ -806,18 +806,24 @@ func rects_overlap(a: Array, b: Array) -> bool:
 func test_stage_a_layout() -> void:
 	var main_script: GDScript = load("res://scripts/main.gd")
 	var beds: Array = main_script.stage_a_bed_rects()
-	check(beds.size() == 3, "Stage A: three planting beds ring the yard (%d)" % beds.size())
+	check(beds.size() == 4, "Stage A: four planting beds ring the yard (%d)" % beds.size())
 	# Keep-out rects [x0, z0, x1, z1], each already carrying
 	# its safety margin: the lane corridor (the apron the FP10
 	# dressing rules keep bare), the pitcher's box zone around
 	# the stake, both stations' timber envelopes, the 30 ft
 	# peg post's envelope, and the pit + ties themselves.
+	# Stage B re-derivation: the stations' envelope moved
+	# back with the stations (behind the line, on the patio -
+	# z -0.36..0.93 now, was -1.62..-0.28 at the line), and
+	# the patio slab itself joins the list: no bed may touch
+	# the slab.
 	var keep_outs: Array = [
 		[-2.30, -11.30, 2.30, 1.60],
 		[-1.22, -13.41, 1.22, -10.98],
-		[-2.62, -1.62, 2.62, -0.28],
+		[-2.62, -0.36, 2.62, 0.93],
 		[1.78, -4.52, 2.58, -3.42],
 		[-0.70, -13.40, 0.70, -10.99],
+		[-3.55, -0.60, 3.55, 4.95],
 	]
 	for bi: int in beds.size():
 		var bed: Array = beds[bi]
@@ -827,13 +833,23 @@ func test_stage_a_layout() -> void:
 				"Stage A: bed %d clears keep-out %d" % [bi, ki])
 	# Side beds: inner edge outside the berm toe (|x| 2.60)
 	# and the station timbers' reach (2.54).
-	for bi: int in 2:
+	for bi: int in beds.size() - 1:
 		var bed: Array = beds[bi]
 		check(float(bed[2]) <= -2.70 or float(bed[0]) >= 2.70,
 			"Stage A: side bed %d inner edge clears the berms and stations" % bi)
+	# Stage B: the side beds end at the patio's front
+	# corners (rear edge z -0.60, at the slab's front edge),
+	# and the right bed carries the gate gap (z -6.55..-5.45,
+	# centred on the gate's z -6.0).
+	check(absf(float(beds[0][3]) + 0.60) < 0.01
+		and absf(float(beds[2][3]) + 0.60) < 0.01,
+		"Stage B: the side beds end at the patio's front corners")
+	check(absf(float(beds[1][3]) + 6.55) < 0.01
+		and absf(float(beds[2][1]) + 5.45) < 0.01,
+		"Stage B: the right bed carries the gate gap at z -6.55..-5.45")
 	# Far bed: behind the pit's back tie (outer face -13.35),
 	# short of the board (z -16.2).
-	var far_bed: Array = beds[2]
+	var far_bed: Array = beds[beds.size() - 1]
 	check(float(far_bed[3]) <= -13.80 and float(far_bed[1]) >= -15.90,
 		"Stage A: the far bed sits behind the pit, clear of pit and board")
 	# Tree line: outside the fence rectangle, on the ground.
@@ -845,6 +861,110 @@ func test_stage_a_layout() -> void:
 			"Stage A: tree at %s stands beyond the fence" % str(tp))
 		check(absf(tp.x) <= 19.5 and tp.z >= -29.5 and tp.z <= 17.5,
 			"Stage A: tree at %s stands on the ground plane" % str(tp))
+
+
+## Stage B layout guards (Stage 2, the yard pass): the
+## patio, house rear, gate, fountain and Phineas are
+## visual-only dressing whose layout lives as data tables
+## in main.gd - guard the DATA numerically here (the smoke
+## suite guards the built tree): the patio stays behind the
+## foul line and holds both stations; the house wall stands
+## on the patio's rear edge; every patio object stands on
+## the slab, off the walk corridor and off the stations;
+## the gate sits in the right fence mid-yard; the fountain
+## fits inside the left bed; Phineas stands in the far bed
+## clear of the pit.
+func circle_rect_clear(c: Vector3, r: float, rect: Array) -> bool:
+	var nx: float = clampf(c.x, float(rect[0]), float(rect[2]))
+	var nz: float = clampf(c.z, float(rect[1]), float(rect[3]))
+	return Vector2(c.x - nx, c.z - nz).length() > r
+
+
+func test_stage_b_layout() -> void:
+	var main_script: GDScript = load("res://scripts/main.gd")
+	var patio: Array = main_script.stage_b_patio_rect()
+	check(float(patio[1]) > float(main_script.FOUL_40_Z)
+		and float(patio[1]) < 0.0,
+		"Stage B: the patio starts behind the 40 ft foul line (front edge %.2f)" % float(patio[1]))
+	check(float(patio[3]) < 7.0 and float(patio[0]) >= -13.0
+		and float(patio[2]) <= 13.0,
+		"Stage B: the patio stands inside the fence")
+	# Both 40 ft stations stand ON the slab: a conservative
+	# envelope box around each rack's two slots (slot span
+	# plus the timber body's reach) inside the patio rect.
+	for is_ai: bool in [false, true]:
+		var tf: Transform3D = main_script.make_rack_tf(40, is_ai)
+		var o: Vector3 = tf.origin
+		var env: Array = [o.x - 0.55, o.z - 0.62, o.x + 0.55, o.z + 0.40]
+		check(float(env[0]) >= float(patio[0]) and float(env[2]) <= float(patio[2])
+			and float(env[1]) >= float(patio[1]) and float(env[3]) <= float(patio[3]),
+			"Stage B: the %s station stands on the patio (slots at %s)"
+			% ["AI" if is_ai else "player", str(o)])
+		check(absf((o.z - float(main_script.FOUL_40_Z)) - float(main_script.STAND_BACK_Z)) < 0.01,
+			"Stage B: the %s station stands %.2f m behind the line"
+			% ["AI" if is_ai else "player", float(main_script.STAND_BACK_Z)])
+	# The house wall stands on the patio's rear edge, and
+	# its door and windows stand on the wall.
+	var hd: Dictionary = main_script.stage_b_house()
+	check(absf(float(hd["wall_z"]) - float(patio[3])) < 0.01,
+		"Stage B: the house wall stands at the patio's rear edge")
+	check(absf(float(hd["door_x"])) + 0.55 < float(hd["half_x"]),
+		"Stage B: the back door stands on the wall")
+	var win_xs: Array = hd["window_x"]
+	for wv: Variant in win_xs:
+		check(absf(float(wv)) + 0.65 < float(hd["half_x"]),
+			"Stage B: a window stands on the wall (x %.2f)" % float(wv))
+	# Patio objects: on the slab, off the walk corridor
+	# (patio -> foul line), off both stations' envelopes.
+	var corridor: Array = [-0.30, -0.55, 1.50, 3.60]
+	var station_envs: Array = [
+		[1.45, -0.40, 2.65, 1.00], [-2.65, -0.40, -1.45, 1.00]]
+	var spots: Array = main_script.stage_b_object_spots()
+	check(spots.size() == 5, "Stage B: five patio objects dress the slab (%d)" % spots.size())
+	for spot: Array in spots:
+		var opos: Vector3 = spot[1]
+		var orad: float = float(spot[2])
+		check(opos.x - orad >= float(patio[0]) and opos.x + orad <= float(patio[2])
+			and opos.z - orad >= float(patio[1]) and opos.z + orad <= float(patio[3]),
+			"Stage B: %s stands on the patio (at %s)" % [String(spot[0]), str(opos)])
+		check(circle_rect_clear(opos, orad, corridor),
+			"Stage B: %s keeps clear of the walk line to the foul line" % String(spot[0]))
+		for ei: int in station_envs.size():
+			check(circle_rect_clear(opos, orad, station_envs[ei]),
+				"Stage B: %s keeps clear of station envelope %d" % [String(spot[0]), ei])
+	# The gate: in the right fence, mid-yard, a doorway wide.
+	var gate: Dictionary = main_script.stage_b_gate()
+	check(absf(float(gate["x"]) - 13.0) < 0.01,
+		"Stage B: the gate stands in the right fence")
+	var gz_c: float = (float(gate["z_hinge"]) + float(gate["z_latch"])) * 0.5
+	var gz_w: float = float(gate["z_latch"]) - float(gate["z_hinge"])
+	check(gz_c > -6.6 and gz_c < -5.4 and gz_w > 1.2 and gz_w < 1.8,
+		"Stage B: the gate is centred mid-yard (z %.2f, %.2f m wide)" % [gz_c, gz_w])
+	# The gate gap in the right bed matches the gate's z span
+	# (bed gap -6.55..-5.45 against the fence gap -6.75..-5.25:
+	# the path crosses the bed inside the fence opening).
+	var beds: Array = main_script.stage_a_bed_rects()
+	check(float(beds[1][3]) < float(gate["z_latch"])
+		and float(beds[2][1]) > float(gate["z_hinge"]),
+		"Stage B: the bed gap sits inside the gate's fence opening")
+	# The fountain: its basin fits inside the left bed.
+	var fp: Vector3 = main_script.STAGE_B_FOUNTAIN_POS
+	var fr: float = float(main_script.STAGE_B_FOUNTAIN_R)
+	var left_bed: Array = beds[0]
+	check(fp.x - fr >= float(left_bed[0]) and fp.x + fr <= float(left_bed[2])
+		and fp.z - fr >= float(left_bed[1]) and fp.z + fr <= float(left_bed[3]),
+		"Stage B: the fountain basin fits inside the left bed (at %s)" % str(fp))
+	check(circle_rect_clear(fp, fr, [-2.30, -11.30, 2.30, 1.60]),
+		"Stage B: the fountain keeps clear of the lane corridor")
+	# Phineas: in the far bed near its left end, clear of
+	# the pit and short of the board.
+	var pp: Vector3 = main_script.STAGE_B_PHINEAS_POS
+	var far_bed: Array = beds[beds.size() - 1]
+	check(pp.x - 0.3 >= float(far_bed[0]) and pp.x + 0.3 <= float(far_bed[2])
+		and pp.z - 0.3 >= float(far_bed[1]) and pp.z + 0.3 <= float(far_bed[3]),
+		"Stage B: Phineas stands in the far bed at its left end (at %s)" % str(pp))
+	check(pp.x < -3.0 and pp.z > -15.5,
+		"Stage B: Phineas holds the far-left corner, clear of pit and board")
 
 
 func _run() -> void:
@@ -866,6 +986,7 @@ func _run() -> void:
 	test_scoring()
 	test_ai_release()
 	test_stage_a_layout()
+	test_stage_b_layout()
 	var shoe_node := Shoe.new()
 	root.add_child(shoe_node)
 	await physics_frame
