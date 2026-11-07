@@ -1106,6 +1106,65 @@ func _run() -> void:
 						n_chairs += 1
 			check(n_pots == 2, "Stage B: potted plants flank the back door (%d)" % n_pots)
 			check(n_chairs == 3, "Stage B: three chairs ring the patio table (%d)" % n_chairs)
+		# Fountain: built in its nook, ringed, watered.
+		var fountain_n: Node = stage_b.get_node_or_null("Fountain")
+		check(fountain_n != null, "Stage B: the fountain stands in the left bed")
+		if fountain_n != null:
+			check(fountain_n.get_node_or_null("Water") != null,
+				"Stage B: the fountain's basin holds still water")
+			var ring: Node = fountain_n.get_node_or_null("BasinStones")
+			check(ring != null and (ring as MultiMeshInstance3D).multimesh.instance_count >= 10,
+				"Stage B: the basin is stone-ringed (%d stones)"
+				% ((ring as MultiMeshInstance3D).multimesh.instance_count if ring != null else 0))
+			check(absf((fountain_n as Node3D).position.distance_to(
+				main.STAGE_B_FOUNTAIN_POS)) < 0.01,
+				"Stage B: the fountain sits at its surveyed nook")
+		# The gate: its own group, pivoted at the hinge,
+		# closed, and the fence really does open behind it.
+		var gate_n: Node = stage_b.get_node_or_null("Gate")
+		check(gate_n != null, "Stage B: the gate group exists")
+		if gate_n != null:
+			var gd: Dictionary = main.stage_b_gate()
+			check(absf((gate_n as Node3D).position.x - float(gd["x"])) < 0.01
+				and absf((gate_n as Node3D).position.z - float(gd["z_hinge"])) < 0.01,
+				"Stage B: the gate pivots on its hinge post")
+			check(absf((gate_n as Node3D).rotation.y) < 0.001,
+				"Stage B: the gate stands CLOSED this pass")
+			check(gate_n.get_child_count() >= 10,
+				"Stage B: the gate panel is built (%d pieces)" % gate_n.get_child_count())
+		var fence_gap_blocked: int = 0
+		for fch: Node in main.scenery_root.get_node("Fence").get_children():
+			var fm: Node3D = fch as Node3D
+			if fm != null and fm.global_position.x > 12.9 \
+					and fm.global_position.z > -6.60 and fm.global_position.z < -5.40:
+				fence_gap_blocked += 1
+		check(fence_gap_blocked == 0,
+			"Stage B: the fence opening behind the gate is truly open (%d pieces in the gap)"
+			% fence_gap_blocked)
+		var path_n: Node = stage_b.get_node_or_null("PathStones")
+		check(path_n != null and (path_n as MultiMeshInstance3D).multimesh.instance_count >= 12,
+			"Stage B: the stepping-stone path runs from the gate (%d stones)"
+			% ((path_n as MultiMeshInstance3D).multimesh.instance_count if path_n != null else 0))
+		# Phineas: in his corner, facing the stake, and clear
+		# of the scoreboard's sightline from the pitching spot.
+		var phin_n: Node = stage_b.get_node_or_null("Phineas")
+		check(phin_n != null, "Stage B: Phineas stands in his corner")
+		if phin_n != null:
+			var pp: Vector3 = (phin_n as Node3D).global_position
+			check(pp.distance_to(main.STAGE_B_PHINEAS_POS) < 0.01,
+				"Stage B: Phineas is at his surveyed corner")
+			var fwd: Vector3 = -(phin_n as Node3D).global_transform.basis.z
+			fwd.y = 0.0
+			var to_stake: Vector3 = main.STAKE_POS - pp
+			to_stake.y = 0.0
+			check(fwd.normalized().dot(to_stake.normalized()) > 0.9,
+				"Stage B: Phineas faces the court and the stake (dot %.2f)"
+				% fwd.normalized().dot(to_stake.normalized()))
+			check(sightline_dist(pp) > 1.5,
+				"Stage B: Phineas keeps clear of the board sightline (%.2f m)"
+				% sightline_dist(pp))
+			check(phin_n.get_node_or_null("GoldPan") != null,
+				"Stage B: the gold pan is in his hand")
 
 	var sky_ok: bool = false
 	for child: Node in main.get_children():

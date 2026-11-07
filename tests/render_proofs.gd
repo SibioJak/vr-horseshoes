@@ -46,6 +46,16 @@ extends SceneTree
 ##     pit looking back: the planted yard behind the player.
 ##   proofs/bed_closeup.png - a right-hand bed at arm's length:
 ##     stones, shrubs, tufts, flower dots.
+##   proofs/lookback_from_line.png - Stage B: the turn-around
+##     from the pitching spot - patio, house rear, stations.
+##   proofs/patio_close.png - Stage B: the patio dressed -
+##     grill, table and chairs, door and pots.
+##   proofs/gate_view.png - Stage B: THE GATE in the right
+##     fence, the stepping-stone path arriving.
+##   proofs/fountain_view.png - Stage B: the stacked-rock
+##     fountain in its nook in the left bed.
+##   proofs/phineas_view.png - Stage B: Phineas Gage in the
+##     far-left corner, pan in hand.
 ##   proofs/sway_a.png / sway_b.png - the sway pair: one
 ##     designated background canopy against the sky, shot twice
 ##     ~6 s apart; the suite MEASURES the canopy's displacement
@@ -195,10 +205,13 @@ func _run() -> void:
 	# proof stands where the axis is visible: the player's
 	# station near-right with its pair face-on, the AI in his
 	# box beside him at the line, the landscaped rows lining
-	# the lane, the pit and the board beyond it.
+	# the lane, the pit and the board beyond it. Stage B: the
+	# stations stand on the PATIO behind the line now, and
+	# the house's rear wall stands where this camera used to
+	# sit - it shoots from over the patio instead.
 	var cam_a := Camera3D.new()
 	cam_a.fov = 55.0
-	cam_a.position = Vector3(0.0, 2.9, 5.4)
+	cam_a.position = Vector3(0.0, 2.9, 3.1)
 	main.add_child(cam_a)
 	cam_a.look_at(Vector3(0.0, 0.0, -6.098), Vector3.UP)
 	cam_a.current = true
@@ -264,6 +277,42 @@ func _run() -> void:
 		check(shift_px >= 1.0 and shift_px <= 30.0,
 			"sway pair: canopy displaced %.1f px = %.3f m in ~6 s - moving, and small"
 			% [shift_px, shift_px * m_per_px])
+
+	# --- Proof B: the YARD PASS frames (Stage B) ---
+	# The look-back from behind the pitching spot: the
+	# player turns around and the patio is there - house
+	# rear, both stations on the slab, the grill and table.
+	var cam_y := Camera3D.new()
+	cam_y.fov = 55.0
+	cam_y.position = Vector3(0.8, 1.62, -1.5)
+	main.add_child(cam_y)
+	cam_y.look_at(Vector3(0.2, 0.8, 5.0), Vector3.UP)
+	cam_y.current = true
+	await settle(6)
+	await snap(cam_y, "res://proofs/lookback_from_line.png")
+	# The patio close: pavers underfoot, grill, table and
+	# chairs, the back door and its pots.
+	cam_y.position = Vector3(0.2, 1.45, 1.1)
+	cam_y.look_at(Vector3(2.2, 0.7, 4.6), Vector3.UP)
+	await settle(6)
+	await snap(cam_y, "res://proofs/patio_close.png")
+	# The gate from inside the yard, the stepping-stone
+	# path arriving across the bed gap at the frame's feet.
+	cam_y.position = Vector3(9.8, 1.5, -6.0)
+	cam_y.look_at(Vector3(13.0, 1.0, -6.0), Vector3.UP)
+	await settle(6)
+	await snap(cam_y, "res://proofs/gate_view.png")
+	# The fountain in its nook in the left bed.
+	cam_y.position = Vector3(-1.8, 1.15, -4.7)
+	cam_y.look_at(Vector3(-3.69, 0.35, -6.0), Vector3.UP)
+	await settle(6)
+	await snap(cam_y, "res://proofs/fountain_view.png")
+	# Phineas in his corner: hat, beard, pan, watching.
+	cam_y.position = Vector3(-1.55, 1.5, -12.4)
+	cam_y.look_at(Vector3(-3.85, 1.05, -14.3), Vector3.UP)
+	await settle(6)
+	await snap(cam_y, "res://proofs/phineas_view.png")
+	cam_y.queue_free()
 
 	# --- Proof A2: board close-up, MID-GAME (Backyard Game v1) ---
 	# Seed a game in progress, so the board renders its game

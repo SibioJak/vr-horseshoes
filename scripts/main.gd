@@ -985,12 +985,17 @@ func _build_scenery() -> void:
 	var rail_mat := _mat(Color(0.44, 0.33, 0.21))
 	var post_mesh := BoxMesh.new()
 	post_mesh.size = Vector3(0.12, 1.85, 0.12)
-	# Runs: [start, end] pairs along the rectangle.
+	# Runs: [start, end] pairs along the rectangle. Stage B:
+	# the right run comes in TWO pieces - the gate gap
+	# (stage_b_gate's span) is a real opening in the fence,
+	# and its posts land on the gap's ends.
+	var gate_d: Dictionary = stage_b_gate()
 	var runs: Array = [
 		[Vector2(-13.0, -20.0), Vector2(13.0, -20.0)],
 		[Vector2(-13.0, 7.0), Vector2(13.0, 7.0)],
 		[Vector2(-13.0, -20.0), Vector2(-13.0, 7.0)],
-		[Vector2(13.0, -20.0), Vector2(13.0, 7.0)],
+		[Vector2(13.0, -20.0), Vector2(13.0, float(gate_d["z_hinge"]))],
+		[Vector2(13.0, float(gate_d["z_latch"])), Vector2(13.0, 7.0)],
 	]
 	for run: Array in runs:
 		var a: Vector2 = run[0]
@@ -1384,6 +1389,11 @@ func _build_stage_a_beds(parent: Node, rng: RandomNumberGenerator) -> void:
 			else:
 				px = x0 + t * w
 				pz = (z0 + z1) * 0.5 + rng.randf_range(-0.40, 0.40)
+			# Stage B: the fountain's nook stays clear - no
+			# shrub plants inside its basin's circle.
+			if Vector2(px - STAGE_B_FOUNTAIN_POS.x,
+					pz - STAGE_B_FOUNTAIN_POS.z).length() < 0.98:
+				continue
 			var form: int = rng.randi_range(0, 2)
 			var r: float = float(shrub_radii[form])
 			var sc: float = rng.randf_range(0.85, 1.35)
@@ -1424,11 +1434,15 @@ func _build_stage_a_beds(parent: Node, rng: RandomNumberGenerator) -> void:
 			var sc: float = rng.randf_range(0.8, 1.35)
 			var eul := Vector3(rng.randf_range(-0.12, 0.12),
 				rng.randf_range(0.0, TAU), rng.randf_range(-0.12, 0.12))
+			var tx: float = rng.randf_range(x0 + 0.18, x1 - 0.18)
+			var tz: float = rng.randf_range(z0 + 0.18, z1 - 0.18)
+			# Stage B: tufts keep out of the fountain nook too.
+			if Vector2(tx - STAGE_B_FOUNTAIN_POS.x,
+					tz - STAGE_B_FOUNTAIN_POS.z).length() < 0.98:
+				continue
 			tuft_tfs.append(Transform3D(
 				Basis.from_euler(eul).scaled(Vector3(sc, sc, sc)),
-				Vector3(rng.randf_range(x0 + 0.18, x1 - 0.18),
-					0.10 + 0.21 * sc - 0.05,
-					rng.randf_range(z0 + 0.18, z1 - 0.18))))
+				Vector3(tx, 0.10 + 0.21 * sc - 0.05, tz)))
 			tuft_cols.append(tuft_straw.lerp(tuft_green, rng.randf()))
 	var tuft_mesh := CylinderMesh.new()
 	tuft_mesh.top_radius = 0.02
@@ -1453,6 +1467,10 @@ func _build_stage_a_beds(parent: Node, rng: RandomNumberGenerator) -> void:
 			var off := Vector3(rng.randf_range(-0.34, 0.34), 0.0,
 				rng.randf_range(-0.34, 0.34))
 			if off.length() > 0.36:
+				continue
+			# Stage B: no flower dots inside the fountain nook.
+			if Vector2(pt.x + off.x - STAGE_B_FOUNTAIN_POS.x,
+					pt.z + off.z - STAGE_B_FOUNTAIN_POS.z).length() < 0.95:
 				continue
 			var sc: float = rng.randf_range(0.8, 1.3)
 			flower_tfs.append(Transform3D(
@@ -1608,6 +1626,9 @@ func _build_stage_b() -> void:
 	stage_b.name = "StageB"
 	scenery_root.add_child(stage_b)
 	_build_patio(stage_b)
+	_build_fountain(stage_b)
+	_build_gate(stage_b)
+	_build_phineas(stage_b)
 
 
 func _build_patio(parent: Node) -> void:
@@ -1840,6 +1861,291 @@ func _build_patio_pot(parent: Node, pos: Vector3, node_name: String) -> void:
 	blob.position = Vector3(0.0, 0.55, 0.0)
 	blob.scale = Vector3(1.0, 0.82, 1.0)
 	pot.add_child(blob)
+
+
+## The fountain (yard-pass item 3): a stacked-rock fountain
+## in a stone-ringed basin, set into the left bed's nook -
+## the bed's planting keeps out of its circle (see
+## _build_stage_a_beds). The water is STILL: one disc, one
+## quiet material, no animation system - the dusk/light
+## stage may teach it to move, not this pass.
+func _build_fountain(parent: Node) -> void:
+	var fountain := Node3D.new()
+	fountain.name = "Fountain"
+	fountain.position = STAGE_B_FOUNTAIN_POS
+	parent.add_child(fountain)
+	var stone_mat := _mat(Color(0.48, 0.47, 0.45))
+	var dark_stone := _mat(Color(0.38, 0.37, 0.35))
+	# Basin floor: a stone disc sunk into the mulch.
+	var floor_mi := MeshInstance3D.new()
+	var floor_mesh := CylinderMesh.new()
+	floor_mesh.top_radius = STAGE_B_FOUNTAIN_R
+	floor_mesh.bottom_radius = STAGE_B_FOUNTAIN_R
+	floor_mesh.height = 0.10
+	floor_mesh.radial_segments = 18
+	floor_mi.mesh = floor_mesh
+	floor_mi.material_override = dark_stone
+	floor_mi.position = Vector3(0.0, 0.13, 0.0)
+	fountain.add_child(floor_mi)
+	# The ring: irregular stones circled at the basin's rim,
+	# the edging's squashed-sphere language at basin scale.
+	var ring_tfs: Array = []
+	var ring_cols: Array = []
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20261109
+	var n_ring: int = 11
+	for i: int in n_ring:
+		var a: float = TAU * float(i) / float(n_ring)
+		var rr: float = 0.70 + rng.randf_range(-0.03, 0.03)
+		var s: float = rng.randf_range(0.15, 0.19)
+		var eul := Vector3(rng.randf_range(-0.12, 0.12),
+			rng.randf_range(0.0, TAU), rng.randf_range(-0.12, 0.12))
+		ring_tfs.append(Transform3D(
+			Basis.from_euler(eul).scaled(Vector3(s, s * 0.62, s * 0.88)),
+			Vector3(cos(a) * rr, 0.19, sin(a) * rr)))
+		var g: float = rng.randf_range(0.42, 0.60)
+		ring_cols.append(Color(g, g * 0.99, g * 0.96))
+	var ring_mesh := SphereMesh.new()
+	ring_mesh.radius = 1.0
+	ring_mesh.height = 2.0
+	ring_mesh.radial_segments = 7
+	ring_mesh.rings = 4
+	_stage_a_multimesh(fountain, "BasinStones", ring_mesh, ring_tfs, ring_cols)
+	# Still water: a low disc inside the ring.
+	var water_mat := StandardMaterial3D.new()
+	water_mat.albedo_color = Color(0.36, 0.54, 0.60)
+	water_mat.roughness = 0.12
+	water_mat.metallic = 0.05
+	var water := MeshInstance3D.new()
+	water.name = "Water"
+	var water_mesh := CylinderMesh.new()
+	water_mesh.top_radius = 0.64
+	water_mesh.bottom_radius = 0.64
+	water_mesh.height = 0.025
+	water_mesh.radial_segments = 18
+	water.mesh = water_mesh
+	water.material_override = water_mat
+	water.position = Vector3(0.0, 0.185, 0.0)
+	fountain.add_child(water)
+	# The rock stack: three craggy spheres piled at the
+	# centre, one pebble riding the top.
+	var rock_mesh := SphereMesh.new()
+	rock_mesh.radius = 1.0
+	rock_mesh.height = 2.0
+	rock_mesh.radial_segments = 9
+	rock_mesh.rings = 6
+	var rock_specs: Array = [
+		[Vector3(0.0, 0.30, 0.0), 0.30],
+		[Vector3(0.05, 0.55, 0.04), 0.22],
+		[Vector3(-0.03, 0.74, -0.02), 0.145],
+		[Vector3(0.01, 0.88, 0.0), 0.085],
+	]
+	var rock_i: int = 0
+	for spec: Array in rock_specs:
+		rock_i += 1
+		var rp: Vector3 = spec[0]
+		var rock := MeshInstance3D.new()
+		rock.name = "Rock%d" % rock_i
+		rock.mesh = rock_mesh
+		var shade: float = 0.44 + 0.03 * float(rock_i % 3)
+		rock.material_override = _mat(Color(shade, shade * 0.99, shade * 0.96)) \
+			if rock_i > 1 else stone_mat
+		rock.position = rp
+		rock.scale = Vector3.ONE * float(spec[1])
+		rock.rotation.y = rng.randf_range(0.0, TAU)
+		fountain.add_child(rock)
+
+
+## The gate (yard-pass item 4): the neighbours' entrance.
+## The fence run already leaves the gap (see _build_scenery);
+## here the gap gets its dressed posts and the panel itself,
+## built as its own group - "Gate" - PIVOTED AT THE HINGE
+## POST so a later pass can swing it without a rebuild. It
+## stands CLOSED this pass (pivot yaw 0). The panel is a
+## landmark, not a fence repair: arched top, two rails and a
+## diagonal brace on the yard face, hinge straps, a latch
+## with a hanging ring.
+func _build_gate(parent: Node) -> void:
+	var gate_d: Dictionary = stage_b_gate()
+	var gx: float = float(gate_d["x"])
+	var z_hinge: float = float(gate_d["z_hinge"])
+	var z_latch: float = float(gate_d["z_latch"])
+	var post_mat := _mat(Color(0.44, 0.33, 0.21))
+	# Dressed posts: a sleeve + cap over each fence post at
+	# the gap's ends, marking the doorway.
+	for pz: float in [z_hinge, z_latch]:
+		_box(parent, Vector3(gx, 0.925, pz), Vector3(0.18, 1.85, 0.18), post_mat)
+		_box(parent, Vector3(gx, 1.90, pz), Vector3(0.24, 0.07, 0.24), post_mat)
+	var gate := Node3D.new()
+	gate.name = "Gate"
+	gate.position = Vector3(gx, 0.0, z_hinge)
+	parent.add_child(gate)
+	var wood_a := _mat(Color(0.52, 0.40, 0.26))
+	var wood_b := _mat(Color(0.47, 0.36, 0.23))
+	var iron := _mat(Color(0.20, 0.20, 0.22))
+	# Five slats under an arched top (heights rise to the
+	# middle), spanning hinge to latch.
+	var heights: Array = [1.58, 1.72, 1.80, 1.72, 1.58]
+	for i: int in 5:
+		var h: float = float(heights[i])
+		var slat: MeshInstance3D = _box(gate,
+			Vector3(0.0, h * 0.5, 0.16 + 0.295 * float(i)),
+			Vector3(0.035, h, 0.25), wood_a if i % 2 == 0 else wood_b)
+		slat.name = "Slat%d" % (i + 1)
+	# Rails + diagonal brace on the yard face (-x).
+	_box(gate, Vector3(-0.045, 0.55, 0.75), Vector3(0.03, 0.10, 1.42), wood_b)
+	_box(gate, Vector3(-0.045, 1.30, 0.75), Vector3(0.03, 0.10, 1.42), wood_b)
+	var brace: MeshInstance3D = _box(gate, Vector3(-0.045, 0.92, 0.75),
+		Vector3(0.03, 0.09, 1.64), wood_b)
+	brace.rotation_degrees = Vector3(-35.4, 0.0, 0.0)
+	# Hinge straps at the pivot, latch + ring at the far end.
+	_box(gate, Vector3(0.0, 0.45, 0.06), Vector3(0.10, 0.07, 0.18), iron)
+	_box(gate, Vector3(0.0, 1.35, 0.06), Vector3(0.10, 0.07, 0.18), iron)
+	_box(gate, Vector3(-0.05, 1.05, 1.44), Vector3(0.06, 0.05, 0.12), iron)
+	var ring := MeshInstance3D.new()
+	ring.name = "LatchRing"
+	var ring_mesh := TorusMesh.new()
+	ring_mesh.inner_radius = 0.032
+	ring_mesh.outer_radius = 0.052
+	ring_mesh.rings = 10
+	ring_mesh.ring_segments = 6
+	ring.mesh = ring_mesh
+	ring.material_override = iron
+	ring.position = Vector3(-0.085, 0.97, 1.46)
+	ring.rotation_degrees = Vector3(0.0, 90.0, 0.0)
+	gate.add_child(ring)
+	# The stepping-stone path: from the gate, across the
+	# right bed's gap, to the lawn at the berm's toe. Flat
+	# stones, the edging's family at path scale; the two
+	# stones over the bed ride at bed height.
+	var path_tfs: Array = []
+	var path_cols: Array = []
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20261110
+	var stone_x: float = 12.55
+	while stone_x > 2.55:
+		var on_bed: bool = stone_x >= 2.70 and stone_x <= 4.70
+		var s: float = rng.randf_range(0.28, 0.34)
+		var eul := Vector3(rng.randf_range(-0.06, 0.06),
+			rng.randf_range(0.0, TAU), rng.randf_range(-0.06, 0.06))
+		path_tfs.append(Transform3D(
+			Basis.from_euler(eul).scaled(Vector3(s, s * 0.24, s * 0.82)),
+			Vector3(stone_x, 0.145 if on_bed else 0.045,
+				-6.0 + rng.randf_range(-0.06, 0.06))))
+		var g: float = rng.randf_range(0.44, 0.58)
+		path_cols.append(Color(g, g * 0.99, g * 0.96))
+		stone_x -= 0.83
+	var path_mesh := SphereMesh.new()
+	path_mesh.radius = 1.0
+	path_mesh.height = 2.0
+	path_mesh.radial_segments = 8
+	path_mesh.rings = 4
+	_stage_a_multimesh(parent, "PathStones", path_mesh, path_tfs, path_cols)
+
+
+## Phineas Gage (yard-pass item 5): the far-left corner's
+## resident - a low-poly miner '49er built from primitives
+## in the opponent figure's language (AIPitcher's boxes and
+## sphere head at the same scale): slouch hat, grey beard,
+## red work shirt, trousers, and a gold pan held out in his
+## right hand. He stands at ease at the end of the left
+## bed, facing the court - the stake - watching the game.
+## STATIC this pass: no face, no balloons, no animation;
+## the cast pass gives him life.
+func _build_phineas(parent: Node) -> void:
+	var phin := Node3D.new()
+	phin.name = "Phineas"
+	phin.position = STAGE_B_PHINEAS_POS
+	var to_stake: Vector3 = STAKE_POS - STAGE_B_PHINEAS_POS
+	phin.rotation.y = atan2(-to_stake.x, -to_stake.z)
+	parent.add_child(phin)
+	var skin := _mat(Color(0.76, 0.57, 0.42))
+	var shirt := _mat(Color(0.52, 0.20, 0.14))
+	var trousers := _mat(Color(0.38, 0.32, 0.25))
+	var leather := _mat(Color(0.25, 0.19, 0.13))
+	var hat_mat := _mat(Color(0.40, 0.30, 0.18))
+	var grey := _mat(Color(0.72, 0.71, 0.68))
+	# Boots and trousers.
+	_box(phin, Vector3(-0.10, 0.045, -0.02), Vector3(0.13, 0.09, 0.26), leather)
+	_box(phin, Vector3(0.10, 0.045, -0.02), Vector3(0.13, 0.09, 0.26), leather)
+	_box(phin, Vector3(-0.10, 0.48, 0.0), Vector3(0.15, 0.78, 0.17), trousers)
+	_box(phin, Vector3(0.10, 0.48, 0.0), Vector3(0.15, 0.78, 0.17), trousers)
+	# Torso: red work shirt over a belt line.
+	_box(phin, Vector3(0.0, 1.16, 0.0), Vector3(0.46, 0.58, 0.24), shirt)
+	_box(phin, Vector3(0.0, 0.90, 0.0), Vector3(0.47, 0.07, 0.25), leather)
+	# Left arm hangs at ease; the right bends forward,
+	# holding the pan out the way a man shows you his claim.
+	_box(phin, Vector3(-0.315, 1.12, 0.01), Vector3(0.11, 0.56, 0.12), shirt)
+	_box(phin, Vector3(0.315, 1.24, 0.0), Vector3(0.11, 0.34, 0.12), shirt)
+	_box(phin, Vector3(0.315, 1.04, -0.17), Vector3(0.10, 0.11, 0.36), shirt)
+	var hand := MeshInstance3D.new()
+	var hand_mesh := SphereMesh.new()
+	hand_mesh.radius = 0.05
+	hand_mesh.height = 0.10
+	hand_mesh.radial_segments = 10
+	hand_mesh.rings = 6
+	hand.mesh = hand_mesh
+	hand.material_override = skin
+	hand.position = Vector3(0.315, 1.04, -0.36)
+	phin.add_child(hand)
+	# The gold pan: dark steel, a dirt disc, one fleck.
+	var pan := MeshInstance3D.new()
+	pan.name = "GoldPan"
+	var pan_mesh := CylinderMesh.new()
+	pan_mesh.top_radius = 0.20
+	pan_mesh.bottom_radius = 0.13
+	pan_mesh.height = 0.055
+	pan_mesh.radial_segments = 16
+	pan.mesh = pan_mesh
+	pan.material_override = _mat(Color(0.30, 0.30, 0.32))
+	pan.position = Vector3(0.315, 1.10, -0.44)
+	phin.add_child(pan)
+	_cyl(phin, Vector3(0.315, 1.125, -0.44), 0.155, 0.012,
+		_mat(Color(0.55, 0.50, 0.38)))
+	var fleck := MeshInstance3D.new()
+	var fleck_mesh := SphereMesh.new()
+	fleck_mesh.radius = 0.018
+	fleck_mesh.height = 0.036
+	fleck_mesh.radial_segments = 6
+	fleck_mesh.rings = 4
+	fleck.mesh = fleck_mesh
+	fleck.material_override = _mat(Color(0.85, 0.65, 0.20))
+	fleck.position = Vector3(0.29, 1.135, -0.42)
+	phin.add_child(fleck)
+	# Head, grey beard, slouch hat with a tilt.
+	var head := MeshInstance3D.new()
+	var head_mesh := SphereMesh.new()
+	head_mesh.radius = 0.115
+	head_mesh.height = 0.23
+	head_mesh.radial_segments = 14
+	head_mesh.rings = 8
+	head.mesh = head_mesh
+	head.material_override = skin
+	head.position = Vector3(0.0, 1.60, 0.0)
+	phin.add_child(head)
+	_box(phin, Vector3(0.0, 1.495, -0.085), Vector3(0.17, 0.19, 0.07), grey)
+	var brim := MeshInstance3D.new()
+	var brim_mesh := CylinderMesh.new()
+	brim_mesh.top_radius = 0.215
+	brim_mesh.bottom_radius = 0.215
+	brim_mesh.height = 0.025
+	brim_mesh.radial_segments = 16
+	brim.mesh = brim_mesh
+	brim.material_override = hat_mat
+	brim.position = Vector3(0.0, 1.685, -0.01)
+	brim.rotation.z = deg_to_rad(3.0)
+	phin.add_child(brim)
+	var crown := MeshInstance3D.new()
+	var crown_mesh := CylinderMesh.new()
+	crown_mesh.top_radius = 0.10
+	crown_mesh.bottom_radius = 0.12
+	crown_mesh.height = 0.13
+	crown_mesh.radial_segments = 12
+	crown.mesh = crown_mesh
+	crown.material_override = hat_mat
+	crown.position = Vector3(0.0, 1.755, -0.01)
+	crown.rotation.z = deg_to_rad(3.0)
+	phin.add_child(crown)
 
 
 func _build_rig() -> void:
