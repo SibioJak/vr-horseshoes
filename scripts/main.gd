@@ -120,6 +120,14 @@ var title_label: Label3D
 var status_label: Label3D
 var controls_label: Label3D
 var scenery_root: Node3D
+## The Stage A beds' planted shrub positions (the origins
+## the shrub MultiMeshes were built from, recorded at
+## build time). The smoke suite measures clearances
+## against this record - MultiMesh instance transforms
+## cannot be read back under the headless dummy renderer
+## (probed in isolation, Fix Pass 29), so the builder's
+## own placement record is the measurable truth.
+var stage_a_shrub_positions: Array = []
 
 var state: String = "STAND" # STAND, HELD, FLYING, DROPPED, RETURNING
 var grab_state := GrabState.new()
@@ -945,6 +953,25 @@ func target_stake_pos() -> Vector3:
 ## board sightline from both foul lines clear; the smoke suite
 ## asserts the sightline clearance so dressing can never creep
 ## in front of the board.
+## The foreground tree spots as [position, scale] pairs -
+## a static table so the logic suite can guard them (in
+## particular the gate approach, Fix Pass 29: the right-
+## side tree first stood at (11.0, -5.0), its trunk and
+## canopy square in the gate's approach on the stepping-
+## stone path's axis (gate centre z -6.0); it now stands
+## at z -2.2, 3.8 m off the axis, the right-side scatter's
+## rhythm kept).
+static func scenery_tree_spots() -> Array:
+	return [
+		[Vector3(-8.5, 0.0, -19.5), 1.15],
+		[Vector3(7.0, 0.0, -19.0), 1.0],
+		[Vector3(-11.5, 0.0, -9.0), 1.25],
+		[Vector3(11.0, 0.0, -2.2), 0.95],
+		[Vector3(-7.5, 0.0, 4.5), 1.05],
+		[Vector3(12.0, 0.0, 3.0), 1.2],
+	]
+
+
 func _build_scenery() -> void:
 	scenery_root = Node3D.new()
 	scenery_root.name = "Scenery"
@@ -1035,14 +1062,7 @@ func _build_scenery() -> void:
 	var trunk_mat := _mat(Color(0.35, 0.25, 0.16))
 	var leaf_a := _mat(Color(0.22, 0.42, 0.18))
 	var leaf_b := _mat(Color(0.27, 0.48, 0.21))
-	var tree_spots: Array = [
-		[Vector3(-8.5, 0.0, -19.5), 1.15],
-		[Vector3(7.0, 0.0, -19.0), 1.0],
-		[Vector3(-11.5, 0.0, -9.0), 1.25],
-		[Vector3(11.0, 0.0, -5.0), 0.95],
-		[Vector3(-7.5, 0.0, 4.5), 1.05],
-		[Vector3(12.0, 0.0, 3.0), 1.2],
-	]
+	var tree_spots: Array = scenery_tree_spots()
 	var tree_i: int = 0
 	for spot: Array in tree_spots:
 		tree_i += 1
@@ -1407,6 +1427,9 @@ func _build_stage_a_beds(parent: Node, rng: RandomNumberGenerator) -> void:
 			var pc: Color = shrub_pal[rng.randi_range(0, shrub_pal.size() - 1)]
 			form_cols.append(pc)
 			shrub_pts.append(pos)
+	# Record the planted set for the suites (see
+	# stage_a_shrub_positions' note).
+	stage_a_shrub_positions = shrub_pts.duplicate()
 	var shrub_segs: Array = [9, 9, 7]
 	var shrub_rings: Array = [6, 6, 5]
 	for form: int in 3:
@@ -1632,19 +1655,35 @@ static func stage_b_gate() -> Dictionary:
 	return {"x": 13.0, "z_hinge": -6.75, "z_latch": -5.25}
 
 
-## The fountain's centre: set into the LEFT side bed
-## (bed rect 0), mid-court, a nook interrupting the
-## planting - its basin (radius FOUNTAIN_R) fits inside the
-## bed's width with stone to spare on both sides.
-const STAGE_B_FOUNTAIN_POS := Vector3(-3.69, 0.0, -6.00)
+## The fountain's centre: the LEFT bed's rear corner nook
+## (Fix Pass 29) - where the left bed run meets the patio's
+## front edge, not mid-row. The basin (radius FOUNTAIN_R)
+## sits centred in the bed's width at its rear end, its
+## rear rim a stone's width (0.10 m) short of the bed's
+## end line so it clears the edging cap; the bed's own
+## planting keeps out of its circle and fills the run
+## behind it continuously.
+const STAGE_B_FOUNTAIN_POS := Vector3(-3.69, 0.0, -1.50)
 const STAGE_B_FOUNTAIN_R: float = 0.80
 
 
-## Phineas Gage's corner: the far-left corner at the pit
-## end, standing in the far bed at the left bed's end,
-## facing the court (the stake) - clear of the pit, the
-## board and the board sightline.
-const STAGE_B_PHINEAS_POS := Vector3(-3.85, 0.0, -14.30)
+## Phineas Gage's corner (Fix Pass 29): the far-left
+## corner pocket - a clear grass pocket ON THE GROUND
+## beside the far bed's west end, short of the fences.
+## He first stood IN the far bed beside the board, on
+## the planting row and through a shrub; now nothing
+## planted can reach him (the far bed's shrubs stop at
+## its west edge, a body's width east of the pocket).
+## The pocket bounds as [x0, z0, x1, z1] - the logic
+## suite guards his position inside them.
+static func stage_b_phineas_pocket() -> Array:
+	return [-6.05, -15.55, -4.85, -14.00]
+
+
+## His surveyed spot inside the pocket: on the ground
+## plane, facing the court (the stake) - clear of the
+## pit, the board and the board sightline.
+const STAGE_B_PHINEAS_POS := Vector3(-5.40, 0.0, -14.78)
 
 
 func _build_stage_b() -> void:
@@ -2077,8 +2116,9 @@ func _build_gate(parent: Node) -> void:
 ## in the opponent figure's language (AIPitcher's boxes and
 ## sphere head at the same scale): slouch hat, grey beard,
 ## red work shirt, trousers, and a gold pan held out in his
-## right hand. He stands at ease at the end of the left
-## bed, facing the court - the stake - watching the game.
+## right hand. He stands at ease in the corner pocket
+## beside the far bed's west end (Fix Pass 29), facing
+## the court - the stake - watching the game.
 ## STATIC this pass: no face, no balloons, no animation;
 ## the cast pass gives him life.
 func _build_phineas(parent: Node) -> void:

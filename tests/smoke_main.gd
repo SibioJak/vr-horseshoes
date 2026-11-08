@@ -1121,9 +1121,9 @@ func _run() -> void:
 						tw.y = 0.0
 						check(fw.normalized().dot(tw.normalized()) >= 0.99,
 							"Stage B: %s faces the table centre in the built yard" % chw.name)
-		# Fountain: built in its nook, ringed, watered.
+		# Fountain: built in its corner nook, ringed, watered.
 		var fountain_n: Node = stage_b.get_node_or_null("Fountain")
-		check(fountain_n != null, "Stage B: the fountain stands in the left bed")
+		check(fountain_n != null, "Stage B: the fountain stands in the left bed's corner nook")
 		if fountain_n != null:
 			check(fountain_n.get_node_or_null("Water") != null,
 				"Stage B: the fountain's basin holds still water")
@@ -1180,6 +1180,72 @@ func _run() -> void:
 				% sightline_dist(pp))
 			check(phin_n.get_node_or_null("GoldPan") != null,
 				"Stage B: the gold pan is in his hand")
+			# Fix Pass 29: he stands in a clear pocket - NO
+			# planted shrub anywhere near him (he first
+			# stood in the far bed with a shrub through his
+			# legs). The measure reads the builder's own
+			# placement record (main.stage_a_shrub_positions
+			# - the origins the shrub MultiMeshes were built
+			# from): MultiMesh instance transforms cannot be
+			# read back under the headless dummy renderer
+			# (probed in isolation this pass - every instance
+			# reads as identity), so the record is the
+			# measurable truth, cross-checked here against
+			# the built multimeshes' instance counts.
+			var planted: Array = main.stage_a_shrub_positions
+			check(planted.size() > 0,
+				"Stage B: the planted shrub record stands (%d shrubs)" % planted.size())
+			var beds_b: Node = null
+			if main.scenery_root != null:
+				var stage_a_b: Node = main.scenery_root.get_node_or_null("StageA")
+				if stage_a_b != null:
+					beds_b = stage_a_b.get_node_or_null("Beds")
+			var n_built_shrubs: int = 0
+			if beds_b != null:
+				for fi2: int in 3:
+					var shn: Node = beds_b.get_node_or_null("Shrubs%d" % fi2)
+					if shn != null:
+						n_built_shrubs += (shn as MultiMeshInstance3D).multimesh.instance_count
+			check(n_built_shrubs == planted.size(),
+				"Stage B: the built shrubs match the placement record (%d built, %d recorded)"
+				% [n_built_shrubs, planted.size()])
+			var min_shrub_d: float = 1.0e9
+			for sp2: Vector3 in planted:
+				var d2: float = Vector2(sp2.x - pp.x, sp2.z - pp.z).length()
+				if d2 < min_shrub_d:
+					min_shrub_d = d2
+			check(min_shrub_d > 0.85,
+				"Stage B: no shrub intersects Phineas in his pocket (nearest %.2f m)"
+				% min_shrub_d)
+		# Fix Pass 29: the gate approach stands clear - no
+		# tree trunk (foreground scatter or background line)
+		# within 1.2 m laterally of the gate's centre axis
+		# on the approach side, so the stepping-stone path
+		# and the gate opening read clear from the court.
+		if main.scenery_root != null:
+			var gate_d2: Dictionary = main.stage_b_gate()
+			var axis_z: float = (float(gate_d2["z_hinge"]) + float(gate_d2["z_latch"])) * 0.5
+			var trunks_checked: int = 0
+			var trunks_clear: bool = true
+			var trunk_parents: Array = []
+			for sc: Node in main.scenery_root.get_children():
+				if sc.name.begins_with("Tree"):
+					trunk_parents.append(sc)
+			var stage_a_t: Node = main.scenery_root.get_node_or_null("StageA")
+			if stage_a_t != null:
+				var trees_t: Node = stage_a_t.get_node_or_null("Trees")
+				if trees_t != null:
+					for tc: Node in trees_t.get_children():
+						trunk_parents.append(tc)
+			for tn: Node in trunk_parents:
+				var tp2: Vector3 = (tn as Node3D).global_position
+				if tp2.x > 2.0 and tp2.x < 13.2:
+					trunks_checked += 1
+					if absf(tp2.z - axis_z) < 1.2:
+						trunks_clear = false
+			check(trunks_clear and trunks_checked > 0,
+				"Stage B: the gate approach stands clear of tree trunks (%d in the corridor)"
+				% trunks_checked)
 
 	var sky_ok: bool = false
 	for child: Node in main.get_children():

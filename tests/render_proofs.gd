@@ -53,9 +53,11 @@ extends SceneTree
 ##   proofs/gate_view.png - Stage B: THE GATE in the right
 ##     fence, the stepping-stone path arriving.
 ##   proofs/fountain_view.png - Stage B: the stacked-rock
-##     fountain in its nook in the left bed.
+##     fountain in its corner nook at the patio end of the
+##     left bed (Fix Pass 29).
 ##   proofs/phineas_view.png - Stage B: Phineas Gage in the
-##     far-left corner, pan in hand.
+##     corner pocket beside the far bed's west end, pan in
+##     hand (Fix Pass 29).
 ##   proofs/sway_a.png / sway_b.png - the sway pair: one
 ##     designated background canopy against the sky, shot twice
 ##     ~6 s apart; the suite MEASURES the canopy's displacement
@@ -296,20 +298,24 @@ func _run() -> void:
 	cam_y.look_at(Vector3(2.2, 0.7, 4.6), Vector3.UP)
 	await settle(6)
 	await snap(cam_y, "res://proofs/patio_close.png")
-	# The gate from inside the yard, the stepping-stone
-	# path arriving across the bed gap at the frame's feet.
+	# The gate from inside the yard, ON the stepping-stone
+	# path's axis, the path arriving across the bed gap at
+	# the frame's feet - the approach frame (Fix Pass 29:
+	# no tree trunk stands in this view any more).
 	cam_y.position = Vector3(9.8, 1.5, -6.0)
 	cam_y.look_at(Vector3(13.0, 1.0, -6.0), Vector3.UP)
 	await settle(6)
 	await snap(cam_y, "res://proofs/gate_view.png")
-	# The fountain in its nook in the left bed.
-	cam_y.position = Vector3(-1.8, 1.15, -4.7)
-	cam_y.look_at(Vector3(-3.69, 0.35, -6.0), Vector3.UP)
+	# The fountain in its corner nook at the patio end of
+	# the left bed (Fix Pass 29), the bed run behind it.
+	cam_y.position = Vector3(-2.35, 1.30, 0.35)
+	cam_y.look_at(Vector3(-3.75, 0.30, -1.55), Vector3.UP)
 	await settle(6)
 	await snap(cam_y, "res://proofs/fountain_view.png")
-	# Phineas in his corner: hat, beard, pan, watching.
-	cam_y.position = Vector3(-1.55, 1.5, -12.4)
-	cam_y.look_at(Vector3(-3.85, 1.05, -14.3), Vector3.UP)
+	# Phineas in his corner pocket beside the far bed's
+	# west end: hat, beard, pan, watching (Fix Pass 29).
+	cam_y.position = Vector3(-3.10, 1.50, -12.55)
+	cam_y.look_at(Vector3(-5.40, 1.05, -14.78), Vector3.UP)
 	await settle(6)
 	await snap(cam_y, "res://proofs/phineas_view.png")
 	cam_y.queue_free()

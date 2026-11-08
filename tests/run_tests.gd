@@ -871,9 +871,11 @@ func test_stage_a_layout() -> void:
 ## foul line and holds both stations; the house wall stands
 ## on the patio's rear edge; every patio object stands on
 ## the slab, off the walk corridor and off the stations;
-## the gate sits in the right fence mid-yard; the fountain
-## fits inside the left bed; Phineas stands in the far bed
-## clear of the pit.
+## the gate sits in the right fence mid-yard with its
+## approach clear of tree trunks; the fountain sits in
+## the left bed's rear corner nook (Fix Pass 29); Phineas
+## stands on the ground in the corner pocket beside the
+## far bed's west end, out of the planting entirely.
 func circle_rect_clear(c: Vector3, r: float, rect: Array) -> bool:
 	var nx: float = clampf(c.x, float(rect[0]), float(rect[2]))
 	var nz: float = clampf(c.z, float(rect[1]), float(rect[3]))
@@ -964,24 +966,68 @@ func test_stage_b_layout() -> void:
 	check(float(beds[1][3]) < float(gate["z_latch"])
 		and float(beds[2][1]) > float(gate["z_hinge"]),
 		"Stage B: the bed gap sits inside the gate's fence opening")
-	# The fountain: its basin fits inside the left bed.
+	# The gate approach: no foreground tree trunk stands
+	# within 1.2 m laterally of the gate's centre axis on
+	# the approach side (the yard side of the right fence,
+	# the stepping-stone path's run) - Fix Pass 29: the
+	# tree at (11.0, -5.0) stood 1.0 m off the axis with
+	# its canopy over the path; it now stands at z -2.2.
+	var fg_spots: Array = main_script.scenery_tree_spots()
+	check(fg_spots.size() == 6,
+		"Stage B: the foreground trees stand (%d trees)" % fg_spots.size())
+	for fgs: Array in fg_spots:
+		var ftp: Vector3 = fgs[0]
+		check(ftp.y == 0.0,
+			"Stage B: foreground tree at %s stands on the ground plane" % str(ftp))
+		if ftp.x > 2.0 and ftp.x < 13.2:
+			check(absf(ftp.z - gz_c) >= 1.2,
+				"Stage B: no trunk in the gate approach (tree at %s, %.2f m off the axis)"
+				% [str(ftp), absf(ftp.z - gz_c)])
+	# The fountain: its basin fits inside the left bed,
+	# seated in the bed's REAR CORNER nook (Fix Pass 29) -
+	# its centre in the bed's rear quarter, its rear rim a
+	# stone's width short of the bed's end line, and the
+	# basin clear of the patio slab it corners against.
 	var fp: Vector3 = main_script.STAGE_B_FOUNTAIN_POS
 	var fr: float = float(main_script.STAGE_B_FOUNTAIN_R)
 	var left_bed: Array = beds[0]
 	check(fp.x - fr >= float(left_bed[0]) and fp.x + fr <= float(left_bed[2])
 		and fp.z - fr >= float(left_bed[1]) and fp.z + fr <= float(left_bed[3]),
 		"Stage B: the fountain basin fits inside the left bed (at %s)" % str(fp))
+	var bed_rear: float = float(left_bed[3])
+	var bed_front: float = float(left_bed[1])
+	check(fp.z > bed_front + (bed_rear - bed_front) * 0.75,
+		"Stage B: the fountain sits in the bed's rear quarter (centre z %.2f)" % fp.z)
+	check(bed_rear - (fp.z + fr) >= 0.0 and bed_rear - (fp.z + fr) <= 0.35,
+		"Stage B: the fountain's rim meets the bed's end (%.2f m short)"
+		% (bed_rear - (fp.z + fr)))
+	check(circle_rect_clear(fp, fr, patio),
+		"Stage B: the fountain basin keeps off the patio slab")
 	check(circle_rect_clear(fp, fr, [-2.30, -11.30, 2.30, 1.60]),
 		"Stage B: the fountain keeps clear of the lane corridor")
-	# Phineas: in the far bed near its left end, clear of
-	# the pit and short of the board.
+	# Phineas (Fix Pass 29): OUT of the far bed entirely -
+	# on the ground inside the stated corner pocket beside
+	# the far bed's west end, his body clear of every bed
+	# rect, aligned beside the bed's end, feet on the
+	# ground plane, clear of pit and board.
 	var pp: Vector3 = main_script.STAGE_B_PHINEAS_POS
 	var far_bed: Array = beds[beds.size() - 1]
-	check(pp.x - 0.3 >= float(far_bed[0]) and pp.x + 0.3 <= float(far_bed[2])
-		and pp.z - 0.3 >= float(far_bed[1]) and pp.z + 0.3 <= float(far_bed[3]),
-		"Stage B: Phineas stands in the far bed at its left end (at %s)" % str(pp))
-	check(pp.x < -3.0 and pp.z > -15.5,
-		"Stage B: Phineas holds the far-left corner, clear of pit and board")
+	var pocket: Array = main_script.stage_b_phineas_pocket()
+	check(pp.x - 0.30 >= float(pocket[0]) and pp.x + 0.30 <= float(pocket[2])
+		and pp.z - 0.30 >= float(pocket[1]) and pp.z + 0.30 <= float(pocket[3]),
+		"Stage B: Phineas stands inside the corner pocket %s (at %s)"
+		% [str(pocket), str(pp)])
+	check(circle_rect_clear(pp, 0.30, far_bed),
+		"Stage B: Phineas stands clear of the far bed (no planting under him)")
+	check(circle_rect_clear(pp, 0.30, beds[0]),
+		"Stage B: Phineas stands clear of the left bed")
+	check(pp.x + 0.30 < float(far_bed[0])
+		and absf(pp.z - (float(far_bed[1]) + float(far_bed[3])) * 0.5) <= 1.0,
+		"Stage B: Phineas stands beside the far bed's west end (at %s)" % str(pp))
+	check(pp.y == 0.0,
+		"Stage B: Phineas's feet are on the ground plane")
+	check(pp.distance_to(main_script.STAKE_POS) > 4.0,
+		"Stage B: Phineas holds the far-left corner, clear of the pit")
 
 
 func _run() -> void:
