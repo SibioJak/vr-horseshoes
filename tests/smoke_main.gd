@@ -1253,6 +1253,151 @@ func _run() -> void:
 			sky_ok = (child as WorldEnvironment).environment.background_mode == Environment.BG_SKY
 	check(sky_ok, "a real sky replaces the flat clear colour")
 
+	# --- Stage B (the light): time of day, fire, birds ---
+	# The fire pit stands built on the patio with its lit
+	# half cold at NOON; the flock rides one mover, hidden.
+	var fire_n: Node = null
+	if main.scenery_root != null:
+		fire_n = main.scenery_root.get_node_or_null("StageB/Patio/FirePit")
+	check(fire_n != null, "Stage B light: the fire pit is built on the patio")
+	if fire_n != null:
+		check(fire_n.get_node_or_null("Flames") != null
+			and fire_n.get_node_or_null("Embers") != null
+			and fire_n.get_node_or_null("FireLight") != null,
+			"Stage B light: the pit carries its flames, embers and one light")
+		var fire_spots: Array = main.stage_b_object_spots()
+		for fs: Array in fire_spots:
+			if String(fs[0]) == "fire_pit":
+				var fsp: Vector3 = fs[1]
+				check((fire_n as Node3D).global_position.distance_to(fsp) < 0.01,
+					"Stage B light: the built pit stands at its surveyed spot")
+	check(main.bird_root != null
+		and main.bird_root.get_child_count() == main.BIRD_COUNT_MAX,
+		"Stage B light: the flock rides one mover (%d birds)"
+		% (main.bird_root.get_child_count() if main.bird_root != null else 0))
+	if main.bird_root != null:
+		var wings_ok: bool = true
+		for bd: Node in main.bird_root.get_children():
+			if bd.get_node_or_null("WingL") == null \
+					or bd.get_node_or_null("WingR") == null:
+				wings_ok = false
+		check(wings_ok, "Stage B light: every bird is a two-wing silhouette, not a sphere")
+		check(not main.bird_active and not main.bird_root.visible,
+			"Stage B light: no crossing is up at first run - birds are occasional")
+	# The control state machine, through the production
+	# button poll: B/Y in practice cycles; the board names
+	# the selection; the fire is lit exactly at DUSK.
+	check(main.time_of_day == "NOON",
+		"Stage B light: a first run starts at NOON (the accepted look)")
+	check(main.controls_label.text.contains(
+		"TIME: NOON - B/Y IN PRACTICE: CHANGE TIME"),
+		"Stage B light: the board names the time and its control - standing rule: every accepted command is listed")
+	check(not main.fire_is_lit() and main.fire_light != null
+		and not main.fire_light.visible,
+		"Stage B light: the fire stands cold at NOON - no flames, no light")
+	await pulse_hand_button("L", "B") # the left hand's Y counts too
+	check(main.time_of_day == "DUSK",
+		"Stage B light: B/Y in practice cycles NOON -> DUSK")
+	await frames(6)
+	check(main.fire_is_lit() and main.fire_light.visible
+		and main.fire_light.light_energy > 1.0,
+		"Stage B light: the fire is LIT at dusk (flickering, energy %.2f)"
+		% main.fire_light.light_energy)
+	check(main.controls_label.text.contains("TIME: DUSK"),
+		"Stage B light: the board re-names the selection at DUSK")
+	var dusk_preset: Dictionary = main.time_of_day_presets()["DUSK"]
+	var dusk_euler: Vector3 = dusk_preset["sun_euler"]
+	# Tolerance, not equality: the sun's euler reads back
+	# through its basis with a float32 hair in it (probed:
+	# (-11, 32, 0) prints exact and still fails ==).
+	check((main.sun_light.rotation_degrees - dusk_euler).length() < 0.05
+		and absf(main.world_env.ambient_light_energy
+			- float(dusk_preset["ambient_energy"])) < 0.0001,
+		"Stage B light: the DUSK preset drives the sun and ambient")
+	await pulse_button("B")
+	check(main.time_of_day == "MORNING" and not main.fire_is_lit(),
+		"Stage B light: DUSK -> MORNING, and the fire goes cold")
+	await pulse_button("B")
+	check(main.time_of_day == "NOON",
+		"Stage B light: MORNING -> NOON - the cycle closes")
+	# In a game, B keeps its job and the press is spent on
+	# the exit: the time must NOT change with it.
+	main.start_game()
+	check(main.mode == "GAME", "Stage B light: a game starts for the B test")
+	await pulse_button("B")
+	check(main.mode == "PRACTICE" and main.time_of_day == "NOON",
+		"Stage B light: B in a game returns to practice WITHOUT changing the time")
+	# Persistence: the selection rides the settings file
+	# beside the default grip, across a fresh instance.
+	main.set_time_of_day("DUSK")
+	var m2b: Node = spawn_fresh_main(rec_path, set_path)
+	await frames(4)
+	check(String(m2b.time_of_day) == "DUSK" and m2b.fire_is_lit(),
+		"Stage B light: a fresh instance restores DUSK from the settings file, fire lit")
+	m2b.queue_free()
+	await frames(3)
+	# A corrupt settings file falls back to NOON, grip 0.
+	var bad_path: String = "user://smoke_settings_bad.json"
+	var bf: FileAccess = FileAccess.open(bad_path, FileAccess.WRITE)
+	bf.store_string("{not json")
+	bf.close()
+	var m3b: Node = spawn_fresh_main(rec_path, bad_path)
+	await frames(4)
+	check(String(m3b.time_of_day) == "NOON" and int(m3b.default_grip) == 0,
+		"Stage B light: a corrupt settings file falls back to NOON / TOE GRIP")
+	m3b.queue_free()
+	await frames(3)
+	main.set_time_of_day("NOON")
+	# Birds: the hook forces a crossing; it moves on the
+	# mover and despawns past the yard.
+	main.debug_force_bird_crossing()
+	check(main.bird_active and main.bird_root.visible,
+		"Stage B light: the hook forces a crossing on demand")
+	var bird_x0: float = main.bird_root.position.x
+	await create_timer(0.6).timeout
+	check(absf(main.bird_root.position.x - bird_x0) > 2.0,
+		"Stage B light: the crossing moves (%.1f m in 0.6 s)"
+		% absf(main.bird_root.position.x - bird_x0))
+	main.bird_root.position = main.bird_dir * 100.0
+	await frames(4)
+	check(not main.bird_active and not main.bird_root.visible,
+		"Stage B light: the crossing despawns past the yard - gone, not parked")
+	# A full game at DUSK: manufactured rounds (the win
+	# probes' method) to 21 - the game must complete under
+	# dusk light, with the insert carrying its breakdown.
+	main.set_time_of_day("DUSK")
+	main.start_game()
+	var dusk_rounds: int = 0
+	while main.mode == "GAME" and main.phase != "OVER" and dusk_rounds < 12:
+		await wait_ai_quiet()
+		main.inning_results = [
+			{"owner": "AI", "dist_in": 0.0, "ringer": true},
+			{"owner": "P", "dist_in": 30.0, "ringer": false},
+			{"owner": "P", "dist_in": 40.0, "ringer": false}]
+		main._begin_tabulate()
+		var waited_d: float = 0.0
+		while waited_d < 10.0 and main.phase != "INSERT" \
+				and main.phase != "OVER":
+			await create_timer(0.1).timeout
+			waited_d += 0.1
+		dusk_rounds += 1
+		if main.phase == "INSERT":
+			check(main.insert_label != null
+				and main.insert_label.text.contains("OPP +3"),
+				"Stage B light: the insert carries its breakdown at DUSK (round %d)"
+				% dusk_rounds)
+			await pulse_button("A")
+	check(main.phase == "OVER" and main.score_opp >= 21,
+		"Stage B light: a full game completes at DUSK (%d rounds, opponent %d)"
+		% [dusk_rounds, main.score_opp])
+	check(main.insert_label != null
+		and main.insert_label.text.contains("FINAL"),
+		"Stage B light: the final breakdown stands on the insert at DUSK")
+	main.set_time_of_day("NOON")
+	await pulse_button("B") # exit the finished game - spent on the exit
+	check(main.mode == "PRACTICE" and main.time_of_day == "NOON",
+		"Stage B light: the yard is left in practice at NOON for the sections below")
+
 	# --- Rack layout beside the stances (Fix Pass 11 re-derivation
 	# of the pass-3 stance-box guards) ---
 	# FP2 measured the stand from the SPAWN point (0.61 m) and called

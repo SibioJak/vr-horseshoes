@@ -63,6 +63,18 @@ extends SceneTree
 ##     ~6 s apart; the suite MEASURES the canopy's displacement
 ##     between the frames (see _canopy_centroid) and asserts it
 ##     moved a little - present, small, never a lurch.
+##   proofs/time_morning.png / time_noon.png / time_dusk.png -
+##     Stage B light: one camera at the throwing line, the
+##     yard under the three times; the suite MEASURES mean
+##     luminance (dusk darker than noon) and the morning/noon
+##     frame difference (a different sun, not a relabel).
+##   proofs/dusk_fire.png - Stage B light: the look-back at
+##     DUSK with the patio fire lit; the suite measures the
+##     fire's neighbourhood brighter and warmer than the
+##     frame around it.
+##   proofs/birds_view.png - Stage B light: a forced bird
+##     crossing parked mid-frame - dark two-wing silhouettes
+##     against the sky, counted by the suite.
 ## These prove the rendered path + input path work together; they do
 ## NOT prove headset feel. The XR interaction layer is only verified
 ## when Chris runs it in the headset.
@@ -167,6 +179,69 @@ func canopy_centroid(img: Image, y: int) -> Vector2:
 	return found
 
 
+## Mean luminance over a strided sample of the frame -
+## the Stage B light frames' darkness measure.
+func mean_luminance(img: Image) -> float:
+	var total: float = 0.0
+	var n: int = 0
+	for x: int in range(0, img.get_width(), 6):
+		for y: int in range(0, img.get_height(), 6):
+			var px: Color = img.get_pixel(x, y)
+			total += px.r * 0.299 + px.g * 0.587 + px.b * 0.114
+			n += 1
+	return total / float(maxi(n, 1))
+
+
+## Mean absolute per-channel difference between two frames
+## of the same size - "these are not the same picture".
+func mean_abs_diff(a: Image, b: Image) -> float:
+	var total: float = 0.0
+	var n: int = 0
+	for x: int in range(0, a.get_width(), 6):
+		for y: int in range(0, a.get_height(), 6):
+			var pa: Color = a.get_pixel(x, y)
+			var pb: Color = b.get_pixel(x, y)
+			total += (absf(pa.r - pb.r) + absf(pa.g - pb.g)
+				+ absf(pa.b - pb.b)) / 3.0
+			n += 1
+	return total / float(maxi(n, 1))
+
+
+## (luminance, warmth) over a square region of the frame:
+## warmth is mean red-minus-blue - firelight's signature.
+func region_stats(img: Image, cx: int, cy: int, half: int) -> Vector2:
+	var lum: float = 0.0
+	var warm: float = 0.0
+	var n: int = 0
+	var x0: int = maxi(cx - half, 0)
+	var x1: int = mini(cx + half, img.get_width() - 1)
+	var y0: int = maxi(cy - half, 0)
+	var y1: int = mini(cy + half, img.get_height() - 1)
+	for x: int in range(x0, x1, 3):
+		for y: int in range(y0, y1, 3):
+			var px: Color = img.get_pixel(x, y)
+			lum += px.r * 0.299 + px.g * 0.587 + px.b * 0.114
+			warm += px.r - px.b
+			n += 1
+	if n == 0:
+		return Vector2(-1.0, 0.0)
+	return Vector2(lum / float(n), warm / float(n))
+
+
+## The whole frame's (luminance, warmth), strided.
+func frame_stats(img: Image) -> Vector2:
+	var lum: float = 0.0
+	var warm: float = 0.0
+	var n: int = 0
+	for x: int in range(0, img.get_width(), 6):
+		for y: int in range(0, img.get_height(), 6):
+			var px: Color = img.get_pixel(x, y)
+			lum += px.r * 0.299 + px.g * 0.587 + px.b * 0.114
+			warm += px.r - px.b
+			n += 1
+	return Vector2(lum / float(maxi(n, 1)), warm / float(maxi(n, 1)))
+
+
 func _init() -> void:
 	_run()
 
@@ -176,9 +251,16 @@ func _run() -> void:
 	var rec_path: String = "user://proof_throws.jsonl"
 	if FileAccess.file_exists(rec_path):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))
+	# Stage B light: the settings file is redirected too, so
+	# the run starts from a first run - NOON, the accepted
+	# look - whatever the player's own file holds.
+	var set_path_p: String = "user://proof_settings.json"
+	if FileAccess.file_exists(set_path_p):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(set_path_p))
 	var ps: PackedScene = load("res://main.tscn")
 	main = ps.instantiate()
 	main.recorder_path = rec_path
+	main.settings_path = set_path_p
 	root.add_child(main)
 	await create_timer(0.4).timeout
 	check(main != null, "main scene instantiated")
@@ -319,6 +401,87 @@ func _run() -> void:
 	await settle(6)
 	await snap(cam_y, "res://proofs/phineas_view.png")
 	cam_y.queue_free()
+
+	# --- Proof B0: Stage B light - three times, the fire, the birds ---
+	# One camera at the throwing line (the perimeter framing)
+	# under MORNING, NOON and DUSK in turn. The suite
+	# MEASURES: dusk darker than noon overall; morning a
+	# genuinely different picture from noon (a low sun, not
+	# a relabel of the same light).
+	var cam_t := Camera3D.new()
+	cam_t.fov = 55.0
+	cam_t.position = Vector3(0.8, 1.62, 0.6)
+	main.add_child(cam_t)
+	cam_t.look_at(Vector3(0.0, 0.4, -12.192), Vector3.UP)
+	cam_t.current = true
+	main.set_time_of_day("MORNING")
+	await settle(6)
+	var img_morning: Image = await snap_image("res://proofs/time_morning.png")
+	main.set_time_of_day("NOON")
+	await settle(6)
+	var img_noon: Image = await snap_image("res://proofs/time_noon.png")
+	main.set_time_of_day("DUSK")
+	await settle(6)
+	var img_dusk: Image = await snap_image("res://proofs/time_dusk.png")
+	var lum_morning: float = mean_luminance(img_morning)
+	var lum_noon: float = mean_luminance(img_noon)
+	var lum_dusk: float = mean_luminance(img_dusk)
+	check(lum_dusk < lum_noon * 0.85,
+		"Stage B light: dusk is measurably darker than noon (mean luminance %.3f vs %.3f)"
+		% [lum_dusk, lum_noon])
+	check(mean_abs_diff(img_morning, img_noon) > 0.02,
+		"Stage B light: morning is a different light from noon, not a relabel (frame diff %.3f, morning luminance %.3f)"
+		% [mean_abs_diff(img_morning, img_noon), lum_morning])
+	cam_t.queue_free()
+	# The look-back at DUSK, the fire lit: the pit's
+	# neighbourhood - around its projected position - must
+	# measure brighter and warmer than the frame around it.
+	var cam_f := Camera3D.new()
+	cam_f.fov = 55.0
+	cam_f.position = Vector3(0.8, 1.62, -1.5)
+	main.add_child(cam_f)
+	cam_f.look_at(Vector3(0.2, 0.8, 5.0), Vector3.UP)
+	cam_f.current = true
+	await settle(6)
+	check(main.fire_is_lit(), "Stage B light: the fire is lit for its frame")
+	var img_fire: Image = await snap_image("res://proofs/dusk_fire.png")
+	var fire_px: Vector2 = cam_f.unproject_position(Vector3(-2.30, 0.45, 1.90))
+	var fire_region: Vector2 = region_stats(img_fire,
+		int(fire_px.x), int(fire_px.y), 30)
+	var fire_frame: Vector2 = frame_stats(img_fire)
+	check(fire_region.x > fire_frame.x
+		and fire_region.y > fire_frame.y + 0.03,
+		"Stage B light: the fire's neighbourhood is brighter and warmer than the dusk frame around it (lum %.3f vs %.3f, warmth %.3f vs %.3f)"
+		% [fire_region.x, fire_frame.x, fire_region.y, fire_frame.y])
+	cam_f.queue_free()
+	# A forced crossing parked across the sky camera: dark
+	# two-wing silhouettes, counted. The flock is turned to
+	# cross the frame (wings spread to the camera) - the
+	# mover's travel direction is a test transport detail.
+	main.debug_force_bird_crossing()
+	main.bird_dir = Vector3(0.0, 0.0, -1.0)
+	main.bird_root.rotation.y = PI * 0.5
+	main.bird_root.position = Vector3(0.5, 15.0, -6.0)
+	var cam_sky := Camera3D.new()
+	cam_sky.fov = 55.0
+	cam_sky.position = Vector3(0.8, 1.62, 0.6)
+	main.add_child(cam_sky)
+	cam_sky.look_at(Vector3(0.5, 13.2, -8.0), Vector3.UP)
+	cam_sky.current = true
+	await settle(3)
+	var img_birds: Image = await snap_image("res://proofs/birds_view.png")
+	var dark_px: int = 0
+	for bx: int in range(0, img_birds.get_width(), 2):
+		for by: int in range(0, img_birds.get_height(), 2):
+			var bpx: Color = img_birds.get_pixel(bx, by)
+			if bpx.r < 0.16 and bpx.g < 0.16 and bpx.b < 0.16:
+				dark_px += 1
+	check(dark_px > 20,
+		"Stage B light: the flock crosses as dark silhouettes against the sky (%d dark samples)"
+		% dark_px)
+	cam_sky.queue_free()
+	main.set_time_of_day("NOON")
+	await settle(4)
 
 	# --- Proof A2: board close-up, MID-GAME (Backyard Game v1) ---
 	# Seed a game in progress, so the board renders its game
