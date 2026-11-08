@@ -2629,25 +2629,51 @@ func _run() -> void:
 	# round tabulates on settle + a beat, the insert cam shows
 	# the pit closeup and the breakdown, A stocks the next
 	# round. Walking still exists; it just does nothing.
-	# (a) THE LINE CLAMP: while a round is live the player
-	# cannot walk past the foul line - a full stick walk into
-	# the lane stops at the clamp plane, and retreat still
-	# works (the clamp is on the movement result, not input).
-	var plane20: float = main.game_line_z() - 0.40
+	# (a) THE LINE BARRIER (FP20's clamp, re-derived by FP30):
+	# while a round is live the player cannot get his HEAD'S
+	# GROUND POSITION past the foul line. FP20 clamped the
+	# ORIGIN at a plane 0.40 m past the line and Chris walked
+	# through it in the headset - origin obedient, head leaned
+	# over, "line is behind me." The barrier judges the head:
+	# walk, lean and stride all stop at the line itself (a
+	# 0.05 m epsilon), and retreat still works (the barrier is
+	# on the movement result, not input). Walked on production
+	# movement throughout - never teleported.
+	var line20: float = main.game_line_z()
+	var limit30: float = line20 - main.LINE_BARRIER_EPSILON
 	main.origin.global_transform = Transform3D.IDENTITY
+	# Upright head, directly over the origin: the FP20 walk.
+	main.cam.transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 1.62, 0.0))
 	main.start_game()
 	await walk_forward_for(3.0)
-	check(main.origin.global_position.z >= plane20 - 0.001
-		and main.origin.global_position.z <= plane20 + 0.02,
-		"FP20 clamp: a live-round walk down the lane stops at the line plane (z %.3f, plane %.3f)"
-		% [main.origin.global_position.z, plane20])
+	check(main.cam.global_position.z >= limit30 - 0.001
+		and main.cam.global_position.z <= limit30 + 0.03,
+		"FP30 barrier: a live-round walk down the lane stops with the HEAD at the line (head z %.3f, limit %.3f)"
+		% [main.cam.global_position.z, limit30])
+	# The leaned walk - Chris's screenshot geometry, on foot:
+	# head pitched ~80 deg down to look at his toes, its centre
+	# 0.30 m ahead of the origin. Under FP20 this walk put the
+	# ORIGIN 0.40 m past the line; now the head pins at the
+	# limit and the origin never even reaches the line.
+	main.cam.transform = Transform3D(
+		Basis.from_euler(Vector3(deg_to_rad(-80.0), 0.0, 0.0)),
+		Vector3(0.0, 1.45, -0.30))
+	await walk_forward_for(3.0)
+	check(main.cam.global_position.z >= limit30 - 0.001
+		and main.cam.global_position.z <= limit30 + 0.03,
+		"FP30 barrier: leaned forward looking down, the head still stops at the line (head z %.3f, limit %.3f)"
+		% [main.cam.global_position.z, limit30])
+	check(main.origin.global_position.z > line20,
+		"FP30 barrier: the leaned walk's ORIGIN stays behind the line entirely (origin z %.3f, line %.3f) - FP20 let it 0.40 m past"
+		% [main.origin.global_position.z, line20])
 	main.test_stick["L"] = Vector2(0.0, -1.0)
 	await create_timer(0.6).timeout
 	main.test_stick["L"] = Vector2.ZERO
 	await frames(3)
-	check(main.origin.global_position.z > plane20 + 0.5,
-		"FP20 clamp: walking BACKWARD off the plane still works (z %.3f)"
-		% main.origin.global_position.z)
+	check(main.cam.global_position.z > limit30 + 0.5,
+		"FP30 barrier: walking BACKWARD off the line still works (head z %.3f)"
+		% main.cam.global_position.z)
+	main.cam.transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 1.62, 0.0))
 	check(main.phase == "P_TURN",
 		"FP20 clamp: the round is still live and unthrown after the walk attempt")
 	await pulse_button("B")
@@ -2688,7 +2714,7 @@ func _run() -> void:
 	# (b) FREE MOVEMENT during the insert: he may stroll down
 	# the lane while the breakdown is up - the clamp is off.
 	await walk_forward_for(2.5)
-	check(main.origin.global_position.z < plane20 - 0.5,
+	check(main.origin.global_position.z < line20 - 0.5,
 		"FP20: during the insert the player walks PAST the line freely (z %.3f)"
 		% main.origin.global_position.z)
 	# (c) A-CONTINUE from beyond the line seats him back
@@ -2702,7 +2728,7 @@ func _run() -> void:
 	check(main.inning == 2 and main.phase == "AI_TURN",
 		"FP20: A at the insert opens inning 2 with the scorer (the AI) first (inning %d, phase %s)"
 		% [main.inning, String(main.phase)])
-	check(main.origin.global_position.z >= plane20 - 0.001
+	check(main.origin.global_position.z >= limit30 - 0.001
 		and main.cam.global_position.z > main.game_line_z(),
 		"FP20: the A-continue seated him back behind the line (origin z %.3f, cam z %.3f)"
 		% [main.origin.global_position.z, main.cam.global_position.z])

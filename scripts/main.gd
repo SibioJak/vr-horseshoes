@@ -42,6 +42,12 @@ const FOUL_40_Z: float = -0.914 # the 37 ft line: 40 ft class
 const FOUL_30_Z: float = -3.962 # the 27 ft line: 30 ft class
 const STANCE_HALF_WIDTH: float = 0.85
 const STANCE_HALF_DEPTH: float = 0.40
+# Fix Pass 30: the LINE BARRIER's tolerance. The barrier judges
+# the head's ground position against the game line; the head
+# may reach this far past the line and no farther. FP20's
+# 0.40 m stride allowance on the ORIGIN is gone (see the clamp
+# in _process_locomotion): the allowance was the leak.
+const LINE_BARRIER_EPSILON: float = 0.05
 # Fix Pass 19 pitching spots: the player pitches from his side
 # of the lane, the AI from the opposite side, ~1.6 m apart -
 # real one-pit play, both pitchers at the line end. Each owner's
@@ -2772,17 +2778,28 @@ func _process_locomotion(delta: float) -> void:
 	# see _round_live). A position clamp on the movement
 	# RESULT, not a new input rule: turning, walking backward
 	# or sideways and blending stay exactly as Fix Pass 6
-	# left them; only forward progress past the plane stops.
-	# The plane sits the stance box's stride allowance
-	# (0.40 m) past the 37 ft game line - the player can
-	# stride AT the line, he cannot walk down the lane while
-	# a round is live.
+	# left them; only forward progress past the line stops.
+	#
+	# Fix Pass 30: THE LINE BARRIER. FP20 judged the ORIGIN
+	# against a plane 0.40 m past the line and Chris walked
+	# through it in the headset (2026-11-08): "the line the
+	# player toes to throw... invisi barrier is too lenient.
+	# This is looking straight down. line is behind me." The
+	# origin obeyed its plane while his HEAD - leaned ahead
+	# of the origin to look down - stood ~0.70 m past the
+	# line, and a physical step in the room crossed without
+	# the origin moving at all. The barrier now judges the
+	# HEAD'S GROUND POSITION (the camera's world XZ) against
+	# the game line itself, a hair of epsilon past it and no
+	# more: the origin retreats by exactly the head's excess
+	# (Locomotion.line_barrier_origin), so the player slides
+	# to a stop at the line however he arrives there - stick,
+	# lean or stride. His law: "looking straight down from
+	# your throwing spot, the line stays under your toes."
 	if _round_live():
-		var p: Vector3 = origin.global_position
-		var plane: float = game_line_z() - STANCE_HALF_DEPTH
-		if p.z < plane:
-			p.z = plane
-			origin.global_position = p
+		origin.global_position = Locomotion.line_barrier_origin(
+			origin.global_position, cam.global_position,
+			game_line_z(), LINE_BARRIER_EPSILON)
 
 
 ## Fix Pass 20: a game round is LIVE from its first stock
@@ -2794,11 +2811,14 @@ func _round_live() -> bool:
 		or phase == "AI_TURN" or phase == "TABULATE")
 
 
-## Fix Pass 20: is the player past the game line's clamp
-## plane (down the lane where a live round would not let
-## him be)?
+## Fix Pass 20: is the player past the game line (down the
+## lane where a live round would not let him be)?
+## Fix Pass 30: judged on the HEAD'S ground position, the
+## barrier's own terms - FP20's origin plane waved a leaned
+## head through here too, and the seat-back below is what
+## keeps the barrier from having to snap him back instead.
 func _past_line() -> bool:
-	return origin.global_position.z < game_line_z() - STANCE_HALF_DEPTH
+	return cam.global_position.z < game_line_z() - LINE_BARRIER_EPSILON
 
 
 ## Seat the player back behind the game line (Fix Pass 20,

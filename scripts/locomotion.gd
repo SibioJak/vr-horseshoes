@@ -88,6 +88,33 @@ static func clamp_origin(pos: Vector3) -> Vector3:
 	return out
 
 
+## Fix Pass 30: THE LINE BARRIER's math. Chris's law, the pass
+## condition: "looking straight down from your throwing spot,
+## the line stays under your toes." The barrier judges the
+## HEAD'S GROUND POSITION (the camera's world XZ), never the
+## origin: FP20 clamped the ORIGIN at a plane 0.40 m past the
+## line, and a head leaning ahead of its origin crossed freely
+## - origin obedient at the plane, head stooped to look down,
+## and the head's ground point sat ~0.70 m past the line
+## (Chris, 2026-11-08, headset screenshot looking straight
+## down: "line is behind me"). A physical room-scale step
+## leaked the same way: it moves the head, not the origin,
+## and the old clamp never saw it.
+##
+## Given the origin and head world positions, return the
+## origin shifted back along +Z by exactly the head's excess
+## past (line_z - epsilon) - the head ends ON the limit, the
+## origin retreats as the player leans or steps, and sliding
+## along the line (X) is untouched. A head already at or
+## behind the limit leaves the origin exactly as it was.
+static func line_barrier_origin(origin_pos: Vector3, head_pos: Vector3, line_z: float, epsilon: float) -> Vector3:
+	var out: Vector3 = origin_pos
+	var limit: float = line_z - epsilon
+	if head_pos.z < limit:
+		out.z += limit - head_pos.z
+	return out
+
+
 ## Rotate a transform about a world pivot (the camera's position)
 ## around the vertical axis. The pivot's world image is invariant -
 ## turning in place never translates the player.

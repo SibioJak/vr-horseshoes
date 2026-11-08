@@ -379,6 +379,57 @@ func test_locomotion_math() -> void:
 		"clamp: origin 40 m out is pulled to the 25 m disc (got %s)" % str(clamped))
 	var inside := Vector3(1.0, 0.0, -6.0)
 	check(Locomotion.clamp_origin(inside) == inside, "clamp: a position inside the disc is untouched")
+	# Fix Pass 30: THE LINE BARRIER (Locomotion.line_barrier_origin).
+	# The barrier judges the HEAD's ground position against the
+	# line (z -0.914, the 37 ft line) with a 0.05 m epsilon; the
+	# origin retreats by exactly the head's excess. Chris's law:
+	# "looking straight down from your throwing spot, the line
+	# stays under your toes."
+	var bl_line: float = -0.914
+	var bl_eps: float = 0.05
+	var bl_limit: float = bl_line - bl_eps
+	# A head behind the line, or exactly ON the limit, never
+	# moves the origin.
+	var bl_calm := Vector3(0.3, 0.0, 0.2)
+	check(Locomotion.line_barrier_origin(bl_calm,
+			Vector3(0.3, 1.62, bl_line + 0.30), bl_line, bl_eps) == bl_calm,
+		"FP30 barrier: a head behind the line leaves the origin untouched")
+	check(Locomotion.line_barrier_origin(bl_calm,
+			Vector3(0.3, 1.45, bl_limit), bl_line, bl_eps) == bl_calm,
+		"FP30 barrier: a head exactly on the limit leaves the origin untouched")
+	# NEGATIVE CONTROL - the FP20 conviction geometry, the one
+	# from Chris's screenshot: the origin sits AT FP20's plane
+	# (line - 0.40, fully obedient under the old rule - assert
+	# that obedience first) while the head, stooped to look
+	# straight down, leans 0.30 m ahead of it. The old guard
+	# passed this frame; the barrier must pull the origin back
+	# until the head's ground point is ON the limit, 0.70 m of
+	# trespass down to the epsilon.
+	var bl_old_plane: float = bl_line - 0.40
+	var bl_origin := Vector3(0.0, 0.0, bl_old_plane)
+	var bl_head := Vector3(0.0, 1.45, bl_old_plane - 0.30)
+	check(absf(bl_origin.z - bl_old_plane) < 0.001
+			and bl_head.z < bl_line - 0.60,
+		"FP30 barrier (control setup): FP20's plane holds the origin (z %.3f) while the leaned head is ~0.70 m past the line (z %.3f)"
+		% [bl_origin.z, bl_head.z])
+	var bl_fixed: Vector3 = Locomotion.line_barrier_origin(
+		bl_origin, bl_head, bl_line, bl_eps)
+	check(absf((bl_head.z + (bl_fixed.z - bl_origin.z)) - bl_limit) < 0.001,
+		"FP30 barrier: the leaned head ends ON the limit (head z %.3f, limit %.3f)"
+		% [bl_head.z + (bl_fixed.z - bl_origin.z), bl_limit])
+	check(absf(bl_fixed.x - bl_origin.x) < 0.001 and bl_fixed.y == bl_origin.y,
+		"FP30 barrier: only the origin's z moves - sliding along the line stays free")
+	# The room-scale leak: origin parked legally BEHIND the
+	# line, a physical step carries the head past it. FP20
+	# never saw the step (the origin never moved); the barrier
+	# retreats the origin all the same.
+	var bl_step_origin := Vector3(0.0, 0.0, bl_line + 0.50)
+	var bl_step_head := Vector3(0.0, 1.62, bl_line - 0.50)
+	var bl_step_fixed: Vector3 = Locomotion.line_barrier_origin(
+		bl_step_origin, bl_step_head, bl_line, bl_eps)
+	check(absf((bl_step_head.z + (bl_step_fixed.z - bl_step_origin.z)) - bl_limit) < 0.001,
+		"FP30 barrier: a physical step past the line is answered too (origin retreats to z %.3f)"
+		% bl_step_fixed.z)
 
 
 func test_smooth_turn() -> void:
