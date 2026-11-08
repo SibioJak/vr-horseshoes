@@ -973,7 +973,7 @@ func test_stage_b_layout() -> void:
 	var station_envs: Array = [
 		[1.45, -0.40, 2.65, 1.00], [-2.65, -0.40, -1.45, 1.00]]
 	var spots: Array = main_script.stage_b_object_spots()
-	check(spots.size() == 5, "Stage B: five patio objects dress the slab (%d)" % spots.size())
+	check(spots.size() == 6, "Stage B: six patio objects dress the slab (%d)" % spots.size())
 	for spot: Array in spots:
 		var opos: Vector3 = spot[1]
 		var orad: float = float(spot[2])
@@ -1081,6 +1081,116 @@ func test_stage_b_layout() -> void:
 		"Stage B: Phineas holds the far-left corner, clear of the pit")
 
 
+## Stage B (the light) guards: the time-of-day preset
+## table genuinely separates the three states (sun angle,
+## colour and energy, sky, ambient all differ pairwise),
+## NOON reproduces the pre-Stage-B build's constants value
+## for value, the cycle order is MORNING -> NOON -> DUSK ->
+## MORNING, and the fire pit's surveyed spot stands clear
+## of everything the patio already holds.
+func test_stage_b_light() -> void:
+	var main_script: GDScript = load("res://scripts/main.gd")
+	var presets: Dictionary = main_script.time_of_day_presets()
+	check(presets.size() == 3 and presets.has("MORNING")
+		and presets.has("NOON") and presets.has("DUSK"),
+		"Stage B light: the preset table names exactly MORNING / NOON / DUSK")
+	var names: Array = ["MORNING", "NOON", "DUSK"]
+	var keys: Array = ["sun_euler", "sun_color", "sun_energy",
+		"sky_top", "sky_horizon", "ambient_color", "ambient_energy"]
+	for ki: int in keys.size():
+		var key: String = String(keys[ki])
+		for ai: int in names.size():
+			for bi2: int in names.size():
+				if bi2 <= ai:
+					continue
+				var va: Variant = presets[names[ai]][key]
+				var vb: Variant = presets[names[bi2]][key]
+				var differ: bool
+				if va is float:
+					differ = absf(float(va) - float(vb)) > 0.001
+				else:
+					differ = va != vb
+				check(differ,
+					"Stage B light: %s differs between %s and %s (%s vs %s)"
+					% [key, String(names[ai]), String(names[bi2]), str(va), str(vb)])
+	# NOON is the accepted look, value for value.
+	var noon: Dictionary = presets["NOON"]
+	var noon_euler: Vector3 = noon["sun_euler"]
+	check(noon_euler == Vector3(-48.0, -24.0, 0.0)
+		and absf(float(noon["sun_energy"]) - 1.1) < 0.0001,
+		"Stage B light: NOON keeps the accepted sun (-48/-24 at 1.1)")
+	var noon_top: Color = noon["sky_top"]
+	var noon_amb: Color = noon["ambient_color"]
+	check(noon_top == Color(0.22, 0.44, 0.78)
+		and noon_amb == Color(0.75, 0.78, 0.72)
+		and absf(float(noon["ambient_energy"]) - 0.7) < 0.0001,
+		"Stage B light: NOON keeps the accepted sky and ambient")
+	# Dusk stays readable on paper: a real sun and a held
+	# ambient, not a blackout.
+	var dusk: Dictionary = presets["DUSK"]
+	check(float(dusk["sun_energy"]) >= 0.7
+		and float(dusk["ambient_energy"]) >= 0.45,
+		"Stage B light: DUSK holds its light (sun %.2f, ambient %.2f) - a mood, not a tax"
+		% [float(dusk["sun_energy"]), float(dusk["ambient_energy"])])
+	# The cycle order.
+	check(String(main_script.time_after("MORNING")) == "NOON"
+		and String(main_script.time_after("NOON")) == "DUSK"
+		and String(main_script.time_after("DUSK")) == "MORNING",
+		"Stage B light: the cycle runs MORNING -> NOON -> DUSK -> MORNING")
+	# The fire pit: on the slab, and its footprint clears
+	# every other patio spot, the table's chair ring, the
+	# walk corridor, both station envelopes and the back
+	# door's step - measured, not eyeballed.
+	var patio: Array = main_script.stage_b_patio_rect()
+	var spots: Array = main_script.stage_b_object_spots()
+	var fire: Array = []
+	var table_spot: Array = []
+	for spot: Array in spots:
+		if String(spot[0]) == "fire_pit":
+			fire = spot
+		if String(spot[0]) == "table":
+			table_spot = spot
+	check(fire.size() == 3, "Stage B light: the fire pit has a surveyed spot")
+	if fire.size() == 3:
+		var fpos: Vector3 = fire[1]
+		var frad: float = float(fire[2])
+		check(fpos.x - frad >= float(patio[0]) and fpos.x + frad <= float(patio[2])
+			and fpos.z - frad >= float(patio[1]) and fpos.z + frad <= float(patio[3]),
+			"Stage B light: the fire pit stands on the patio (at %s)" % str(fpos))
+		for spot: Array in spots:
+			if String(spot[0]) == "fire_pit":
+				continue
+			var opos: Vector3 = spot[1]
+			var orad: float = float(spot[2])
+			check(fpos.distance_to(opos) > frad + orad,
+				"Stage B light: the fire pit clears the %s (%.2f m between centres, %.2f needed)"
+				% [String(spot[0]), fpos.distance_to(opos), frad + orad])
+		# The chair ring rides at STAGE_B_CHAIR_R around the
+		# table plus a chair's own depth - clear of the pit.
+		var tpos: Vector3 = table_spot[1]
+		check(fpos.distance_to(tpos)
+			> frad + float(main_script.STAGE_B_CHAIR_R) + 0.21,
+			"Stage B light: the fire pit clears the table's chair ring")
+		check(circle_rect_clear(fpos, frad, [-0.30, -0.55, 1.50, 3.60]),
+			"Stage B light: the fire pit keeps clear of the walk line to the foul line")
+		var station_envs: Array = [
+			[1.45, -0.40, 2.65, 1.00], [-2.65, -0.40, -1.45, 1.00]]
+		for ei: int in station_envs.size():
+			check(circle_rect_clear(fpos, frad, station_envs[ei]),
+				"Stage B light: the fire pit keeps clear of station envelope %d" % ei)
+		var hd: Dictionary = main_script.stage_b_house()
+		var door_x: float = float(hd["door_x"])
+		var wall_z: float = float(hd["wall_z"])
+		check(circle_rect_clear(fpos, frad,
+			[door_x - 0.60, wall_z - 0.56, door_x + 0.60, wall_z]),
+			"Stage B light: the fire pit keeps clear of the back door's step")
+		# Visible from the throwing line: inside the yard's
+		# look-back cone from the player's pitching spot.
+		var spot40: Vector3 = main_script.spot_pos(40, false)
+		check(absf(fpos.x - spot40.x) < 4.5 and fpos.z > float(main_script.FOUL_40_Z),
+			"Stage B light: the fire pit stands on the patio behind the line, in the look-back view")
+
+
 func _run() -> void:
 	test_release_math()
 	test_angular_math()
@@ -1101,6 +1211,7 @@ func _run() -> void:
 	test_ai_release()
 	test_stage_a_layout()
 	test_stage_b_layout()
+	test_stage_b_light()
 	var shoe_node := Shoe.new()
 	root.add_child(shoe_node)
 	await physics_frame

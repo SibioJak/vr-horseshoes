@@ -180,6 +180,40 @@ var candidate_zone: String = ""
 # (the cycle is the settings control - the board names it).
 var default_grip: int = 0
 var settings_path: String = "user://settings.json"
+# Stage B (the light): the time of day - MORNING, NOON or
+# DUSK, persisted beside the default grip in the same file;
+# NOON (the yard's accepted look) on first run. The sun, sky
+# material and environment nodes are kept so a change
+# re-lights the yard in place, and the fire pit reads the
+# state to know whether it is lit (DUSK only).
+var time_of_day: String = "NOON"
+var sun_light: DirectionalLight3D = null
+var sky_material: ProceduralSkyMaterial = null
+var world_env: Environment = null
+# Stage B: the patio fire pit's lit half - flame cones,
+# glowing embers and the yard's ONE added dynamic light.
+# All three are built with the pit and shown only at DUSK;
+# the flicker runs only while lit.
+var fire_flames: Node3D = null
+var fire_embers: Node3D = null
+var fire_light: OmniLight3D = null
+var fire_flame_meshes: Array = [] # MeshInstance3D cones, flicker-scaled
+var _fire_t: float = 0.0
+# Stage B: the birds - ONE mover node carrying a loose
+# group of two-wing silhouettes high across the sky,
+# invisible between crossings. Crossings come at long,
+# varied intervals; no per-bird AI, no sound.
+const BIRD_COUNT_MIN: int = 5
+const BIRD_COUNT_MAX: int = 9
+const BIRD_SPEED: float = 7.0
+const BIRD_GAP_MIN_SEC: float = 45.0
+const BIRD_GAP_MAX_SEC: float = 110.0
+var bird_root: Node3D = null
+var bird_active: bool = false
+var bird_dir: Vector3 = Vector3.RIGHT
+var _bird_timer: float = 40.0
+var _bird_t: float = 0.0
+var bird_rng := RandomNumberGenerator.new()
 # Fix Pass 25: the long-arm hop - while it runs, the stocked
 # shoe eases from its slot to the squeezing hand ("out"), or
 # back home if the squeeze is let go early ("back"). On
@@ -294,6 +328,7 @@ func _ready() -> void:
 	recorder = ThrowRecorder.new(recorder_path)
 	_load_settings() # Fix Pass 25: before the board names the default
 	ai_rng.randomize()
+	bird_rng.randomize()
 	_init_stands()
 	_build_world()
 	_build_rig()
@@ -320,16 +355,26 @@ func _load_settings() -> void:
 	if f == null:
 		return
 	var parsed: Variant = JSON.parse_string(f.get_as_text())
-	if parsed is Dictionary and parsed.has("default_grip"):
-		default_grip = clampi(int(parsed["default_grip"]),
-			0, ThrowMath.grip_position_count() - 1)
+	if parsed is Dictionary:
+		if parsed.has("default_grip"):
+			default_grip = clampi(int(parsed["default_grip"]),
+				0, ThrowMath.grip_position_count() - 1)
+		# Stage B: the stored time of day rides in the same
+		# file. A missing or unknown value is NOON (the
+		# field at its declaration), so an old or corrupt
+		# settings file can never strand the yard in the dark.
+		if parsed.has("time_of_day"):
+			var t: String = String(parsed["time_of_day"])
+			if time_of_day_presets().has(t):
+				time_of_day = t
 
 
 func _save_settings() -> void:
 	var f: FileAccess = FileAccess.open(settings_path, FileAccess.WRITE)
 	if f == null:
 		return
-	f.store_string(JSON.stringify({"default_grip": default_grip}))
+	f.store_string(JSON.stringify({
+		"default_grip": default_grip, "time_of_day": time_of_day}))
 
 
 ## The default changes exactly one way: a grip cycle lands on
@@ -343,12 +388,206 @@ func _set_default_grip(idx: int) -> void:
 	_refresh_controls_label()
 
 
+# --- Stage B (the light): the time of day ---
+
+## The cycle order: MORNING -> NOON -> DUSK -> MORNING.
+## Static so the logic suite guards the order (and the
+## preset table below) without a scene.
+static func time_after(name: String) -> String:
+	var order: Array = ["MORNING", "NOON", "DUSK"]
+	var idx: int = order.find(name)
+	if idx < 0:
+		return "NOON"
+	return String(order[(idx + 1) % order.size()])
+
+
+## The three times as DATA - sun direction/colour/energy,
+## sky colours, ambient - so the logic suite can guard that
+## the three states genuinely differ. NOON is the yard's
+## accepted look, value for value (the pre-Stage-B build's
+## constants: sun -48/-24 at 1.1, the FP10 sky, ambient
+## 0.75/0.78/0.72 at 0.7). MORNING: a low warm sun and a
+## fresh sky. DUSK: a low orange sun under a deep
+## blue-purple sky, the ambient held high enough that the
+## court, pit, board, labels and held shoe stay clearly
+## readable - dusk is a mood, not a visibility tax. There
+## is NO automatic cycle: the state changes only by the
+## control (B/Y in practice).
+static func time_of_day_presets() -> Dictionary:
+	return {
+		"MORNING": {
+			"sun_euler": Vector3(-22.0, -50.0, 0.0),
+			"sun_color": Color(1.0, 0.83, 0.60),
+			"sun_energy": 1.05,
+			"sky_top": Color(0.34, 0.56, 0.85),
+			"sky_horizon": Color(0.88, 0.80, 0.63),
+			"ground_bottom": Color(0.18, 0.24, 0.16),
+			"ground_horizon": Color(0.82, 0.78, 0.65),
+			"ambient_color": Color(0.72, 0.72, 0.68),
+			"ambient_energy": 0.62,
+		},
+		"NOON": {
+			"sun_euler": Vector3(-48.0, -24.0, 0.0),
+			"sun_color": Color(1.0, 1.0, 1.0),
+			"sun_energy": 1.1,
+			"sky_top": Color(0.22, 0.44, 0.78),
+			"sky_horizon": Color(0.72, 0.81, 0.90),
+			"ground_bottom": Color(0.18, 0.24, 0.16),
+			"ground_horizon": Color(0.72, 0.81, 0.90),
+			"ambient_color": Color(0.75, 0.78, 0.72),
+			"ambient_energy": 0.7,
+		},
+		"DUSK": {
+			"sun_euler": Vector3(-11.0, 32.0, 0.0),
+			"sun_color": Color(1.0, 0.55, 0.29),
+			"sun_energy": 0.85,
+			"sky_top": Color(0.13, 0.16, 0.38),
+			"sky_horizon": Color(0.87, 0.46, 0.27),
+			"ground_bottom": Color(0.09, 0.08, 0.15),
+			"ground_horizon": Color(0.36, 0.27, 0.36),
+			"ambient_color": Color(0.46, 0.45, 0.58),
+			"ambient_energy": 0.52,
+		},
+	}
+
+
+## Set the time of day: persist beside the default grip and
+## re-light the yard in place. The B/Y cycle in practice is
+## the player's control; the suites and proofs set it here
+## directly.
+func set_time_of_day(tname: String) -> void:
+	if not time_of_day_presets().has(tname):
+		return
+	time_of_day = tname
+	_save_settings()
+	_apply_time_of_day()
+
+
+func _cycle_time_of_day() -> void:
+	set_time_of_day(time_after(time_of_day))
+
+
+func _apply_time_of_day() -> void:
+	var p: Dictionary = time_of_day_presets()[time_of_day]
+	if sun_light != null:
+		var euler: Vector3 = p["sun_euler"]
+		sun_light.rotation_degrees = euler
+		var scol: Color = p["sun_color"]
+		sun_light.light_color = scol
+		sun_light.light_energy = float(p["sun_energy"])
+	if sky_material != null:
+		var top: Color = p["sky_top"]
+		sky_material.sky_top_color = top
+		var hor: Color = p["sky_horizon"]
+		sky_material.sky_horizon_color = hor
+		var ghor: Color = p["ground_horizon"]
+		sky_material.ground_horizon_color = ghor
+		var gbot: Color = p["ground_bottom"]
+		sky_material.ground_bottom_color = gbot
+	if world_env != null:
+		var acol: Color = p["ambient_color"]
+		world_env.ambient_light_color = acol
+		world_env.ambient_light_energy = float(p["ambient_energy"])
+	_update_fire()
+	_refresh_controls_label()
+
+
+## The fire pit is lit exactly when the time is DUSK.
+func fire_is_lit() -> bool:
+	return time_of_day == "DUSK" and fire_flames != null \
+		and fire_flames.visible
+
+
+func _update_fire() -> void:
+	var lit: bool = time_of_day == "DUSK"
+	if fire_flames != null:
+		fire_flames.visible = lit
+	if fire_embers != null:
+		fire_embers.visible = lit
+	if fire_light != null:
+		fire_light.visible = lit
+		if not lit:
+			fire_light.light_energy = 0.0
+
+
+## The fire's flicker - three sines summed, no allocation,
+## and it runs ONLY while lit: an unlit pit costs nothing
+## per frame. The light breathes around 2.2 and the flame
+## cones stretch a little with it.
+func _process_fire(delta: float) -> void:
+	if not fire_is_lit():
+		return
+	_fire_t += delta
+	var n: float = sin(_fire_t * 11.0) * 0.5 \
+		+ sin(_fire_t * 23.7) * 0.3 + sin(_fire_t * 5.3) * 0.2
+	if fire_light != null:
+		fire_light.light_energy = 2.2 + n * 0.35
+	for i: int in fire_flame_meshes.size():
+		var fm: MeshInstance3D = fire_flame_meshes[i]
+		fm.scale.y = 1.0 + 0.10 * sin(_fire_t * 13.0 + float(i) * 1.7) \
+			+ 0.05 * n
+
+
+# --- Stage B: the birds ---
+
+## One crossing: a loose V of two-wing silhouettes high
+## across the sky, there and gone - never centred over the
+## pit, never on a schedule. Direction, altitude, lane and
+## head count all vary per crossing.
+func _start_bird_crossing() -> void:
+	if bird_root == null:
+		return
+	var count: int = bird_rng.randi_range(BIRD_COUNT_MIN, BIRD_COUNT_MAX)
+	var kids: Array = bird_root.get_children()
+	for i: int in kids.size():
+		(kids[i] as Node3D).visible = i < count
+	var dir_sign: float = 1.0 if bird_rng.randf() < 0.5 else -1.0
+	bird_dir = Vector3(dir_sign, 0.0, 0.0)
+	bird_root.rotation.y = 0.0 if dir_sign > 0.0 else PI
+	bird_root.position = Vector3(-30.0 * dir_sign,
+		bird_rng.randf_range(14.0, 19.0),
+		bird_rng.randf_range(-14.0, 0.0))
+	bird_root.visible = true
+	bird_active = true
+
+
+func _process_birds(delta: float) -> void:
+	if bird_root == null:
+		return
+	if bird_active:
+		_bird_t += delta
+		bird_root.position += bird_dir * BIRD_SPEED * delta
+		var flap: float = sin(_bird_t * 9.0) * 0.55
+		for bird: Node in bird_root.get_children():
+			var bl: Node3D = bird.get_node_or_null("WingL") as Node3D
+			var br: Node3D = bird.get_node_or_null("WingR") as Node3D
+			if bl != null:
+				bl.rotation.x = flap
+			if br != null:
+				br.rotation.x = -flap
+		if absf(bird_root.position.x) > 32.0:
+			bird_active = false
+			bird_root.visible = false
+			_bird_timer = bird_rng.randf_range(
+				BIRD_GAP_MIN_SEC, BIRD_GAP_MAX_SEC)
+	else:
+		_bird_timer -= delta
+		if _bird_timer <= 0.0:
+			_start_bird_crossing()
+
+
+## Test hook (the suites and proofs only): force a bird
+## crossing now, instead of waiting out the gap.
+func debug_force_bird_crossing() -> void:
+	_start_bird_crossing()
+
+
 ## The controls block's full text, rebuilt whenever the
 ## default changes (the block names it). Every line states a
 ## command the game accepts, in the block's established style.
 func _controls_text() -> String:
 	var pos: Dictionary = ThrowMath.grip_position(default_grip)
-	return "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSQUEEZE FROM YOUR SPOT: SHOE COMES TO YOUR HAND\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nA / X WHILE HOLDING A SHOE: CHANGE GRIP\nDEFAULT GRIP: %s - SET BY CYCLING A HELD SHOE\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON (EMPTY HAND): start game / next round / play again\nB BUTTON: back to practice (in a game)\nRECENTER: menu long-press - seated/standing ok" % String(pos["name"])
+	return "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSQUEEZE FROM YOUR SPOT: SHOE COMES TO YOUR HAND\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nA / X WHILE HOLDING A SHOE: CHANGE GRIP\nDEFAULT GRIP: %s - SET BY CYCLING A HELD SHOE\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON (EMPTY HAND): start game / next round / play again\nB BUTTON: back to practice (in a game)\nTIME: %s - B/Y IN PRACTICE: CHANGE TIME\nRECENTER: menu long-press - seated/standing ok" % [String(pos["name"]), time_of_day]
 
 
 func _refresh_controls_label() -> void:
@@ -716,6 +955,7 @@ func _build_world() -> void:
 	sun.rotation_degrees = Vector3(-48.0, -24.0, 0.0)
 	sun.light_energy = 1.1
 	add_child(sun)
+	sun_light = sun # Stage B: the time-of-day presets drive it
 	var we := WorldEnvironment.new()
 	var env := Environment.new()
 	# Fix Pass 10: a real sky (procedural gradient + sun disc)
@@ -732,6 +972,7 @@ func _build_world() -> void:
 	sky_mat.sun_angle_max = 25.0
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
+	sky_material = sky_mat # Stage B: the presets recolour it
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
@@ -739,6 +980,7 @@ func _build_world() -> void:
 	env.ambient_light_energy = 0.7
 	we.environment = env
 	add_child(we)
+	world_env = env # Stage B: the presets set the ambient
 
 	var ground_phys := PhysicsMaterial.new()
 	ground_phys.friction = 0.7
@@ -786,6 +1028,10 @@ func _build_world() -> void:
 	_build_peg_post(stand_tfs[30].origin, station_side(false), -1.0)
 
 	_build_scenery()
+	# Stage B: the whole yard now stands built - sun, sky,
+	# fire pit and all - so the stored time of day (NOON on
+	# a first run) can take its light.
+	_apply_time_of_day()
 
 
 ## One pit + stake (Backyard Game v1's builder, kept
@@ -1218,6 +1464,50 @@ func _build_scenery() -> void:
 
 	_build_stage_a()
 	_build_stage_b()
+	_build_birds()
+
+
+## Stage B: the bird flock - BIRD_COUNT_MAX two-wing
+## silhouettes riding ONE mover node in a loose V (leader,
+## then pairs stepping back and out). Each wing is a thin
+## box on its own pivot at the body, so the flap is a pivot
+## rotation, nothing more. Built once, hidden between
+## crossings; the mover does all the travelling.
+func _build_birds() -> void:
+	bird_root = Node3D.new()
+	bird_root.name = "Birds"
+	bird_root.visible = false
+	scenery_root.add_child(bird_root)
+	var bird_mat := _mat(Color(0.07, 0.07, 0.08))
+	for i: int in BIRD_COUNT_MAX:
+		var bird := Node3D.new()
+		bird.name = "Bird%d" % (i + 1)
+		var rank: int = (i + 1) / 2
+		var side: float = 0.0
+		if i > 0:
+			side = -1.0 if i % 2 == 1 else 1.0
+		bird.position = Vector3(-0.95 * float(rank),
+			0.12 * float((i * 7) % 3) - 0.12,
+			0.78 * float(rank) * side)
+		var body := MeshInstance3D.new()
+		var body_mesh := BoxMesh.new()
+		body_mesh.size = Vector3(0.30, 0.03, 0.05)
+		body.mesh = body_mesh
+		body.material_override = bird_mat
+		bird.add_child(body)
+		for s: float in [-1.0, 1.0]:
+			var pivot := Node3D.new()
+			pivot.name = "WingL" if s < 0.0 else "WingR"
+			bird.add_child(pivot)
+			var wing := MeshInstance3D.new()
+			var wing_mesh := BoxMesh.new()
+			wing_mesh.size = Vector3(0.10, 0.015, 0.36)
+			wing.mesh = wing_mesh
+			wing.material_override = bird_mat
+			wing.position = Vector3(0.0, 0.0, 0.20 * s)
+			pivot.add_child(wing)
+			pivot.rotation.x = 0.40 * s # a resting dihedral
+		bird_root.add_child(bird)
 
 
 ## Stage 2 / Stage A - THE GROUND (Chris's living perimeter,
@@ -1624,6 +1914,12 @@ static func stage_b_object_spots() -> Array:
 		["cooler", Vector3(-1.35, 0.0, 1.45), 0.35],
 		["pot_a", Vector3(1.05, 0.0, 4.45), 0.30],
 		["pot_b", Vector3(2.75, 0.0, 4.45), 0.30],
+		# Stage B (the light): the FIRE PIT - mid-left patio,
+		# in the look-back view from the throwing line, clear
+		# of every other spot's footprint (the logic suite
+		# measures the gaps), the chair ring, the walk
+		# corridor, both stations and the door's step.
+		["fire_pit", Vector3(-2.30, 0.0, 1.90), 0.45],
 	]
 
 
@@ -1821,6 +2117,8 @@ func _build_patio(parent: Node) -> void:
 				_build_patio_pot(patio, opos, "PotA")
 			"pot_b":
 				_build_patio_pot(patio, opos, "PotB")
+			"fire_pit":
+				_build_patio_fire_pit(patio, opos)
 
 
 func _build_patio_grill(parent: Node, pos: Vector3) -> void:
@@ -1907,6 +2205,138 @@ func _build_patio_cooler(parent: Node, pos: Vector3) -> void:
 		_mat(Color(0.55, 0.65, 0.72)))
 	_box(cooler, Vector3(0.0, 0.50, 0.0), Vector3(0.20, 0.025, 0.10),
 		_mat(Color(0.45, 0.55, 0.64)))
+
+
+## The fire pit (Stage B, the light): an iron bowl on a
+## stone ring, ash bed, three crossed logs - the yard's
+## primitive language. Its lit half (flame cones, embers,
+## and ONE warm omni light, no shadows - the Quest budget
+## buys exactly one added dynamic light) is built with it
+## and shown only at DUSK by _update_fire; at morning and
+## noon the pit sits cold: no flames, no light, no flicker.
+func _build_patio_fire_pit(parent: Node, pos: Vector3) -> void:
+	var pit := Node3D.new()
+	pit.name = "FirePit"
+	pit.position = pos
+	parent.add_child(pit)
+	var iron := _mat(Color(0.17, 0.16, 0.15))
+	var stone := _mat(Color(0.46, 0.44, 0.41))
+	# A squat stone ring the bowl stands in.
+	var base := MeshInstance3D.new()
+	var base_mesh := CylinderMesh.new()
+	base_mesh.top_radius = 0.40
+	base_mesh.bottom_radius = 0.44
+	base_mesh.height = 0.10
+	base_mesh.radial_segments = 16
+	base.mesh = base_mesh
+	base.material_override = stone
+	base.position = Vector3(0.0, 0.05, 0.0)
+	pit.add_child(base)
+	# The iron bowl.
+	var bowl := MeshInstance3D.new()
+	var bowl_mesh := CylinderMesh.new()
+	bowl_mesh.top_radius = 0.42
+	bowl_mesh.bottom_radius = 0.28
+	bowl_mesh.height = 0.24
+	bowl_mesh.radial_segments = 16
+	bowl.mesh = bowl_mesh
+	bowl.material_override = iron
+	bowl.position = Vector3(0.0, 0.20, 0.0)
+	pit.add_child(bowl)
+	# The ash bed, just inside the rim.
+	var ash := MeshInstance3D.new()
+	var ash_mesh := CylinderMesh.new()
+	ash_mesh.top_radius = 0.36
+	ash_mesh.bottom_radius = 0.36
+	ash_mesh.height = 0.03
+	ash_mesh.radial_segments = 14
+	ash.mesh = ash_mesh
+	ash.material_override = _mat(Color(0.52, 0.50, 0.47))
+	ash.position = Vector3(0.0, 0.315, 0.0)
+	pit.add_child(ash)
+	# Three logs crossed at the centre.
+	var log_mat := _mat(Color(0.34, 0.23, 0.14))
+	for i: int in 3:
+		var log_mi := MeshInstance3D.new()
+		var log_mesh := CylinderMesh.new()
+		log_mesh.top_radius = 0.035
+		log_mesh.bottom_radius = 0.035
+		log_mesh.height = 0.52
+		log_mesh.radial_segments = 8
+		log_mi.mesh = log_mesh
+		log_mi.material_override = log_mat
+		log_mi.position = Vector3(0.0, 0.36, 0.0)
+		log_mi.rotation_degrees = Vector3(90.0, float(i) * 60.0, 0.0)
+		pit.add_child(log_mi)
+	# Glowing embers among the logs (dusk only).
+	fire_embers = Node3D.new()
+	fire_embers.name = "Embers"
+	fire_embers.visible = false
+	pit.add_child(fire_embers)
+	var ember_mat := _mat(Color(1.0, 0.42, 0.10), 2.2)
+	var ember_spots: Array = [
+		Vector3(0.10, 0.34, 0.05), Vector3(-0.12, 0.34, -0.06),
+		Vector3(0.02, 0.35, -0.13), Vector3(-0.05, 0.34, 0.12),
+		Vector3(0.14, 0.34, -0.10)]
+	for ep: Vector3 in ember_spots:
+		var em := MeshInstance3D.new()
+		var em_mesh := SphereMesh.new()
+		em_mesh.radius = 0.022
+		em_mesh.height = 0.044
+		em_mesh.radial_segments = 6
+		em_mesh.rings = 4
+		em.mesh = em_mesh
+		em.material_override = ember_mat
+		em.position = ep
+		fire_embers.add_child(em)
+	# The flames: three emissive cones (dusk only), stretched
+	# a little by the flicker.
+	fire_flames = Node3D.new()
+	fire_flames.name = "Flames"
+	fire_flames.visible = false
+	pit.add_child(fire_flames)
+	var flame_specs: Array = [
+		[Vector3(0.0, 0.54, 0.0), 0.10, 0.42],
+		[Vector3(0.09, 0.48, 0.06), 0.07, 0.30],
+		[Vector3(-0.08, 0.46, -0.05), 0.06, 0.26],
+	]
+	var flame_cols: Array = [
+		Color(1.0, 0.52, 0.13), Color(1.0, 0.62, 0.18),
+		Color(1.0, 0.45, 0.10)]
+	for i: int in flame_specs.size():
+		var spec: Array = flame_specs[i]
+		var fpos: Vector3 = spec[0]
+		var cone := MeshInstance3D.new()
+		var cone_mesh := CylinderMesh.new()
+		cone_mesh.top_radius = 0.0
+		cone_mesh.bottom_radius = float(spec[1])
+		cone_mesh.height = float(spec[2])
+		cone_mesh.radial_segments = 8
+		cone.mesh = cone_mesh
+		var fmat := StandardMaterial3D.new()
+		var fcol: Color = flame_cols[i]
+		fmat.albedo_color = fcol
+		fmat.emission_enabled = true
+		fmat.emission = fcol
+		fmat.emission_energy_multiplier = 2.4
+		cone.material_override = fmat
+		cone.position = fpos
+		fire_flames.add_child(cone)
+		fire_flame_meshes.append(cone)
+	# The one added dynamic light: warm, wide enough to
+	# illumine the patio and spill a little onto the nearby
+	# yard, shadowless (the sun casts none either - the
+	# project's lighting has never paid for shadows).
+	fire_light = OmniLight3D.new()
+	fire_light.name = "FireLight"
+	fire_light.position = Vector3(0.0, 0.62, 0.0)
+	fire_light.light_color = Color(1.0, 0.60, 0.28)
+	fire_light.light_energy = 0.0
+	fire_light.omni_range = 6.5
+	fire_light.omni_attenuation = 1.1
+	fire_light.shadow_enabled = false
+	fire_light.visible = false
+	pit.add_child(fire_light)
 
 
 func _build_patio_pot(parent: Node, pos: Vector3, node_name: String) -> void:
@@ -2519,8 +2949,11 @@ func _stick_value(hand: String) -> Vector2:
 ## round / play again, B/Y = back to practice - the board
 ## lists both. Either hand counts. Fix Pass 19: B lost the
 ## end-swap (the one-way court has no other end) - in a game,
-## at any phase, B returns to practice; in practice B does
-## nothing. Fix Pass 20: A at the insert dismisses it and
+## at any phase, B returns to practice. Stage B (the light):
+## in PRACTICE, B/Y cycles the time of day (MORNING -> NOON
+## -> DUSK); the press that exits a game to practice is
+## spent on the exit and does NOT also change the time.
+## Fix Pass 20: A at the insert dismisses it and
 ## stocks the next round.
 ## Fix Pass 22 (Chris, from the headset: "not sure how you
 ## implemented change grip, cant find it. Just make it A or
@@ -2567,8 +3000,11 @@ func _poll_buttons() -> void:
 			_continue_round()
 		elif mode == "GAME" and phase == "OVER":
 			start_game()
-	if b_edge and mode == "GAME":
-		_enter_practice()
+	if b_edge:
+		if mode == "GAME":
+			_enter_practice()
+		elif mode == "PRACTICE":
+			_cycle_time_of_day()
 
 
 ## Fix Pass 21: the grip position the held shoe currently
@@ -2839,6 +3275,8 @@ func _seat_behind_line() -> void:
 func _process(_delta: float) -> void:
 	_process_locomotion(_delta)
 	_poll_buttons()
+	_process_fire(_delta) # Stage B: flicker, only while lit
+	_process_birds(_delta) # Stage B: crossings, long gaps apart
 	_track_hand_speed("L")
 	_track_hand_speed("R")
 	if state == "HELD":
