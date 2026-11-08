@@ -180,7 +180,7 @@ var candidate_zone: String = ""
 # (the cycle is the settings control - the board names it).
 var default_grip: int = 0
 var settings_path: String = "user://settings.json"
-# Stage B (the light): the time of day - MORNING, NOON or
+# Stage B (the light): the time of day - CLOUDY, NOON or
 # DUSK, persisted beside the default grip in the same file;
 # NOON (the yard's accepted look) on first run. The sun, sky
 # material and environment nodes are kept so a change
@@ -363,10 +363,12 @@ func _load_settings() -> void:
 		# file. A missing or unknown value is NOON (the
 		# field at its declaration), so an old or corrupt
 		# settings file can never strand the yard in the dark.
+		# Fix Pass 31 migration: the shipped build's MORNING
+		# value maps to CLOUDY, the state that replaced it in
+		# the cycle's first slot.
 		if parsed.has("time_of_day"):
 			var t: String = String(parsed["time_of_day"])
-			if time_of_day_presets().has(t):
-				time_of_day = t
+			time_of_day = time_setting_or_default(t)
 
 
 func _save_settings() -> void:
@@ -390,41 +392,66 @@ func _set_default_grip(idx: int) -> void:
 
 # --- Stage B (the light): the time of day ---
 
-## The cycle order: MORNING -> NOON -> DUSK -> MORNING.
+## The cycle order: CLOUDY -> NOON -> DUSK -> CLOUDY.
 ## Static so the logic suite guards the order (and the
 ## preset table below) without a scene.
 static func time_after(name: String) -> String:
-	var order: Array = ["MORNING", "NOON", "DUSK"]
+	var order: Array = ["CLOUDY", "NOON", "DUSK"]
 	var idx: int = order.find(name)
 	if idx < 0:
 		return "NOON"
 	return String(order[(idx + 1) % order.size()])
 
 
+## A stored setting's reading: the shipped build's MORNING
+## value (the cycle's first slot before Fix Pass 31) maps
+## to CLOUDY, a current state passes through, and anything
+## else falls back to NOON.
+static func time_setting_or_default(name: String) -> String:
+	if name == "MORNING":
+		return "CLOUDY"
+	if time_of_day_presets().has(name):
+		return name
+	return "NOON"
+
+
 ## The three times as DATA - sun direction/colour/energy,
-## sky colours, ambient - so the logic suite can guard that
-## the three states genuinely differ. NOON is the yard's
-## accepted look, value for value (the pre-Stage-B build's
-## constants: sun -48/-24 at 1.1, the FP10 sky, ambient
-## 0.75/0.78/0.72 at 0.7). MORNING: a low warm sun and a
-## fresh sky. DUSK: a low orange sun under a deep
-## blue-purple sky, the ambient held high enough that the
-## court, pit, board, labels and held shoe stay clearly
-## readable - dusk is a mood, not a visibility tax. There
-## is NO automatic cycle: the state changes only by the
-## control (B/Y in practice).
+## sky colours, ambient, colour adjustment and fog - so
+## the logic suite can guard that the three states
+## genuinely differ. NOON is the yard's accepted look,
+## value for value (the pre-Stage-B build's constants:
+## sun -48/-24 at 1.1, the FP10 sky, ambient 0.75/0.78/0.72
+## at 0.7; its adjustment values are the neutral 1.0s and
+## its fog is off). CLOUDY (Fix Pass 31, replacing the
+## shipped MORNING, which read too like noon in the
+## headset): a heavy overcast - a flat grey sky, the sun
+## cut to a weak cool presence with no direction you can
+## feel, a slightly cool grey ambient carrying the scene,
+## contrast and saturation eased down, and a breath of
+## fog flattening the distance. A grey day, not a dark
+## one: everything stays readable. DUSK: a low orange sun
+## under a deep blue-purple sky, the ambient held high
+## enough that the court, pit, board, labels and held
+## shoe stay clearly readable - dusk is a mood, not a
+## visibility tax. There is NO automatic cycle: the state
+## changes only by the control (B/Y in practice).
 static func time_of_day_presets() -> Dictionary:
 	return {
-		"MORNING": {
-			"sun_euler": Vector3(-22.0, -50.0, 0.0),
-			"sun_color": Color(1.0, 0.83, 0.60),
-			"sun_energy": 1.05,
-			"sky_top": Color(0.34, 0.56, 0.85),
-			"sky_horizon": Color(0.88, 0.80, 0.63),
-			"ground_bottom": Color(0.18, 0.24, 0.16),
-			"ground_horizon": Color(0.82, 0.78, 0.65),
-			"ambient_color": Color(0.72, 0.72, 0.68),
-			"ambient_energy": 0.62,
+		"CLOUDY": {
+			"sun_euler": Vector3(-35.0, -10.0, 0.0),
+			"sun_color": Color(0.79, 0.86, 0.94),
+			"sun_energy": 0.25,
+			"sky_top": Color(0.47, 0.49, 0.51),
+			"sky_horizon": Color(0.66, 0.67, 0.68),
+			"ground_bottom": Color(0.15, 0.17, 0.15),
+			"ground_horizon": Color(0.55, 0.57, 0.55),
+			"ambient_color": Color(0.575, 0.64, 0.70),
+			"ambient_energy": 0.78,
+			"adjustment_brightness": 0.97,
+			"adjustment_contrast": 0.90,
+			"adjustment_saturation": 0.76,
+			"fog_color": Color(0.535, 0.61, 0.68),
+			"fog_density": 0.011,
 		},
 		"NOON": {
 			"sun_euler": Vector3(-48.0, -24.0, 0.0),
@@ -436,6 +463,11 @@ static func time_of_day_presets() -> Dictionary:
 			"ground_horizon": Color(0.72, 0.81, 0.90),
 			"ambient_color": Color(0.75, 0.78, 0.72),
 			"ambient_energy": 0.7,
+			"adjustment_brightness": 1.0,
+			"adjustment_contrast": 1.0,
+			"adjustment_saturation": 1.0,
+			"fog_color": Color(0.72, 0.81, 0.90),
+			"fog_density": 0.0,
 		},
 		"DUSK": {
 			"sun_euler": Vector3(-11.0, 32.0, 0.0),
@@ -447,6 +479,11 @@ static func time_of_day_presets() -> Dictionary:
 			"ground_horizon": Color(0.36, 0.27, 0.36),
 			"ambient_color": Color(0.46, 0.45, 0.58),
 			"ambient_energy": 0.52,
+			"adjustment_brightness": 1.0,
+			"adjustment_contrast": 1.0,
+			"adjustment_saturation": 1.0,
+			"fog_color": Color(0.36, 0.27, 0.36),
+			"fog_density": 0.0,
 		},
 	}
 
@@ -488,6 +525,28 @@ func _apply_time_of_day() -> void:
 		var acol: Color = p["ambient_color"]
 		world_env.ambient_light_color = acol
 		world_env.ambient_light_energy = float(p["ambient_energy"])
+		# Fix Pass 31: the air. The colour adjustment runs
+		# only for a preset that actually bends it (CLOUDY's
+		# eased contrast/saturation); NOON and DUSK carry the
+		# neutral 1.0s and keep the adjustment OFF, so their
+		# accepted looks pass through untouched. Likewise
+		# the fog exists only where a preset gives it a
+		# density (CLOUDY's flattening haze).
+		var adj_b: float = float(p["adjustment_brightness"])
+		var adj_c: float = float(p["adjustment_contrast"])
+		var adj_s: float = float(p["adjustment_saturation"])
+		world_env.adjustment_enabled = absf(adj_b - 1.0) > 0.0001 \
+			or absf(adj_c - 1.0) > 0.0001 or absf(adj_s - 1.0) > 0.0001
+		world_env.adjustment_brightness = adj_b
+		world_env.adjustment_contrast = adj_c
+		world_env.adjustment_saturation = adj_s
+		var fog_d: float = float(p["fog_density"])
+		world_env.fog_enabled = fog_d > 0.0
+		var fcol: Color = p["fog_color"]
+		world_env.fog_light_color = fcol
+		world_env.fog_light_energy = 1.0
+		world_env.fog_density = fog_d
+		world_env.fog_sky_affect = 0.5
 	_update_fire()
 	_refresh_controls_label()
 
@@ -2212,7 +2271,7 @@ func _build_patio_cooler(parent: Node, pos: Vector3) -> void:
 ## primitive language. Its lit half (flame cones, embers,
 ## and ONE warm omni light, no shadows - the Quest budget
 ## buys exactly one added dynamic light) is built with it
-## and shown only at DUSK by _update_fire; at morning and
+## and shown only at DUSK by _update_fire; at cloudy and
 ## noon the pit sits cold: no flames, no light, no flicker.
 func _build_patio_fire_pit(parent: Node, pos: Vector3) -> void:
 	var pit := Node3D.new()
@@ -2950,7 +3009,7 @@ func _stick_value(hand: String) -> Vector2:
 ## lists both. Either hand counts. Fix Pass 19: B lost the
 ## end-swap (the one-way court has no other end) - in a game,
 ## at any phase, B returns to practice. Stage B (the light):
-## in PRACTICE, B/Y cycles the time of day (MORNING -> NOON
+## in PRACTICE, B/Y cycles the time of day (CLOUDY -> NOON
 ## -> DUSK); the press that exits a game to practice is
 ## spent on the exit and does NOT also change the time.
 ## Fix Pass 20: A at the insert dismisses it and

@@ -63,11 +63,13 @@ extends SceneTree
 ##     ~6 s apart; the suite MEASURES the canopy's displacement
 ##     between the frames (see _canopy_centroid) and asserts it
 ##     moved a little - present, small, never a lurch.
-##   proofs/time_morning.png / time_noon.png / time_dusk.png -
+##   proofs/time_cloudy.png / time_noon.png / time_dusk.png -
 ##     Stage B light: one camera at the throwing line, the
 ##     yard under the three times; the suite MEASURES mean
-##     luminance (dusk darker than noon) and the morning/noon
-##     frame difference (a different sun, not a relabel).
+##     luminance (dusk darker than noon) and the cloudy/noon
+##     overcast signature (Fix Pass 31: saturation down,
+##     warmth near zero and cooler, luminance lower and
+##     flatter than noon's).
 ##   proofs/dusk_fire.png - Stage B light: the look-back at
 ##     DUSK with the patio fire lit; the suite measures the
 ##     fire's neighbourhood brighter and warmer than the
@@ -190,6 +192,37 @@ func mean_luminance(img: Image) -> float:
 			total += px.r * 0.299 + px.g * 0.587 + px.b * 0.114
 			n += 1
 	return total / float(maxi(n, 1))
+
+
+## Mean HSV saturation over the same strided sample - the
+## overcast signature's desaturation measure (Fix Pass 31).
+func mean_saturation(img: Image) -> float:
+	var total: float = 0.0
+	var n: int = 0
+	for x: int in range(0, img.get_width(), 6):
+		for y: int in range(0, img.get_height(), 6):
+			var px: Color = img.get_pixel(x, y)
+			var mx: float = maxf(maxf(px.r, px.g), px.b)
+			var mn: float = minf(minf(px.r, px.g), px.b)
+			total += 0.0 if mx <= 0.0 else (mx - mn) / mx
+			n += 1
+	return total / float(maxi(n, 1))
+
+
+## The standard deviation of the frame's luminance - its
+## contrast spread. An overcast frame is FLATTER: the same
+## mean territory with a tighter spread (Fix Pass 31).
+func luminance_sd(img: Image) -> float:
+	var mean: float = mean_luminance(img)
+	var total: float = 0.0
+	var n: int = 0
+	for x: int in range(0, img.get_width(), 6):
+		for y: int in range(0, img.get_height(), 6):
+			var px: Color = img.get_pixel(x, y)
+			var lum: float = px.r * 0.299 + px.g * 0.587 + px.b * 0.114
+			total += (lum - mean) * (lum - mean)
+			n += 1
+	return sqrt(total / float(maxi(n, 1)))
 
 
 ## Mean absolute per-channel difference between two frames
@@ -404,34 +437,51 @@ func _run() -> void:
 
 	# --- Proof B0: Stage B light - three times, the fire, the birds ---
 	# One camera at the throwing line (the perimeter framing)
-	# under MORNING, NOON and DUSK in turn. The suite
-	# MEASURES: dusk darker than noon overall; morning a
-	# genuinely different picture from noon (a low sun, not
-	# a relabel of the same light).
+	# under CLOUDY, NOON and DUSK in turn. The suite
+	# MEASURES: dusk darker than noon overall; and CLOUDY's
+	# overcast signature against noon from the SAME camera
+	# (Fix Pass 31): saturation clearly down, warmth near
+	# zero and cooler than noon's, luminance somewhat lower
+	# and its spread flatter.
 	var cam_t := Camera3D.new()
 	cam_t.fov = 55.0
 	cam_t.position = Vector3(0.8, 1.62, 0.6)
 	main.add_child(cam_t)
 	cam_t.look_at(Vector3(0.0, 0.4, -12.192), Vector3.UP)
 	cam_t.current = true
-	main.set_time_of_day("MORNING")
+	main.set_time_of_day("CLOUDY")
 	await settle(6)
-	var img_morning: Image = await snap_image("res://proofs/time_morning.png")
+	var img_cloudy: Image = await snap_image("res://proofs/time_cloudy.png")
 	main.set_time_of_day("NOON")
 	await settle(6)
 	var img_noon: Image = await snap_image("res://proofs/time_noon.png")
 	main.set_time_of_day("DUSK")
 	await settle(6)
 	var img_dusk: Image = await snap_image("res://proofs/time_dusk.png")
-	var lum_morning: float = mean_luminance(img_morning)
+	var lum_cloudy: float = mean_luminance(img_cloudy)
 	var lum_noon: float = mean_luminance(img_noon)
 	var lum_dusk: float = mean_luminance(img_dusk)
 	check(lum_dusk < lum_noon * 0.85,
 		"Stage B light: dusk is measurably darker than noon (mean luminance %.3f vs %.3f)"
 		% [lum_dusk, lum_noon])
-	check(mean_abs_diff(img_morning, img_noon) > 0.02,
-		"Stage B light: morning is a different light from noon, not a relabel (frame diff %.3f, morning luminance %.3f)"
-		% [mean_abs_diff(img_morning, img_noon), lum_morning])
+	var cloudy_stats: Vector2 = frame_stats(img_cloudy)
+	var noon_stats: Vector2 = frame_stats(img_noon)
+	var sat_cloudy: float = mean_saturation(img_cloudy)
+	var sat_noon: float = mean_saturation(img_noon)
+	var sd_cloudy: float = luminance_sd(img_cloudy)
+	var sd_noon: float = luminance_sd(img_noon)
+	check(sat_cloudy < sat_noon - 0.03,
+		"Fix Pass 31: cloudy desaturates the yard (mean saturation %.3f vs noon %.3f)"
+		% [sat_cloudy, sat_noon])
+	check(absf(cloudy_stats.y) <= 0.045 and cloudy_stats.y < noon_stats.y - 0.003,
+		"Fix Pass 31: cloudy's warmth sits near zero and cooler than noon (r-b %.3f vs %.3f)"
+		% [cloudy_stats.y, noon_stats.y])
+	check(lum_cloudy < lum_noon * 0.97 and lum_cloudy > lum_noon * 0.75,
+		"Fix Pass 31: cloudy is somewhat dimmer than noon, not dark (luminance %.3f vs %.3f)"
+		% [lum_cloudy, lum_noon])
+	check(sd_cloudy < sd_noon * 0.95,
+		"Fix Pass 31: cloudy flattens the frame (luminance spread %.3f vs noon %.3f)"
+		% [sd_cloudy, sd_noon])
 	cam_t.queue_free()
 	# The look-back at DUSK, the fire lit: the pit's
 	# neighbourhood - around its projected position - must

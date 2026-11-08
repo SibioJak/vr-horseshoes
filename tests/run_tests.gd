@@ -1085,16 +1085,22 @@ func test_stage_b_layout() -> void:
 ## table genuinely separates the three states (sun angle,
 ## colour and energy, sky, ambient all differ pairwise),
 ## NOON reproduces the pre-Stage-B build's constants value
-## for value, the cycle order is MORNING -> NOON -> DUSK ->
-## MORNING, and the fire pit's surveyed spot stands clear
-## of everything the patio already holds.
+## for value, the cycle order is CLOUDY -> NOON -> DUSK ->
+## CLOUDY, and the fire pit's surveyed spot stands clear
+## of everything the patio already holds. Fix Pass 31:
+## CLOUDY (which replaced MORNING) carries the overcast
+## signature in the table itself - a weak cool sun, a grey
+## near-neutral sky, a cool ambient that carries the
+## scene, eased adjustment, a breath of fog - and a saved
+## MORNING setting migrates to it on load.
 func test_stage_b_light() -> void:
 	var main_script: GDScript = load("res://scripts/main.gd")
 	var presets: Dictionary = main_script.time_of_day_presets()
-	check(presets.size() == 3 and presets.has("MORNING")
-		and presets.has("NOON") and presets.has("DUSK"),
-		"Stage B light: the preset table names exactly MORNING / NOON / DUSK")
-	var names: Array = ["MORNING", "NOON", "DUSK"]
+	check(presets.size() == 3 and presets.has("CLOUDY")
+		and presets.has("NOON") and presets.has("DUSK")
+		and not presets.has("MORNING"),
+		"Stage B light: the preset table names exactly CLOUDY / NOON / DUSK")
+	var names: Array = ["CLOUDY", "NOON", "DUSK"]
 	var keys: Array = ["sun_euler", "sun_color", "sun_energy",
 		"sky_top", "sky_horizon", "ambient_color", "ambient_energy"]
 	for ki: int in keys.size():
@@ -1132,11 +1138,79 @@ func test_stage_b_light() -> void:
 		and float(dusk["ambient_energy"]) >= 0.45,
 		"Stage B light: DUSK holds its light (sun %.2f, ambient %.2f) - a mood, not a tax"
 		% [float(dusk["sun_energy"]), float(dusk["ambient_energy"])])
+	# DUSK's preset is untouched by Fix Pass 31, value for
+	# value, air included (the neutral 1.0s, no fog).
+	var dusk_euler: Vector3 = dusk["sun_euler"]
+	var dusk_scol: Color = dusk["sun_color"]
+	var dusk_top: Color = dusk["sky_top"]
+	var dusk_amb: Color = dusk["ambient_color"]
+	check(dusk_euler == Vector3(-11.0, 32.0, 0.0)
+		and dusk_scol == Color(1.0, 0.55, 0.29)
+		and absf(float(dusk["sun_energy"]) - 0.85) < 0.0001
+		and dusk_top == Color(0.13, 0.16, 0.38)
+		and dusk_amb == Color(0.46, 0.45, 0.58)
+		and absf(float(dusk["ambient_energy"]) - 0.52) < 0.0001
+		and absf(float(dusk["adjustment_saturation"]) - 1.0) < 0.0001
+		and absf(float(dusk["adjustment_contrast"]) - 1.0) < 0.0001
+		and absf(float(dusk["fog_density"])) < 0.0001,
+		"Fix Pass 31: DUSK's preset stands exactly as accepted")
+	# CLOUDY's overcast signature, in the table: the sun is
+	# cut to a weak cool presence (at most 0.35, and at
+	# least 0.70 below NOON's), tinted cool-neutral.
+	var cloudy: Dictionary = presets["CLOUDY"]
+	var cloudy_scol: Color = cloudy["sun_color"]
+	check(float(cloudy["sun_energy"]) <= 0.35
+		and float(noon["sun_energy"]) - float(cloudy["sun_energy"]) >= 0.70
+		and cloudy_scol.b >= cloudy_scol.r
+		and cloudy_scol.b - cloudy_scol.r <= 0.20,
+		"Fix Pass 31: CLOUDY's sun is a weak cool presence (%.2f vs NOON %.2f, colour %s)"
+		% [float(cloudy["sun_energy"]), float(noon["sun_energy"]), str(cloudy_scol)])
+	# The sky is flat grey: near-neutral overhead (channel
+	# spread at most 0.08, no blue cast beyond a whisper),
+	# lightening slightly at the horizon, still near zero
+	# warmth there.
+	var cloudy_top: Color = cloudy["sky_top"]
+	var cloudy_hor: Color = cloudy["sky_horizon"]
+	var top_spread: float = maxf(maxf(cloudy_top.r, cloudy_top.g), cloudy_top.b) \
+		- minf(minf(cloudy_top.r, cloudy_top.g), cloudy_top.b)
+	check(top_spread <= 0.08 and cloudy_top.b - cloudy_top.r <= 0.06
+		and cloudy_hor.r > cloudy_top.r and cloudy_hor.g > cloudy_top.g
+		and absf(cloudy_hor.r - cloudy_hor.b) <= 0.04,
+		"Fix Pass 31: CLOUDY's sky is flat grey, lighter at the horizon (top %s spread %.2f, horizon %s)"
+		% [str(cloudy_top), top_spread, str(cloudy_hor)])
+	# The ambient carries the scene: slightly cool grey,
+	# and strong - a grey day, not a dark one.
+	var cloudy_amb: Color = cloudy["ambient_color"]
+	check(cloudy_amb.b > cloudy_amb.r
+		and float(cloudy["ambient_energy"]) >= 0.72,
+		"Fix Pass 31: CLOUDY's ambient is cool grey and carries the scene (colour %s at %.2f)"
+		% [str(cloudy_amb), float(cloudy["ambient_energy"])])
+	# The air: contrast and saturation eased, a breath of
+	# fog - and NOON's air is the neutral pass-through.
+	check(float(cloudy["adjustment_saturation"]) <= 0.85
+		and float(cloudy["adjustment_contrast"]) <= 0.94
+		and float(cloudy["adjustment_brightness"]) <= 0.99
+		and float(cloudy["fog_density"]) >= 0.006
+		and float(cloudy["fog_density"]) <= 0.015,
+		"Fix Pass 31: CLOUDY's air is eased and hazed (sat %.2f, contrast %.2f, fog %.3f)"
+		% [float(cloudy["adjustment_saturation"]),
+			float(cloudy["adjustment_contrast"]), float(cloudy["fog_density"])])
+	check(absf(float(noon["adjustment_saturation"]) - 1.0) < 0.0001
+		and absf(float(noon["adjustment_contrast"]) - 1.0) < 0.0001
+		and absf(float(noon["adjustment_brightness"]) - 1.0) < 0.0001
+		and absf(float(noon["fog_density"])) < 0.0001,
+		"Fix Pass 31: NOON's air is neutral - the accepted look passes through")
 	# The cycle order.
-	check(String(main_script.time_after("MORNING")) == "NOON"
+	check(String(main_script.time_after("CLOUDY")) == "NOON"
 		and String(main_script.time_after("NOON")) == "DUSK"
-		and String(main_script.time_after("DUSK")) == "MORNING",
-		"Stage B light: the cycle runs MORNING -> NOON -> DUSK -> MORNING")
+		and String(main_script.time_after("DUSK")) == "CLOUDY",
+		"Stage B light: the cycle runs CLOUDY -> NOON -> DUSK -> CLOUDY")
+	# The saved-setting migration: the shipped build's
+	# MORNING lands on CLOUDY, unknown values on NOON.
+	check(String(main_script.time_setting_or_default("MORNING")) == "CLOUDY"
+		and String(main_script.time_setting_or_default("CLOUDY")) == "CLOUDY"
+		and String(main_script.time_setting_or_default("BOGUS")) == "NOON",
+		"Fix Pass 31: a saved MORNING migrates to CLOUDY; an unknown value falls back to NOON")
 	# The fire pit: on the slab, and its footprint clears
 	# every other patio spot, the table's chair ring, the
 	# walk corridor, both station envelopes and the back

@@ -1315,11 +1315,13 @@ func _run() -> void:
 			- float(dusk_preset["ambient_energy"])) < 0.0001,
 		"Stage B light: the DUSK preset drives the sun and ambient")
 	await pulse_button("B")
-	check(main.time_of_day == "MORNING" and not main.fire_is_lit(),
-		"Stage B light: DUSK -> MORNING, and the fire goes cold")
+	check(main.time_of_day == "CLOUDY" and not main.fire_is_lit(),
+		"Stage B light: DUSK -> CLOUDY, and the fire goes cold")
+	check(main.controls_label.text.contains("TIME: CLOUDY"),
+		"Stage B light: the board re-names the selection at CLOUDY")
 	await pulse_button("B")
 	check(main.time_of_day == "NOON",
-		"Stage B light: MORNING -> NOON - the cycle closes")
+		"Stage B light: CLOUDY -> NOON - the cycle closes")
 	# In a game, B keeps its job and the press is spent on
 	# the exit: the time must NOT change with it.
 	main.start_game()
@@ -1346,6 +1348,20 @@ func _run() -> void:
 	check(String(m3b.time_of_day) == "NOON" and int(m3b.default_grip) == 0,
 		"Stage B light: a corrupt settings file falls back to NOON / TOE GRIP")
 	m3b.queue_free()
+	await frames(3)
+	# Fix Pass 31 migration: a settings file written by the
+	# shipped build, holding MORNING, loads as CLOUDY - the
+	# state that replaced it - with the fire cold.
+	var legacy_path: String = "user://smoke_settings_legacy.json"
+	var lf: FileAccess = FileAccess.open(legacy_path, FileAccess.WRITE)
+	lf.store_string(JSON.stringify(
+		{"default_grip": 0, "time_of_day": "MORNING"}))
+	lf.close()
+	var m4b: Node = spawn_fresh_main(rec_path, legacy_path)
+	await frames(4)
+	check(String(m4b.time_of_day) == "CLOUDY" and not m4b.fire_is_lit(),
+		"Fix Pass 31: a saved MORNING loads as CLOUDY, fire cold")
+	m4b.queue_free()
 	await frames(3)
 	main.set_time_of_day("NOON")
 	# Birds: the hook forces a crossing; it moves on the
