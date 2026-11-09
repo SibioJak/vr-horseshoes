@@ -1265,8 +1265,69 @@ func test_stage_b_light() -> void:
 			"Stage B light: the fire pit stands on the patio behind the line, in the look-back view")
 
 
+func test_impact_fx() -> void:
+	# Impact Dressing Pass: routing, scaling, pooling, lifecycle.
+	var events: Array = ["sand_thud", "stake_clang", "shoe_clink", "ringer"]
+	var paths: Array = []
+	for ev: String in events:
+		var p: String = ImpactFX.stream_path_for_event(ev)
+		check(p != "" and ResourceLoader.exists(p),
+			"Impact FX: event %s routes to a real audio file (%s)" % [ev, p])
+		check(not paths.has(p), "Impact FX: event %s has its OWN sound" % ev)
+		paths.append(p)
+	check(ImpactFX.stream_path_for_event("bogus") == "",
+		"Impact FX: an unknown event routes nowhere")
+	for ev2: String in events:
+		check(ImpactFX.volume_db_for(ev2, 0.0) <= ImpactFX.volume_db_for(ev2, 0.5)
+			and ImpactFX.volume_db_for(ev2, 0.5) <= ImpactFX.volume_db_for(ev2, 1.0),
+			"Impact FX: %s volume grows with impact strength" % ev2)
+	check(ImpactFX.plume_scale_for(ImpactFX.KIND_TURF, 1.0)
+		< ImpactFX.plume_scale_for(ImpactFX.KIND_SAND, 0.5),
+		"Impact FX: a grass scuff plume is clearly lesser than a sand plume")
+	check(ImpactFX.divot_radius_for(ImpactFX.KIND_SAND, 1.0)
+		> ImpactFX.divot_radius_for(ImpactFX.KIND_TURF, 1.0),
+		"Impact FX: a sand divot is bigger than a grass scuff")
+	check(ImpactFX.divot_radius_for(ImpactFX.KIND_SAND, 0.0)
+		< ImpactFX.divot_radius_for(ImpactFX.KIND_SAND, 1.0),
+		"Impact FX: divot size grows with impact strength")
+	var fx_node := ImpactFX.new()
+	root.add_child(fx_node)
+	await process_frame
+	check(fx_node.plume_slots() == ImpactFX.PLUME_SLOTS,
+		"Impact FX: the plume pool is pre-allocated (%d slots)" % ImpactFX.PLUME_SLOTS)
+	check(fx_node.player_count() == ImpactFX.PLAYER_COUNT,
+		"Impact FX: the audio pool is pre-allocated (%d players)" % ImpactFX.PLAYER_COUNT)
+	fx_node.debug_surface_impact(ImpactFX.KIND_SAND,
+		Vector3(0.0, 0.02, -12.19), Vector3(0.0, -3.0, -6.0), 0.9)
+	check(fx_node.divot_count() == 1, "Impact FX: a sand impact stamps one divot")
+	check(fx_node.play_log.size() == 1
+		and String(fx_node.play_log[0]["event"]) == "sand_thud",
+		"Impact FX: a sand impact routes the thud")
+	fx_node.debug_surface_impact(ImpactFX.KIND_TURF,
+		Vector3(1.0, 0.0, -6.0), Vector3(0.0, -2.0, -4.0), 0.9)
+	check(fx_node.divot_count() == 2, "Impact FX: a grass impact stamps a scuff too")
+	check(fx_node.play_log.size() == 1,
+		"Impact FX: grass raises NO thud (sand only)")
+	for i: int in 40:
+		fx_node.surface_impact(ImpactFX.KIND_SAND,
+			Vector3(0.1 * float(i % 5), 0.02, -12.0), Vector3(0.0, -3.0, -6.0), 0.5)
+	check(fx_node.divot_count() == ImpactFX.DIVOT_CAP,
+		"Impact FX: divots cap at %d and the oldest recycle" % ImpactFX.DIVOT_CAP)
+	fx_node.play_event("ringer", Vector3.ZERO, 1.0)
+	fx_node.play_event("ringer", Vector3.ZERO, 1.0)
+	var rings: int = 0
+	for entry: Dictionary in fx_node.play_log:
+		if String(entry["event"]) == "ringer":
+			rings += 1
+	check(rings == 2, "Impact FX: each routed ringer rings exactly once per call")
+	fx_node.clear_marks()
+	check(fx_node.divot_count() == 0, "Impact FX: the rake leaves clean sand")
+	fx_node.queue_free()
+
+
 func _run() -> void:
 	test_release_math()
+	await test_impact_fx()
 	test_angular_math()
 	test_ringer_geometry()
 	test_line_classification()

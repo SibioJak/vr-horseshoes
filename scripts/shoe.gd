@@ -103,6 +103,13 @@ const GUARD_AXIS_SAMPLES: int = 32
 # in the velocity bleed, not in the material.)
 var sand_absorb_enabled: bool = true # the arrival rig's pre/post toggle
 var turf_absorb_enabled: bool = true # the lawn rig's pre/post toggle
+## Impact dressing hook (Impact Dressing Pass): called ONCE
+## per absorption episode, at its start, with (kind, contact
+## point, pre-impact velocity, impact strength) - the exact
+## moment and numbers the bleed is scaled from. Wired by main
+## for game shoes; unwired shoes (the arrival rigs) simply
+## never report, and the physics below is untouched either way.
+var impact_callback: Callable
 var _absorb_episode: bool = false
 var _absorb_steps: int = 0
 var _absorb_strength: float = 0.0
@@ -526,6 +533,22 @@ func _absorb_surface(state: PhysicsDirectBodyState3D) -> void:
 		if enabled and _absorb_strength > 0.0:
 			state.linear_velocity *= 1.0 - cut_lin * _absorb_strength
 			state.angular_velocity *= 1.0 - cut_ang * _absorb_strength
+		if impact_callback.is_valid():
+			# The first-contact point on the surface itself
+			# (the collider's contact position), for the
+			# plume/divot/sound to live exactly where the
+			# shoe met the ground.
+			var cpos: Vector3 = pos
+			for ci2: int in state.get_contact_count():
+				var obj2: Object = state.get_contact_collider_object(ci2)
+				if obj2 == null:
+					continue
+				var node2 := obj2 as Node
+				if (touch_kind == ABSORB_SAND and node2.is_in_group("sand")) \
+						or (touch_kind == ABSORB_TURF and node2.is_in_group("turf")):
+					cpos = state.get_contact_collider_position(ci2)
+					break
+			impact_callback.call(touch_kind, cpos, _prev_lv, _absorb_strength)
 	if _absorb_episode:
 		_absorb_steps += 1
 		var ep_steps: int = SAND_ABSORB_STEPS if _absorb_kind == ABSORB_SAND \

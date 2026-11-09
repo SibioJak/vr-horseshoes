@@ -1378,6 +1378,47 @@ func _run() -> void:
 	await frames(4)
 	check(not main.bird_active and not main.bird_root.visible,
 		"Stage B light: the crossing despawns past the yard - gone, not parked")
+	# --- Impact Dressing: plumes, divots, sounds ---
+	check(main.fx != null, "Impact Dressing: the FX node is built")
+	check(main.shoe.impact_callback.is_valid(),
+		"Impact Dressing: the shoe's impact hook is wired to main")
+	var thuds0: int = 0
+	for e0: Dictionary in main.fx.play_log:
+		if String(e0["event"]) == "sand_thud":
+			thuds0 += 1
+	for k: int in 3:
+		main.fx.debug_surface_impact(ImpactFX.KIND_SAND,
+			Vector3(0.15 * float(k), 0.02, -12.05 + 0.2 * float(k)),
+			Vector3(0.0, -3.0, -6.0), 0.95)
+	check(main.fx.divot_count() == 3,
+		"Impact Dressing: sand landings accumulate divots in the pit (%d)"
+		% main.fx.divot_count())
+	var thuds1: int = 0
+	for e1: Dictionary in main.fx.play_log:
+		if String(e1["event"]) == "sand_thud":
+			thuds1 += 1
+	check(thuds1 == thuds0 + 3,
+		"Impact Dressing: each sand landing routes its thud (%d -> %d)" % [thuds0, thuds1])
+	main.fx.debug_surface_impact(ImpactFX.KIND_TURF,
+		Vector3(1.2, 0.0, -6.0), Vector3(0.0, -2.0, -4.0), 0.8)
+	check(main.fx.divot_count() == 4,
+		"Impact Dressing: a grass landing adds its lighter scuff")
+	var thuds2: int = 0
+	for e2: Dictionary in main.fx.play_log:
+		if String(e2["event"]) == "sand_thud":
+			thuds2 += 1
+	check(thuds2 == thuds1, "Impact Dressing: grass stays silent - no thud")
+	# The in-flight gate: the same impact reported while the
+	# shoe is NOT flying (at rest / held / hopping) is refused.
+	var divots_before_gate: int = main.fx.divot_count()
+	main._on_surface_impact(Shoe.ABSORB_SAND,
+		Vector3(0.0, 0.02, -12.19), Vector3(0.0, -3.0, -6.0), 0.95, main.shoe)
+	check(main.fx.divot_count() == divots_before_gate,
+		"Impact Dressing: a resting shoe raises no plume, divot, or thud")
+	# The rake: the restock funnel cleans the pit.
+	main._gather_to_rail(40)
+	check(main.fx.divot_count() == 0,
+		"Impact Dressing: restock rakes the pit clean for the next round")
 	# A full game at DUSK: manufactured rounds (the win
 	# probes' method) to 21 - the game must complete under
 	# dusk light, with the insert carrying its breakdown.

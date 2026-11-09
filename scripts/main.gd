@@ -209,6 +209,11 @@ const BIRD_SPEED: float = 7.0
 const BIRD_GAP_MIN_SEC: float = 45.0
 const BIRD_GAP_MAX_SEC: float = 110.0
 var bird_root: Node3D = null
+# Impact Dressing Pass: plumes, divots and impact sounds,
+# all routed through the ImpactFX pools. Built in _ready
+# before the shoes spawn (their impact callbacks point here).
+var fx: ImpactFX = null
+var _metal_cooldown: Dictionary = {} # Shoe -> int (msec), clang/clink spam guard
 var bird_active: bool = false
 var bird_dir: Vector3 = Vector3.RIGHT
 var _bird_timer: float = 40.0
@@ -330,6 +335,9 @@ func _ready() -> void:
 	ai_rng.randomize()
 	bird_rng.randomize()
 	_init_stands()
+	fx = ImpactFX.new()
+	fx.name = "ImpactFX"
+	add_child(fx)
 	_build_world()
 	_build_rig()
 	_build_board()
@@ -2941,6 +2949,7 @@ func _make_shoe(pair_color: Color) -> Shoe:
 	_wire_guard(s, "FAR")
 	s.guard_enabled = true
 	s.freeze = true
+	s.impact_callback = _on_surface_impact.bind(s)
 	s.body_entered.connect(_on_any_shoe_body_entered.bind(s))
 	shoe_status[s] = "RAILED"
 	return s
@@ -3794,6 +3803,57 @@ func _on_any_shoe_body_entered(_body: Node, shoe_node: Shoe) -> void:
 		if not bool(fl["has_contact"]):
 			fl["has_contact"] = true
 			fl["first_contact_pos"] = shoe_node.global_position
+	_metal_contact_sound(_body, shoe_node)
+
+
+## Impact Dressing: metal-on-metal from the same body_entered
+## wiring - the stake CLANGS, another shoe CLINKS. Only for a
+## shoe actually in flight (never a grab, a hop, or a shoe
+## nudged on its rail), impact-scaled by the striking shoe's
+## speed, with a short per-shoe cooldown so a rattling wrap
+## reads as one strike, not a burst.
+func _metal_contact_sound(body: Node, shoe_node: Shoe) -> void:
+	if fx == null:
+		return
+	var in_flight: bool = (shoe_node == shoe and state == "FLYING") \
+		or ai_flight.has(shoe_node)
+	if not in_flight:
+		return
+	var event: String = ""
+	if body is Shoe and body != shoe_node:
+		event = "shoe_clink"
+	else:
+		for key: String in stakes.keys():
+			var st: Dictionary = stakes[key]
+			if body == st["body"]:
+				event = "stake_clang"
+				break
+	if event == "":
+		return
+	var now: int = Time.get_ticks_msec()
+	if int(_metal_cooldown.get(shoe_node, 0)) > now:
+		return
+	_metal_cooldown[shoe_node] = now + 130
+	var strength: float = clampf(shoe_node.linear_velocity.length() / 8.0, 0.0, 1.0)
+	fx.play_event(event, shoe_node.global_position, strength)
+
+
+## Impact Dressing: a shoe's surface first-contact, forwarded
+## from its absorption episode (shoe.gd). The in-flight gate
+## is the same one the metal sounds use: a shoe at rest, on a
+## restock hop, or in a hand never raises a plume, a divot, or
+## a thud. Sand raises all three; grass a scuff mark only.
+func _on_surface_impact(kind: int, pos: Vector3, vel: Vector3,
+		strength: float, shoe_node: Shoe) -> void:
+	if fx == null:
+		return
+	var in_flight: bool = (shoe_node == shoe and state == "FLYING") \
+		or ai_flight.has(shoe_node)
+	if not in_flight:
+		return
+	fx.surface_impact(kind, pos, vel, strength)
+	if kind == Shoe.ABSORB_SAND:
+		fx.play_event("sand_thud", pos, strength)
 
 
 func _physics_process(delta: float) -> void:
@@ -3868,6 +3928,10 @@ func _settle_throw() -> void:
 	var ringer: bool = ThrowMath.is_ringer(
 		shoe.global_transform, stake_at_shoe,
 		Shoe.RINGER_INNER_HALF, Shoe.RINGER_Z_MIN, Shoe.RINGER_Z_MAX)
+	if ringer and fx != null:
+		# Impact Dressing: a settled ringer RINGS - once,
+		# here, the only place a player ringer is named.
+		fx.play_event("ringer", shoe.global_position, 1.0)
 	throw_count += 1
 	last_hold_text = "%s (%s)" % [String(release_cache["hold"]).to_upper(), String(release_cache["zone"]).to_upper()]
 	last_distance_in = dist_in
@@ -3962,6 +4026,12 @@ func game_line_z() -> float:
 ## Clean reset: every shoe frozen onto its rail slot at the
 ## given stock point, the player's first shoe active.
 func _gather_to_rail(line_ft: int) -> void:
+	# Impact Dressing: the gather IS the restock - the pit is
+	# raked clean here, so a fresh round starts on clean sand.
+	# Every restock path (round change, new game, back to
+	# practice) funnels through this function.
+	if fx != null:
+		fx.clear_marks()
 	# Fix Pass 25: end any hop first - the gather below seats
 	# every shoe itself, and a live hop would fight it for
 	# its shoe. (The hop's own guard aborts on the state
@@ -4403,6 +4473,10 @@ func _settle_ai_shoe(s: Shoe) -> void:
 	var ringer: bool = ThrowMath.is_ringer(
 		s.global_transform, stake_at_shoe,
 		Shoe.RINGER_INNER_HALF, Shoe.RINGER_Z_MIN, Shoe.RINGER_Z_MAX)
+	if ringer and fx != null:
+		# Impact Dressing: a settled ringer RINGS - once,
+		# here, the only place an AI ringer is named.
+		fx.play_event("ringer", s.global_position, 1.0)
 	s.freeze = true
 	shoe_status[s] = "DOWN"
 	throw_count += 1

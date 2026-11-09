@@ -533,6 +533,62 @@ func _run() -> void:
 	main.set_time_of_day("NOON")
 	await settle(4)
 
+	# --- Impact Dressing: plume mid-flight, divots, rake ---
+	# One camera over the pit. The plume is fired through
+	# the FX debug hook and caught within its ~1 s life; the
+	# divots are stamped by the same hook the smoke suite
+	# uses, then the restock funnel rakes them away.
+	var cam_i := Camera3D.new()
+	cam_i.fov = 55.0
+	cam_i.position = Vector3(1.7, 1.6, -10.4)
+	main.add_child(cam_i)
+	cam_i.look_at(Vector3(0.0, 0.0, -12.192), Vector3.UP)
+	cam_i.current = true
+	await settle(4)
+	main.fx.debug_fire_plume(ImpactFX.KIND_SAND,
+		Vector3(0.1, 0.03, -11.95), Vector3(0.0, 0.0, -1.0), 1.0)
+	await settle(2)
+	var img_plume: Image = await snap_image("res://proofs/plume_mid.png")
+	var plume_px: Vector2 = cam_i.unproject_position(Vector3(0.1, 0.25, -12.15))
+	var grain_px: int = 0
+	for gx: int in range(maxi(0, int(plume_px.x) - 90), mini(img_plume.get_width(), int(plume_px.x) + 90), 2):
+		for gy: int in range(maxi(0, int(plume_px.y) - 90), mini(img_plume.get_height(), int(plume_px.y) + 90), 2):
+			var gpx: Color = img_plume.get_pixel(gx, gy)
+			if gpx.r > 0.55 and gpx.g > 0.42 and gpx.b < 0.68 and gpx.r > gpx.b + 0.08:
+				grain_px += 1
+	check(grain_px > 12,
+		"Impact Dressing: the plume reads as dry-sand grains in flight (%d samples)" % grain_px)
+	var divot_spots: Array = [
+		Vector3(-0.25, 0.03, -11.95), Vector3(0.18, 0.03, -12.30),
+		Vector3(0.02, 0.03, -12.55), Vector3(-0.12, 0.03, -12.15),
+		Vector3(0.30, 0.03, -11.80)]
+	for di: int in divot_spots.size():
+		var dpos: Vector3 = divot_spots[di]
+		main.fx.debug_surface_impact(ImpactFX.KIND_SAND, dpos,
+			Vector3(0.0, -3.0, -6.0), 0.55 + 0.1 * float(di))
+	await settle(4)
+	check(main.fx.divot_count() == 5,
+		"Impact Dressing: five landings leave five marks in the pit (%d)"
+		% main.fx.divot_count())
+	var img_divots: Image = await snap_image("res://proofs/divots_pit.png")
+	var dv_px: Vector2 = cam_i.unproject_position(divot_spots[1])
+	var dv_region: Vector2 = region_stats(img_divots, int(dv_px.x), int(dv_px.y), 14)
+	var clean_px: Vector2 = cam_i.unproject_position(Vector3(-0.55, 0.03, -12.45))
+	var clean_region: Vector2 = region_stats(img_divots, int(clean_px.x), int(clean_px.y), 14)
+	check(dv_region.x < clean_region.x - 0.01,
+		"Impact Dressing: a divot reads darker than the clean sand beside it (lum %.3f vs %.3f)"
+		% [dv_region.x, clean_region.x])
+	main._gather_to_rail(40)
+	await settle(4)
+	check(main.fx.divot_count() == 0,
+		"Impact Dressing: the restock rakes every mark away")
+	var img_raked: Image = await snap_image("res://proofs/divots_raked.png")
+	var rk_region: Vector2 = region_stats(img_raked, int(dv_px.x), int(dv_px.y), 14)
+	check(rk_region.x > dv_region.x + 0.005,
+		"Impact Dressing: the raked pit reads clean where the divot was (lum %.3f vs %.3f)"
+		% [rk_region.x, dv_region.x])
+	cam_i.queue_free()
+
 	# --- Proof A2: board close-up, MID-GAME (Backyard Game v1) ---
 	# Seed a game in progress, so the board renders its game
 	# status block (score, inning, turn, last-inning result) -
