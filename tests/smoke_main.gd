@@ -1415,6 +1415,24 @@ func _run() -> void:
 		Vector3(0.0, 0.02, -12.19), Vector3(0.0, -3.0, -6.0), 0.95, main.shoe)
 	check(main.fx.divot_count() == divots_before_gate,
 		"Impact Dressing: a resting shoe raises no plume, divot, or thud")
+	# Fix Pass 32: the one-plume-per-flight latch, through
+	# main's own handler: two absorption episodes inside one
+	# flight fire ONE plume but stamp BOTH divots (the bounce
+	# re-fires were the lingering sparkle cluster).
+	var state_was: String = main.state
+	main.state = "FLYING"
+	main._plume_flown[main.shoe] = false
+	var latch_fires0: int = main.fx.debug_plume_fire_count()
+	var latch_div0: int = main.fx.divot_count()
+	main._on_surface_impact(Shoe.ABSORB_SAND,
+		Vector3(0.0, 0.02, -12.19), Vector3(0.0, -3.0, -6.0), 0.95, main.shoe)
+	main._on_surface_impact(Shoe.ABSORB_SAND,
+		Vector3(0.05, 0.02, -12.10), Vector3(0.0, -2.0, -4.0), 0.40, main.shoe)
+	check(main.fx.debug_plume_fire_count() == latch_fires0 + 1,
+		"Impact Dressing (FP32): two episodes in one flight fire ONE plume")
+	check(main.fx.divot_count() == latch_div0 + 2,
+		"Impact Dressing (FP32): both episodes still stamp their divots")
+	main.state = state_was
 	# The rake: the restock funnel cleans the pit.
 	main._gather_to_rail(40)
 	check(main.fx.divot_count() == 0,

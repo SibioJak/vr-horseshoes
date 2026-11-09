@@ -261,6 +261,63 @@ func region_stats(img: Image, cx: int, cy: int, half: int) -> Vector2:
 	return Vector2(lum / float(n), warm / float(n))
 
 
+## Fix Pass 32 census helpers: bright-desaturated SPARK
+## samples in a box around a screen point; pixels CHANGED
+## vs a baseline frame in that box (the plume's presence,
+## at any light level) with their mean warmth; and the mean
+## absolute difference of two frames (the clean-air test).
+func spark_px(img: Image, centre: Vector2) -> int:
+	var n: int = 0
+	for gx: int in range(maxi(0, int(centre.x) - 90), mini(img.get_width(), int(centre.x) + 90), 2):
+		for gy: int in range(maxi(0, int(centre.y) - 90), mini(img.get_height(), int(centre.y) + 90), 2):
+			var c: Color = img.get_pixel(gx, gy)
+			var mx: float = maxf(c.r, maxf(c.g, c.b))
+			var mn: float = minf(c.r, minf(c.g, c.b))
+			if mn > 0.62 and (mx - mn) < 0.16:
+				n += 1
+	return n
+
+
+func changed_px(a: Image, b: Image, centre: Vector2, thresh: float) -> int:
+	var n: int = 0
+	for gx: int in range(maxi(0, int(centre.x) - 90), mini(a.get_width(), int(centre.x) + 90), 2):
+		for gy: int in range(maxi(0, int(centre.y) - 90), mini(a.get_height(), int(centre.y) + 90), 2):
+			var ca: Color = a.get_pixel(gx, gy)
+			var cb: Color = b.get_pixel(gx, gy)
+			if absf(ca.r - cb.r) + absf(ca.g - cb.g) + absf(ca.b - cb.b) > thresh:
+				n += 1
+	return n
+
+
+func changed_warmth(a: Image, b: Image, centre: Vector2, thresh: float) -> float:
+	var warm: float = 0.0
+	var n: int = 0
+	for gx: int in range(maxi(0, int(centre.x) - 90), mini(a.get_width(), int(centre.x) + 90), 2):
+		for gy: int in range(maxi(0, int(centre.y) - 90), mini(a.get_height(), int(centre.y) + 90), 2):
+			var ca: Color = a.get_pixel(gx, gy)
+			var cb: Color = b.get_pixel(gx, gy)
+			if absf(ca.r - cb.r) + absf(ca.g - cb.g) + absf(ca.b - cb.b) > thresh:
+				warm += ca.r - ca.b
+				n += 1
+	if n == 0:
+		return 0.0
+	return warm / float(n)
+
+
+func region_mean_diff(a: Image, b: Image, centre: Vector2, half: int) -> float:
+	var total: float = 0.0
+	var n: int = 0
+	for gx: int in range(maxi(0, int(centre.x) - half), mini(a.get_width(), int(centre.x) + half), 2):
+		for gy: int in range(maxi(0, int(centre.y) - half), mini(a.get_height(), int(centre.y) + half), 2):
+			var ca: Color = a.get_pixel(gx, gy)
+			var cb: Color = b.get_pixel(gx, gy)
+			total += absf(ca.r - cb.r) + absf(ca.g - cb.g) + absf(ca.b - cb.b)
+			n += 1
+	if n == 0:
+		return 1.0
+	return total / float(n) / 3.0
+
+
 ## The whole frame's (luminance, warmth), strided.
 func frame_stats(img: Image) -> Vector2:
 	var lum: float = 0.0
@@ -586,6 +643,72 @@ func _run() -> void:
 		"Impact Dressing: a divot reads darker than the same sand raked clean (lum %.3f vs %.3f)"
 		% [dv_region.x, rk_region.x])
 	cam_i.queue_free()
+
+	# --- Fix Pass 32: the plume at DUSK, dense frames ---
+	# Chris's failing condition, staged: a full-strength burst
+	# over the pit at dusk, frames across its life plus the
+	# +2 s clean-air frame. Sparks = bright DESATURATED pixels
+	# (the unshaded puff's signature); the fix must add none
+	# beyond the static scene's own, the burst must still read
+	# as sand, and at +2 s the air must be empty.
+	main.set_time_of_day("DUSK")
+	var cam_fp := Camera3D.new()
+	cam_fp.fov = 55.0
+	cam_fp.position = Vector3(1.7, 1.6, -10.4)
+	main.add_child(cam_fp)
+	cam_fp.look_at(Vector3(0.0, 0.0, -12.192), Vector3.UP)
+	cam_fp.current = true
+	await settle(4)
+	var p_px: Vector2 = cam_fp.unproject_position(Vector3(0.1, 0.25, -12.15))
+	var img_pbase: Image = await snap_image("res://proofs/plume_dusk_base.png")
+	var spark_base: int = spark_px(img_pbase, p_px)
+	main.fx.debug_fire_plume(ImpactFX.KIND_SAND,
+		Vector3(0.1, 0.03, -11.95), Vector3(0.0, 0.0, -1.0), 1.0)
+	await create_timer(0.30).timeout
+	var img_pb1: Image = await snap_image("res://proofs/plume_dusk_1.png")
+	await create_timer(0.45).timeout
+	var img_pb2: Image = await snap_image("res://proofs/plume_dusk_2.png")
+	await create_timer(0.45).timeout
+	var img_pb3: Image = await snap_image("res://proofs/plume_dusk_3.png")
+	# The burst must be VISIBLE in the sequence (llvmpipe's
+	# slow frames land where they land - the best frame is
+	# the evidence) and what shows must be warm sand, not
+	# white sparks.
+	var burst_best: int = maxi(changed_px(img_pb1, img_pbase, p_px, 0.24),
+		maxi(changed_px(img_pb2, img_pbase, p_px, 0.24),
+			changed_px(img_pb3, img_pbase, p_px, 0.24)))
+	check(burst_best > 100,
+		"Fix Pass 32: at dusk the burst is plainly visible over the pit (%d changed samples)"
+		% burst_best)
+	var burst_warm: float = maxf(changed_warmth(img_pb1, img_pbase, p_px, 0.24),
+		maxf(changed_warmth(img_pb2, img_pbase, p_px, 0.24),
+			changed_warmth(img_pb3, img_pbase, p_px, 0.24)))
+	check(burst_warm > 0.02,
+		"Fix Pass 32: the burst's changed pixels are WARM sand (mean r-b %.3f)" % burst_warm)
+	check(spark_px(img_pb1, p_px) <= spark_base,
+		"Fix Pass 32: the burst adds NO spark-white pixels at dusk (%d over baseline %d)"
+		% [spark_px(img_pb1, p_px), spark_base])
+	check(spark_px(img_pb2, p_px) <= spark_base,
+		"Fix Pass 32: mid-burst, still no spark-white pixels (%d over baseline %d)"
+		% [spark_px(img_pb2, p_px), spark_base])
+	check(spark_px(img_pb3, p_px) <= spark_base,
+		"Fix Pass 32: late burst, still no spark-white pixels (%d over baseline %d)"
+		% [spark_px(img_pb3, p_px), spark_base])
+	# +2 s after the landing: nothing emitting, clean air
+	# (no pixel in the box changed beyond the scene's own
+	# slow dusk drift).
+	await create_timer(1.4).timeout
+	await settle(2)
+	check(not main.fx.debug_any_plume_emitting(),
+		"Fix Pass 32: at +2 s no plume slot is still emitting")
+	var img_pclean: Image = await snap_image("res://proofs/plume_dusk_clean.png")
+	var clean_diff: float = region_mean_diff(img_pclean, img_pbase, p_px, 90)
+	check(changed_px(img_pclean, img_pbase, p_px, 0.33) <= 4 and clean_diff < 0.02,
+		"Fix Pass 32: at +2 s the pit air is clean (%d strong-changed samples, mean diff %.4f)"
+		% [changed_px(img_pclean, img_pbase, p_px, 0.33), clean_diff])
+	cam_fp.queue_free()
+	main.set_time_of_day("NOON")
+	await settle(4)
 
 	# --- Proof A2: board close-up, MID-GAME (Backyard Game v1) ---
 	# Seed a game in progress, so the board renders its game

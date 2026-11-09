@@ -1322,6 +1322,45 @@ func test_impact_fx() -> void:
 	check(rings == 2, "Impact FX: each routed ringer rings exactly once per call")
 	fx_node.clear_marks()
 	check(fx_node.divot_count() == 0, "Impact FX: the rake leaves clean sand")
+	# Fix Pass 32: the silence conviction, kept as guards. The
+	# chain is tuned for THIS court (12 m line-to-pit): the
+	# dressing's unit_size 2.0 measured a full-strength ring at
+	# -27.5 dBFS at the line - inaudible. These assert the
+	# retune; tests/audio_measure.gd proves it end-to-end
+	# through genuine landings.
+	check(fx_node.debug_player_unit_size() == 7.0,
+		"Impact FX (FP32): players are tuned to the 12 m court (unit_size 7)")
+	check(fx_node.debug_player_filter_db() == 0.0,
+		"Impact FX (FP32): the distance low-pass is off - no muffling at 12 m")
+	check(ImpactFX.volume_db_for("sand_thud", 0.0) >= -12.0,
+		"Impact FX (FP32): even a strength-0 sand contact thuds audibly")
+	check(ImpactFX.volume_db_for("stake_clang", 0.0) >= -10.0,
+		"Impact FX (FP32): a stake strike clangs even at solver-eaten speed")
+	check(ImpactFX.volume_db_for("ringer", 1.0) >= -1.5,
+		"Impact FX (FP32): the ring plays near full volume - it carries the yard")
+	var lim_found: bool = false
+	for bi: int in AudioServer.get_bus_effect_count(0):
+		var eff: AudioEffect = AudioServer.get_bus_effect(0, bi)
+		if eff is AudioEffectLimiter \
+				and (eff as AudioEffectLimiter).ceiling_db <= -3.0:
+			lim_found = true
+	check(lim_found,
+		"Impact FX (FP32): a master-bus limiter caps stacked ringside impacts")
+	# Fix Pass 32: one plume per flight. A later episode of the
+	# same landing stamps its divot but fires NO second burst
+	# (the bounce re-fires were the lingering sparkle cluster).
+	var fires0: int = fx_node.debug_plume_fire_count()
+	var div0: int = fx_node.divot_count()
+	fx_node.surface_impact(ImpactFX.KIND_SAND,
+		Vector3(0.0, 0.02, -12.19), Vector3(0.0, -3.0, -6.0), 0.9, false)
+	check(fx_node.debug_plume_fire_count() == fires0,
+		"Impact FX (FP32): a later-episode impact fires no second plume")
+	check(fx_node.divot_count() == div0 + 1,
+		"Impact FX (FP32): a later-episode impact still stamps its divot")
+	fx_node.surface_impact(ImpactFX.KIND_SAND,
+		Vector3(0.0, 0.02, -12.19), Vector3(0.0, -3.0, -6.0), 0.9, true)
+	check(fx_node.debug_plume_fire_count() == fires0 + 1,
+		"Impact FX (FP32): a first-of-flight impact fires exactly one plume")
 	fx_node.queue_free()
 
 

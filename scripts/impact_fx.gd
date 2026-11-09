@@ -32,15 +32,16 @@ const STREAM_STAKE_CLANG: String = "res://assets/audio/stake_clang.ogg"
 const STREAM_SHOE_CLINK: String = "res://assets/audio/shoe_clink.ogg"
 const STREAM_RINGER_RING: String = "res://assets/audio/ringer_ring.ogg"
 
-const SAND_SPRAY_COL := Color(0.82, 0.70, 0.50)
-const SAND_PUFF_COL := Color(0.87, 0.79, 0.62, 0.38)
-const TURF_SPRAY_COL := Color(0.45, 0.50, 0.30)
-const TURF_PUFF_COL := Color(0.55, 0.58, 0.42, 0.30)
+const SAND_SPRAY_COL := Color(0.72, 0.60, 0.42)
+const SAND_PUFF_COL := Color(0.70, 0.60, 0.44, 0.30)
+const TURF_SPRAY_COL := Color(0.40, 0.45, 0.27)
+const TURF_PUFF_COL := Color(0.50, 0.52, 0.38, 0.26)
 const SAND_DIVOT_COL := Color(0.52, 0.42, 0.29)
 const TURF_DIVOT_COL := Color(0.32, 0.40, 0.22)
 
 var _plumes: Array = [] # {root, spray, puff, spray_mat, puff_mat, spray_mesh_mat, puff_mesh_mat}
 var _plume_next: int = 0
+var plume_fire_count: int = 0 # total bursts fired (test surface)
 var _divots: Array = [] # {mi, mat}
 var _divot_next: int = 0
 var _divot_active: int = 0
@@ -73,13 +74,13 @@ static func volume_db_for(event: String, strength: float) -> float:
 	var s: float = clampf(strength, 0.0, 1.0)
 	match event:
 		"sand_thud":
-			return lerpf(-17.0, -3.0, s)
+			return lerpf(-10.0, -2.0, s)
 		"stake_clang":
-			return lerpf(-15.0, -2.0, s)
+			return lerpf(-9.0, -1.5, s)
 		"shoe_clink":
-			return lerpf(-17.0, -4.0, s)
+			return lerpf(-11.0, -3.0, s)
 		"ringer":
-			return -2.5
+			return -1.0
 	return -12.0
 
 
@@ -118,14 +119,32 @@ func _ready() -> void:
 		"shoe_clink": preload(STREAM_SHOE_CLINK),
 		"ringer": preload(STREAM_RINGER_RING),
 	}
+	_ensure_bus_limiter()
 	_build_plumes()
 	_build_divots()
 	_build_players()
 
 
+## Fix Pass 32: with the court retune, a listener standing at
+## the pit hears a landing's thud + clang + bounce thuds at
+## near-unity gain, and stacked they clipped the bus (+2 dBFS
+## measured). A gentle limiter ceiling on the master bus keeps
+## ringside present-but-never-blasting; line levels (-15 dBFS
+## and below) never reach its threshold. Added once, whoever
+## gets there first.
+func _ensure_bus_limiter() -> void:
+	for i: int in AudioServer.get_bus_effect_count(0):
+		if AudioServer.get_bus_effect(0, i) is AudioEffectLimiter:
+			return
+	var lim := AudioEffectLimiter.new()
+	lim.ceiling_db = -4.0
+	lim.threshold_db = -6.0
+	AudioServer.add_bus_effect(0, lim)
+
+
 func _build_particles(amount: int, lifetime: float, explosiveness: float,
 		gravity: Vector3, spread: float, mesh: Mesh,
-		mesh_mat: Material) -> Dictionary:
+		mesh_mat: Material, fade_start: float = 0.0) -> Dictionary:
 	var p := GPUParticles3D.new()
 	p.amount = amount
 	p.lifetime = lifetime
@@ -139,6 +158,20 @@ func _build_particles(amount: int, lifetime: float, explosiveness: float,
 	pm.gravity = gravity
 	pm.scale_min = 0.7
 	pm.scale_max = 1.3
+	# Fix Pass 32: particles fade OUT over their last stretch
+	# instead of popping out of existence at lifetime end.
+	var grad := Gradient.new()
+	if fade_start > 0.0:
+		grad.offsets = PackedFloat32Array([0.0, fade_start, 1.0])
+		grad.colors = PackedColorArray([
+			Color(1, 1, 1, 1), Color(1, 1, 1, 1), Color(1, 1, 1, 0)])
+	else:
+		grad.offsets = PackedFloat32Array([0.0, 1.0])
+		grad.colors = PackedColorArray([
+			Color(1, 1, 1, 1), Color(1, 1, 1, 0)])
+	var ramp := GradientTexture1D.new()
+	ramp.gradient = grad
+	pm.color_ramp = ramp
 	p.process_material = pm
 	p.draw_pass_1 = mesh
 	p.material_override = mesh_mat
@@ -150,17 +183,23 @@ func _build_plumes() -> void:
 		var root := Node3D.new()
 		root.name = "Plume%d" % i
 		add_child(root)
-		# Grain spray: small dry-sand grains thrown forward.
+		# Grain spray: small dry-sand grains thrown forward on
+		# a fast arc - up, over, DOWN, gone inside ~0.6 s.
 		var spray_mesh := BoxMesh.new()
 		spray_mesh.size = Vector3(0.02, 0.02, 0.02)
 		var spray_mesh_mat := StandardMaterial3D.new()
 		spray_mesh_mat.albedo_color = SAND_SPRAY_COL
 		spray_mesh_mat.roughness = 1.0
 		spray_mesh.material = spray_mesh_mat
-		var spray: Dictionary = _build_particles(30, 0.75, 0.9,
-			Vector3(0.0, -4.5, 0.0), 28.0, spray_mesh, spray_mesh_mat)
+		var spray: Dictionary = _build_particles(30, 0.6, 0.9,
+			Vector3(0.0, -6.5, 0.0), 28.0, spray_mesh, spray_mesh_mat, 0.55)
+		(spray["mat"] as ParticleProcessMaterial).direction = Vector3(0.0, 0.55, 1.0)
 		root.add_child(spray["node"] as Node)
-		# Dust puff: soft, slow, grows as it hangs.
+		# Dust puff: soft, slow, settles back down as it fades.
+		# Fix Pass 32: SHADED like everything else in the yard -
+		# the unshaded pass ignored the dusk light and rendered
+		# as bright white sparks; and it settles (negative
+		# gravity) instead of rising and hanging.
 		var puff_mesh := SphereMesh.new()
 		puff_mesh.radius = 0.05
 		puff_mesh.height = 0.10
@@ -169,11 +208,10 @@ func _build_plumes() -> void:
 		var puff_mesh_mat := StandardMaterial3D.new()
 		puff_mesh_mat.albedo_color = SAND_PUFF_COL
 		puff_mesh_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		puff_mesh_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		puff_mesh.material = puff_mesh_mat
-		var puff: Dictionary = _build_particles(10, 1.05, 0.6,
-			Vector3(0.0, 0.35, 0.0), 55.0, puff_mesh, puff_mesh_mat)
-		(puff["mat"] as ParticleProcessMaterial).direction = Vector3(0.0, 1.0, 0.15)
+		var puff: Dictionary = _build_particles(10, 0.85, 0.85,
+			Vector3(0.0, -0.55, 0.0), 55.0, puff_mesh, puff_mesh_mat, 0.0)
+		(puff["mat"] as ParticleProcessMaterial).direction = Vector3(0.0, 0.35, 0.4)
 		root.add_child(puff["node"] as Node)
 		_plumes.append({
 			"root": root,
@@ -208,8 +246,15 @@ func _build_players() -> void:
 	for i: int in PLAYER_COUNT:
 		var pl := AudioStreamPlayer3D.new()
 		pl.name = "ImpactPlayer%d" % i
-		pl.unit_size = 2.0
+		# Fix Pass 32 retune: the court is 12 m line-to-pit.
+		# unit_size 2.0 put the whole court on the steep part of
+		# the falloff - a full-strength ring measured -27.5 dBFS
+		# at the line (inaudible in play). 7.0 keeps the line
+		# within ~5 dB of the pit, and the distance low-pass is
+		# off: nothing in a backyard needs muffling.
+		pl.unit_size = 7.0
 		pl.max_distance = 40.0
+		pl.attenuation_filter_db = 0.0
 		add_child(pl)
 		_players.append(pl)
 
@@ -217,10 +262,16 @@ func _build_players() -> void:
 ## One surface first-contact, forwarded from the shoe's
 ## absorption episode via main: plume + divot, logged. The
 ## caller (main) owns the in-flight gate and the thud routing.
-func surface_impact(kind: int, pos: Vector3, vel: Vector3, strength: float) -> void:
+## Fix Pass 32: with_plume=false for a flight's LATER episodes -
+## a bouncing shoe's come-downs still stamp their divot and
+## thud, but the plume is one burst per landing, never a
+## re-fired sparkle cluster at the pit.
+func surface_impact(kind: int, pos: Vector3, vel: Vector3, strength: float,
+		with_plume: bool = true) -> void:
 	var flat := Vector3(vel.x, 0.0, vel.z)
 	var dir: Vector3 = flat.normalized() if flat.length() > 0.1 else Vector3(0.0, 0.0, -1.0)
-	_fire_plume(kind, pos, dir, strength)
+	if with_plume:
+		_fire_plume(kind, pos, dir, strength)
 	_stamp_divot(kind, pos, dir, strength)
 	impact_log.append({"kind": kind, "strength": strength,
 		"pos": pos, "radius": divot_radius_for(kind, strength)})
@@ -229,6 +280,7 @@ func surface_impact(kind: int, pos: Vector3, vel: Vector3, strength: float) -> v
 
 
 func _fire_plume(kind: int, pos: Vector3, dir: Vector3, strength: float) -> void:
+	plume_fire_count += 1
 	var slot: Dictionary = _plumes[_plume_next]
 	_plume_next = (_plume_next + 1) % PLUME_SLOTS
 	var root: Node3D = slot["root"]
@@ -236,8 +288,8 @@ func _fire_plume(kind: int, pos: Vector3, dir: Vector3, strength: float) -> void
 	root.rotation = Vector3(0.0, atan2(dir.x, dir.z), 0.0)
 	var energy: float = plume_scale_for(kind, strength)
 	var spray_pm: ParticleProcessMaterial = slot["spray_pm"]
-	spray_pm.initial_velocity_min = lerpf(0.9, 2.8, energy)
-	spray_pm.initial_velocity_max = lerpf(1.4, 4.2, energy)
+	spray_pm.initial_velocity_min = lerpf(0.7, 1.7, energy)
+	spray_pm.initial_velocity_max = lerpf(1.1, 2.6, energy)
 	var puff_pm: ParticleProcessMaterial = slot["puff_pm"]
 	puff_pm.initial_velocity_min = lerpf(0.15, 0.45, energy)
 	puff_pm.initial_velocity_max = lerpf(0.30, 0.80, energy)
@@ -286,6 +338,33 @@ func plume_slots() -> int:
 
 func player_count() -> int:
 	return _players.size()
+
+
+## Fix Pass 32 guard surface: the court-distance tuning the
+## measured-listener-level tests assert against.
+func debug_player_unit_size() -> float:
+	if _players.is_empty():
+		return 0.0
+	return (_players[0] as AudioStreamPlayer3D).unit_size
+
+
+func debug_player_filter_db() -> float:
+	if _players.is_empty():
+		return 0.0
+	return (_players[0] as AudioStreamPlayer3D).attenuation_filter_db
+
+
+func debug_plume_fire_count() -> int:
+	return plume_fire_count
+
+
+## Fix Pass 32 proof surface: is any pooled burst still alive?
+func debug_any_plume_emitting() -> bool:
+	for slot: Dictionary in _plumes:
+		if (slot["spray"] as GPUParticles3D).emitting \
+				or (slot["puff"] as GPUParticles3D).emitting:
+			return true
+	return false
 
 
 ## Play one routed sound at a point in the world, from the

@@ -302,6 +302,7 @@ var last_inning_text: String = ""
 var winner_text: String = ""
 var grab_armed: bool = true # game phases disarm the grab (AI turn etc.)
 var ai_flight: Dictionary = {} # Shoe -> flight tracking dict (AI throws)
+var _plume_flown: Dictionary = {} # Shoe -> bool: this flight's one plume is spent (Fix Pass 32)
 var ai_throw_pending: bool = false # an AI swing is animating
 var ai_wait_clear: float = 0.0
 var _btn_prev: Dictionary = {"A": false, "B": false}
@@ -3677,6 +3678,7 @@ func _do_release() -> void:
 ## otherwise the legacy grid read runs unchanged (direct callers -
 ## the suites, the technique audit - take that path).
 func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Dictionary = {}) -> void:
+	_plume_flown[shoe] = false # Fix Pass 32: a fresh flight earns a fresh plume
 	var use_sub: bool = false
 	if substep_release_enabled and t_star >= 0.0 and release_samples.size() >= 2:
 		var t_first: float = float(release_samples[0]["t"])
@@ -3851,7 +3853,14 @@ func _on_surface_impact(kind: int, pos: Vector3, vel: Vector3,
 		or ai_flight.has(shoe_node)
 	if not in_flight:
 		return
-	fx.surface_impact(kind, pos, vel, strength)
+	# Fix Pass 32: ONE plume per flight. A hard arrival can
+	# start several absorption episodes (bounce out, come down,
+	# rattle) and the dressing fired a fresh burst for each -
+	# the lingering sparkle cluster at the pit. Later episodes
+	# still stamp their divot and sound their (softer) thud.
+	var first_of_flight: bool = not bool(_plume_flown.get(shoe_node, false))
+	_plume_flown[shoe_node] = true
+	fx.surface_impact(kind, pos, vel, strength, first_of_flight)
 	if kind == Shoe.ABSORB_SAND:
 		fx.play_event("sand_thud", pos, strength)
 
@@ -4400,6 +4409,7 @@ func _ai_release_now() -> void:
 	var s: Shoe = ai_pending_shoe
 	if s == null:
 		return
+	_plume_flown[s] = false # Fix Pass 32: a fresh flight earns a fresh plume
 	var rel: Dictionary = ai_pending_release
 	_wire_guard(s, target_stake_key())
 	s.reset_stake_guard()
