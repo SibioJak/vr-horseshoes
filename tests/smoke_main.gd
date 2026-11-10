@@ -195,6 +195,61 @@ func check_rack(line_ft: int, is_ai: bool) -> void:
 		% [who, line_ft, face_n.dot(to_spot)])
 
 
+## Fix Pass 34: THE SHELF - the player's game station
+## stands on the GRASS at the patio's front-left corner, up
+## against the left bed's near corner. Chris: "right now you
+## have to turn around, pain in the ass" - from the throwing
+## spot the shelf is abeam to his LEFT (a glance, ~103 deg
+## off the pit-facing axis), facing him dead-on, and the
+## long-arm radius was re-derived to reach it.
+func check_shelf() -> void:
+	var rp0: Vector3 = main.rack_slot_tf(40, false, 0).origin
+	var rp1: Vector3 = main.rack_slot_tf(40, false, 1).origin
+	check(rp0.distance_to(main.SHELF_SLOT0) < 0.01,
+		"FP34: the player's game shoes stock at the shelf slot (%s)" % str(rp0))
+	var lz: float = main.line_z_for_ft(40)
+	var in_stance: bool = absf(rp0.x) <= main.STANCE_HALF_WIDTH \
+		and absf(rp0.z - lz) <= main.STANCE_HALF_DEPTH
+	check(not in_stance,
+		"FP34: the shelf stands outside the stance box (at %s)" % str(rp0))
+	var env: Array = main.player_shelf_envelope()
+	var patio: Array = main.stage_b_patio_rect()
+	check(float(env[2]) < float(patio[0]) - 0.10,
+		"FP34: the shelf stands on grass west of the patio slab")
+	var beds: Array = main.stage_a_bed_rects()
+	for bi: int in beds.size():
+		var b: Array = beds[bi]
+		var overlap: bool = float(env[0]) < float(b[2]) and float(env[2]) > float(b[0]) \
+			and float(env[1]) < float(b[3]) and float(env[3]) > float(b[1])
+		check(not overlap, "FP34: the shelf envelope clears bed %d" % bi)
+	var fn: Vector3 = main.STAGE_B_FOUNTAIN_POS
+	var fd: float = Vector2(fn.x, fn.z).distance_to(
+		Vector2(clampf(fn.x, float(env[0]), float(env[2])),
+			clampf(fn.z, float(env[1]), float(env[3]))))
+	check(fd >= main.STAGE_B_FOUNTAIN_R + 0.15,
+		"FP34: the shelf envelope clears the fountain circle (%.2f m)" % fd)
+	var spot: Vector3 = main.spot_pos(40, false)
+	var hang: Transform3D = main.rack_slot_tf(40, false, 0)
+	var face_n: Vector3 = hang.basis * Vector3.UP
+	var to_spot: Vector3 = (Vector3(spot.x, rp0.y, spot.z) - rp0).normalized()
+	check(face_n.dot(to_spot) > 0.7,
+		"FP34: the shelf presents its shoes FACE-ON to its spot (facing %.2f)"
+		% face_n.dot(to_spot))
+	var to_slot := Vector3(rp0.x - spot.x, 0.0, rp0.z - spot.z).normalized()
+	var bearing: float = rad_to_deg(acos(clampf(
+		to_slot.dot(Vector3(0.0, 0.0, -1.0)), -1.0, 1.0)))
+	check(to_slot.x < 0.0 and bearing > 85.0 and bearing < 120.0,
+		"FP34: from the throwing spot the shelf is abeam LEFT - a glance, not a turnaround (bearing %.0f deg)" % bearing)
+	check(absf(rp1.x - rp0.x) < 0.01
+		and absf((rp1.z - rp0.z) - (-1.0) * main.SLOT_STEP) < 0.01,
+		"FP34: the shelf steps slot 1 down-lane along the rail (step %s)" % str(rp1 - rp0))
+	var hand_r := Vector3(spot.x + 0.25, 0.85, spot.z)
+	check(hand_r.distance_to(rp0) > 4.80 and hand_r.distance_to(rp0) < 4.95,
+		"FP34: the governing off-hand reach to the shelf is %.2f m" % hand_r.distance_to(rp0))
+	check(main.LONG_ARM_RADIUS >= hand_r.distance_to(rp0),
+		"FP34: the re-derived long-arm radius (%.2f) covers the shelf" % main.LONG_ARM_RADIUS)
+
+
 ## Fix Pass 8: fire one shot at the stake through the production
 ## grab/release path and watch it the whole way: was the stake
 ## body hit, and how deep past the stake's axis plane did the
@@ -1512,7 +1567,9 @@ func _run() -> void:
 	check(main.ai_stand_tfs.size() == 1 and not main.ai_stand_tfs.has(30),
 		"FP18/19: the AI stocks only at the 40 ft game station - no practice stock point (%d)"
 		% [main.ai_stand_tfs.size()])
-	check_rack(40, false)
+	# Fix Pass 34: the player's 40 ft station is the SHELF
+	# on the grass now - its own guard, not check_rack.
+	check_shelf()
 	check_rack(40, true)
 	# The player's 30 ft slots keep their full FP13 layout
 	# geometry - the slim peg post hangs the pair exactly
@@ -2409,6 +2466,40 @@ func _run() -> void:
 		Vector3(0.0, 0.0, main.FOUL_40_Z))
 	check(await wait_shoe_at(40, 3.0) >= 0.0,
 		"FP25: the shoe restocks at the standard end for the next section")
+	# (k) Fix Pass 34: THE PEG EXCLUSION. The shelf move
+	# grew LONG_ARM_RADIUS to 5.10 m, and the 30 ft peg
+	# (3.19 m from the 40 ft spot) now sits inside it - in
+	# GAME play the peg must NOT answer a far squeeze from
+	# the 40 ft spot; only the game station's stocked pair
+	# may. Stage it directly: the player shoe railed at the
+	# peg, mode flipped to GAME without the gather (a real
+	# start_game would collect the shoe to the shelf,
+	# destroying the staged state), a fresh squeeze from
+	# the 40 ft spot hand.
+	var peg_slot: Vector3 = main.rack_slot_tf(30, false, 0).origin
+	main.shoe.freeze = false
+	main.shoe.sleeping = false
+	main.shoe.global_position = peg_slot
+	main.shoe.linear_velocity = Vector3.ZERO
+	main.shoe.angular_velocity = Vector3.ZERO
+	main.shoe.sleeping = true
+	await frames(3)
+	main.mode = "GAME"
+	main.round_state = "PITCHING" # so only the exclusion can refuse
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, hand_r40)
+	main.test_grip["R"] = 1.0
+	await create_timer(0.6).timeout
+	check(main.hop_phase == "" and not main.grab_state.latched
+		and main.shoe.global_position.distance_to(peg_slot) < 0.01,
+		"FP34: in GAME the peg pair refuses a far squeeze from the 40 ft spot (the explicit exclusion; distance alone no longer protects it)")
+	main.test_grip["R"] = 0.0
+	main.test_hand_tf.erase("R")
+	main.mode = "PRACTICE"
+	main.shoe.sleeping = false
+	main.shoe.global_position = main.rack_slot_tf(40, false, 0).origin
+	main.shoe.linear_velocity = Vector3.ZERO
+	main.shoe.sleeping = true
+	await frames(3)
 
 	# --- Fix Pass 26: the full circuit - cross-grabs enter
 	# the far family, the far grip throws its declaration, and

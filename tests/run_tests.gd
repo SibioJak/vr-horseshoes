@@ -942,20 +942,21 @@ func test_stage_b_layout() -> void:
 	check(float(patio[3]) < 7.0 and float(patio[0]) >= -13.0
 		and float(patio[2]) <= 13.0,
 		"Stage B: the patio stands inside the fence")
-	# Both 40 ft stations stand ON the slab: a conservative
-	# envelope box around each rack's two slots (slot span
-	# plus the timber body's reach) inside the patio rect.
-	for is_ai: bool in [false, true]:
-		var tf: Transform3D = main_script.make_rack_tf(40, is_ai)
-		var o: Vector3 = tf.origin
-		var env: Array = [o.x - 0.55, o.z - 0.62, o.x + 0.55, o.z + 0.40]
-		check(float(env[0]) >= float(patio[0]) and float(env[2]) <= float(patio[2])
-			and float(env[1]) >= float(patio[1]) and float(env[3]) <= float(patio[3]),
-			"Stage B: the %s station stands on the patio (slots at %s)"
-			% ["AI" if is_ai else "player", str(o)])
-		check(absf((o.z - float(main_script.FOUL_40_Z)) - float(main_script.STAND_BACK_Z)) < 0.01,
-			"Stage B: the %s station stands %.2f m behind the line"
-			% ["AI" if is_ai else "player", float(main_script.STAND_BACK_Z)])
+	# The AI's 40 ft station stands ON the slab: a
+	# conservative envelope box around the rack's two slots
+	# (slot span plus the timber body's reach) inside the
+	# patio rect. (The PLAYER's game station stood here too
+	# until Fix Pass 34 moved it onto the grass - its guard
+	# lives in test_fp34_layout.)
+	var tf: Transform3D = main_script.make_rack_tf(40, true)
+	var o: Vector3 = tf.origin
+	var env: Array = [o.x - 0.55, o.z - 0.62, o.x + 0.55, o.z + 0.40]
+	check(float(env[0]) >= float(patio[0]) and float(env[2]) <= float(patio[2])
+		and float(env[1]) >= float(patio[1]) and float(env[3]) <= float(patio[3]),
+		"Stage B: the AI station stands on the patio (slots at %s)" % str(o))
+	check(absf((o.z - float(main_script.FOUL_40_Z)) - float(main_script.STAND_BACK_Z)) < 0.01,
+		"Stage B: the AI station stands %.2f m behind the line"
+		% float(main_script.STAND_BACK_Z))
 	# The house wall stands on the patio's rear edge, and
 	# its door and windows stand on the wall.
 	var hd: Dictionary = main_script.stage_b_house()
@@ -970,8 +971,10 @@ func test_stage_b_layout() -> void:
 	# Patio objects: on the slab, off the walk corridor
 	# (patio -> foul line), off both stations' envelopes.
 	var corridor: Array = [-0.30, -0.55, 1.50, 3.60]
+	# Only the AI station's envelope remains on the slab
+	# (Fix Pass 34: the player's shelf is on the grass).
 	var station_envs: Array = [
-		[1.45, -0.40, 2.65, 1.00], [-2.65, -0.40, -1.45, 1.00]]
+		[-2.65, -0.40, -1.45, 1.00]]
 	var spots: Array = main_script.stage_b_object_spots()
 	check(spots.size() == 6, "Stage B: six patio objects dress the slab (%d)" % spots.size())
 	for spot: Array in spots:
