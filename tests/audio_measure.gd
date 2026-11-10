@@ -16,6 +16,14 @@ extends SceneTree
 ## Run: godot --headless --path . --script tests/audio_measure.gd
 ## Exit code is the failure count's sign: 0 = every measured
 ## level inside its band, 1 = at least one outside.
+##
+## Fix Pass 33 windows: the same standard for the two sounds
+## Chris's FP32 field test found missing - a SHORT player
+## throw (the production release at 90% velocity) lands on
+## the LAWN and must sound the grass thud at the line, and a
+## player throw aimed onto the pit's side tie must KNOCK.
+## Both are genuine production landings, measured the same
+## way; a routing-only assertion does not ship.
 
 var failures: int = 0
 var main: Node
@@ -120,17 +128,17 @@ func build_stream(hand_pos: Vector3, q_hand: Quaternion, vel: Vector3,
 	return out
 
 
-func player_throw() -> bool:
+func player_throw(aim_off: Vector3 = Vector3.ZERO, vel_scale: float = 1.0) -> bool:
 	if String(main.state) != "STAND":
 		return false
 	var thrown_shoe: Shoe = main.shoe
 	var line_z: float = main.game_line_z()
-	var target: Vector3 = main.target_stake_pos()
+	var target: Vector3 = main.target_stake_pos() + aim_off
 	var release_pos := Vector3(0.25, 1.25, line_z + 0.35)
 	var t_f: float = 1.15
 	var vel := Vector3((target.x - release_pos.x) / t_f,
 		(0.50 - release_pos.y + 4.9 * t_f * t_f) / t_f,
-		(target.z - release_pos.z) / t_f)
+		(target.z - release_pos.z) / t_f) * vel_scale
 	var omega := Vector3(TAU / t_f, 0.0, 0.0)
 	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
 		thrown_shoe.zone_world_center("toe"))
@@ -139,6 +147,14 @@ func player_throw() -> bool:
 	for i: int in 2:
 		await physics_frame
 	if String(main.state) != "HELD":
+		# Fix Pass 33 rig hygiene: a failed grab must not
+		# leave the test hand squeezed and parked at the
+		# shoe - the residue latches the grab the moment the
+		# player's turn comes round (the wedge that silently
+		# ate this rig's out-of-turn attempts in FP32's flow,
+		# and any later window that needs the player).
+		main.test_grip["R"] = 0.0
+		main.grab_state.reset()
 		return false
 	var rel_tf: Transform3D = Shoe.hold_transform("toe", "R")
 	var hand_pos: Vector3 = release_pos - rel_tf.origin
@@ -333,6 +349,67 @@ func _run() -> void:
 	check(saw_ring, "the scripted ringer throw settled as a ringer (ring routed)")
 	check(float(res3["peak_db"]) > -20.0,
 		"line: the ringer's ring peaks above -20 dBFS (got %.1f)" % float(res3["peak_db"]))
+
+	# --- Window 4 (Fix Pass 33): a SHORT throw lands on the
+	# LAWN, heard from the line: the production release at
+	# 90% velocity - a real throw with less on it, Chris's
+	# own case. It must first-touch grass clear of the pit's
+	# box zone and sound the grass thud, never the sand thud.
+	# The two FP33 windows run on a FRESH game (start_game,
+	# the game's own new-game path): the FP32 windows leave
+	# the match mid-inning with the turn order set by who
+	# scored, and a player_throw attempted out of turn can
+	# latch a grab it cannot release - a fresh game puts the
+	# player at the line, first throw, state STAND.
+	main.start_game()
+	await frames(5)
+	print("flow: FP33 windows on a fresh game - phase ", String(main.phase),
+		" state ", String(main.state))
+	cam.global_position = line_pos
+	cam.look_at(stake + Vector3(0.0, 0.3, 0.0))
+	cam.current = true
+	await frames(3)
+	_watch_start()
+	log0 = main.fx.play_log.size()
+	var ok8: bool = await player_throw(Vector3.ZERO, 0.90)
+	await create_timer(0.5).timeout
+	var res4: Dictionary = await _watch_stop()
+	report_window("GRASS THUD @ LINE (short throw)", res4,
+		new_log_entries(log0), line_pos)
+	var saw_grass: bool = false
+	var grass_in_box: bool = false
+	for e4: Variant in new_log_entries(log0):
+		var d4: Dictionary = e4
+		if String(d4["event"]) == "grass_thud":
+			saw_grass = true
+			var gp: Vector3 = d4["pos"]
+			if absf(gp.x - stake.x) <= 0.914 and absf(gp.z - stake.z) <= 0.914:
+				grass_in_box = true
+	check(ok8, "grass: the short production throw landed")
+	check(saw_grass, "grass: the lawn landing routed the grass thud")
+	check(not grass_in_box, "grass: the landing was a true lawn contact, outside the pit's box zone")
+	check(float(res4["peak_db"]) > -24.0,
+		"line: the grass thud peaks above -24 dBFS (got %.1f)" % float(res4["peak_db"]))
+
+	# --- Window 5 (Fix Pass 33): the player's second shoe of
+	# the inning, aimed onto the pit's right side tie - a
+	# genuine frame strike through the production path. The
+	# knock must route and carry to the line.
+	_watch_start()
+	log0 = main.fx.play_log.size()
+	var ok9: bool = await player_throw(Vector3(0.60, 0.0, 0.0))
+	await create_timer(0.5).timeout
+	var res5: Dictionary = await _watch_stop()
+	report_window("WOOD KNOCK @ LINE (side-tie strike)", res5,
+		new_log_entries(log0), line_pos)
+	var saw_knock: bool = false
+	for e5: Variant in new_log_entries(log0):
+		if String((e5 as Dictionary)["event"]) == "wood_knock":
+			saw_knock = true
+	check(ok9, "wood: the tie-aimed production throw landed")
+	check(saw_knock, "wood: the frame strike routed the wood knock")
+	check(float(res5["peak_db"]) > -22.0,
+		"line: the wood knock peaks above -22 dBFS (got %.1f)" % float(res5["peak_db"]))
 
 	# --- CALIBRATION (not conviction evidence): the chain's own
 	# gain for the ring stream at its game volume, two distances.

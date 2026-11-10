@@ -31,6 +31,8 @@ const STREAM_SAND_THUD: String = "res://assets/audio/sand_thud.ogg"
 const STREAM_STAKE_CLANG: String = "res://assets/audio/stake_clang.ogg"
 const STREAM_SHOE_CLINK: String = "res://assets/audio/shoe_clink.ogg"
 const STREAM_RINGER_RING: String = "res://assets/audio/ringer_ring.ogg"
+const STREAM_WOOD_KNOCK: String = "res://assets/audio/wood_knock.ogg"
+const STREAM_GRASS_THUD: String = "res://assets/audio/grass_thud.ogg"
 
 const SAND_SPRAY_COL := Color(0.72, 0.60, 0.42)
 const SAND_PUFF_COL := Color(0.70, 0.60, 0.44, 0.30)
@@ -65,6 +67,10 @@ static func stream_path_for_event(event: String) -> String:
 			return STREAM_SHOE_CLINK
 		"ringer":
 			return STREAM_RINGER_RING
+		"wood_knock":
+			return STREAM_WOOD_KNOCK
+		"grass_thud":
+			return STREAM_GRASS_THUD
 	return ""
 
 
@@ -81,6 +87,21 @@ static func volume_db_for(event: String, strength: float) -> float:
 			return lerpf(-11.0, -3.0, s)
 		"ringer":
 			return -1.0
+		# Fix Pass 33: the two gaps Chris named in the FP32
+		# field test. The wood knock is a strike event like
+		# the clang, but its floor sits 3 dB HOTTER: measured
+		# at the line (tests/audio_measure.gd), a solver-eaten
+		# frame strike at the clang's floor peaked -24 dBFS -
+		# under the audible band - because the woody
+		# transient's energy is spread wider than the clang's
+		# spike. The grass thud floors 3 dB UNDER the sand
+		# thud (a lawn landing is a lesser event than a pit
+		# landing) but its floor still survives the 12 m trip
+		# to the throwing line.
+		"wood_knock":
+			return lerpf(-6.0, -0.5, s)
+		"grass_thud":
+			return lerpf(-13.0, -5.0, s)
 	return -12.0
 
 
@@ -118,6 +139,8 @@ func _ready() -> void:
 		"stake_clang": preload(STREAM_STAKE_CLANG),
 		"shoe_clink": preload(STREAM_SHOE_CLINK),
 		"ringer": preload(STREAM_RINGER_RING),
+		"wood_knock": preload(STREAM_WOOD_KNOCK),
+		"grass_thud": preload(STREAM_GRASS_THUD),
 	}
 	_ensure_bus_limiter()
 	_build_plumes()
@@ -393,6 +416,8 @@ func debug_surface_impact(kind: int, pos: Vector3, vel: Vector3, strength: float
 	surface_impact(kind, pos, vel, strength)
 	if kind == KIND_SAND:
 		play_event("sand_thud", pos, strength)
+	elif kind == KIND_TURF:
+		play_event("grass_thud", pos, strength)
 
 
 func debug_fire_plume(kind: int, pos: Vector3, dir: Vector3, strength: float) -> void:

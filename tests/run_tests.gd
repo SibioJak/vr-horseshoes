@@ -1267,7 +1267,8 @@ func test_stage_b_light() -> void:
 
 func test_impact_fx() -> void:
 	# Impact Dressing Pass: routing, scaling, pooling, lifecycle.
-	var events: Array = ["sand_thud", "stake_clang", "shoe_clink", "ringer"]
+	var events: Array = ["sand_thud", "stake_clang", "shoe_clink", "ringer",
+		"wood_knock", "grass_thud"]
 	var paths: Array = []
 	for ev: String in events:
 		var p: String = ImpactFX.stream_path_for_event(ev)
@@ -1306,8 +1307,12 @@ func test_impact_fx() -> void:
 	fx_node.debug_surface_impact(ImpactFX.KIND_TURF,
 		Vector3(1.0, 0.0, -6.0), Vector3(0.0, -2.0, -4.0), 0.9)
 	check(fx_node.divot_count() == 2, "Impact FX: a grass impact stamps a scuff too")
-	check(fx_node.play_log.size() == 1,
-		"Impact FX: grass raises NO thud (sand only)")
+	# Fix Pass 33: grass has its OWN sound now - Chris's
+	# FP32 field test heard a lawn landing as silence. The
+	# grass thud is its own event/file, never the sand thud.
+	check(fx_node.play_log.size() == 2
+		and String(fx_node.play_log[1]["event"]) == "grass_thud",
+		"Impact FX (FP33): a grass impact routes its own soft thud")
 	for i: int in 40:
 		fx_node.surface_impact(ImpactFX.KIND_SAND,
 			Vector3(0.1 * float(i % 5), 0.02, -12.0), Vector3(0.0, -3.0, -6.0), 0.5)
@@ -1338,6 +1343,22 @@ func test_impact_fx() -> void:
 		"Impact FX (FP32): a stake strike clangs even at solver-eaten speed")
 	check(ImpactFX.volume_db_for("ringer", 1.0) >= -1.5,
 		"Impact FX (FP32): the ring plays near full volume - it carries the yard")
+	# Fix Pass 33 floors, in the FP32 spirit: the wood knock
+	# floors with the clang family (a frame strike is a real
+	# event, audible at 12 m); the grass thud floors UNDER
+	# the sand thud at every strength (a lawn landing is a
+	# lesser event) yet high enough to survive the trip to
+	# the line - tests/audio_measure.gd proves both through
+	# genuine landings.
+	check(ImpactFX.volume_db_for("wood_knock", 0.0) >= -7.0,
+		"Impact FX (FP33): a frame strike knocks audibly even at solver-eaten speed (its floor runs 3 dB hotter than the clang's - the measured transient is wider, see impact_fx)")
+	check(ImpactFX.volume_db_for("grass_thud", 0.0)
+			< ImpactFX.volume_db_for("sand_thud", 0.0)
+		and ImpactFX.volume_db_for("grass_thud", 1.0)
+			< ImpactFX.volume_db_for("sand_thud", 1.0),
+		"Impact FX (FP33): the grass thud sits under the sand thud at every strength")
+	check(ImpactFX.volume_db_for("grass_thud", 0.0) >= -16.0,
+		"Impact FX (FP33): the grass floor still reaches the throwing line")
 	var lim_found: bool = false
 	for bi: int in AudioServer.get_bus_effect_count(0):
 		var eff: AudioEffect = AudioServer.get_bus_effect(0, bi)

@@ -213,7 +213,7 @@ var bird_root: Node3D = null
 # all routed through the ImpactFX pools. Built in _ready
 # before the shoes spawn (their impact callbacks point here).
 var fx: ImpactFX = null
-var _metal_cooldown: Dictionary = {} # Shoe -> int (msec), clang/clink spam guard
+var _strike_cooldown: Dictionary = {} # Shoe -> int (msec), clang/clink/knock spam guard
 var bird_active: bool = false
 var bird_dir: Vector3 = Vector3.RIGHT
 var _bird_timer: float = 40.0
@@ -1183,10 +1183,15 @@ func _build_pit(stake_pos: Vector3, key: String) -> void:
 			tie_grey if sx < 0.0 else tie_dark, null)
 		# Hand-laid, not machined: a whisper of yaw.
 		side_body.rotation.y = 0.006 if sx < 0.0 else -0.005
+		# Fix Pass 33: the struck timbers carry a contact
+		# class so a shoe hitting the frame KNOCKS (the
+		# body_entered classifier reads the group).
+		side_body.add_to_group("pit_timber")
 	# Back tie: same construction, across the pit's far end.
-	_static_box(Vector3(0.0, tie_h * 0.5,
+	var back_body: StaticBody3D = _static_box(Vector3(0.0, tie_h * 0.5,
 			stake_pos.z - front_sign * end_z),
 		Vector3(PIT_SIZE.x, tie_h, tie_w), tie_dark, null)
+	back_body.add_to_group("pit_timber")
 	# The front threshold: a flat board sunk to sand level
 	# across the pit's mouth - an edge line in the grass,
 	# nothing for a shoe to hit.
@@ -3805,16 +3810,20 @@ func _on_any_shoe_body_entered(_body: Node, shoe_node: Shoe) -> void:
 		if not bool(fl["has_contact"]):
 			fl["has_contact"] = true
 			fl["first_contact_pos"] = shoe_node.global_position
-	_metal_contact_sound(_body, shoe_node)
+	_body_contact_sound(_body, shoe_node)
 
 
-## Impact Dressing: metal-on-metal from the same body_entered
-## wiring - the stake CLANGS, another shoe CLINKS. Only for a
-## shoe actually in flight (never a grab, a hop, or a shoe
-## nudged on its rail), impact-scaled by the striking shoe's
-## speed, with a short per-shoe cooldown so a rattling wrap
-## reads as one strike, not a burst.
-func _metal_contact_sound(body: Node, shoe_node: Shoe) -> void:
+## Impact Dressing: struck-body sounds from the same
+## body_entered wiring - the stake CLANGS, another shoe
+## CLINKS, and (Fix Pass 33) the pit's timber frame KNOCKS:
+## Chris's FP32 field test heard the frame strike as
+## silence, because the classifier had no wood class. Only
+## for a shoe actually in flight (never a grab, a hop, or a
+## shoe nudged on its rail), impact-scaled by the striking
+## shoe's speed, with a short per-shoe cooldown so a
+## rattling wrap (or a rattling frame hit) reads as one
+## strike, not a burst.
+func _body_contact_sound(body: Node, shoe_node: Shoe) -> void:
 	if fx == null:
 		return
 	var in_flight: bool = (shoe_node == shoe and state == "FLYING") \
@@ -3824,6 +3833,8 @@ func _metal_contact_sound(body: Node, shoe_node: Shoe) -> void:
 	var event: String = ""
 	if body is Shoe and body != shoe_node:
 		event = "shoe_clink"
+	elif body.is_in_group("pit_timber"):
+		event = "wood_knock"
 	else:
 		for key: String in stakes.keys():
 			var st: Dictionary = stakes[key]
@@ -3833,9 +3844,9 @@ func _metal_contact_sound(body: Node, shoe_node: Shoe) -> void:
 	if event == "":
 		return
 	var now: int = Time.get_ticks_msec()
-	if int(_metal_cooldown.get(shoe_node, 0)) > now:
+	if int(_strike_cooldown.get(shoe_node, 0)) > now:
 		return
-	_metal_cooldown[shoe_node] = now + 130
+	_strike_cooldown[shoe_node] = now + 130
 	var strength: float = clampf(shoe_node.linear_velocity.length() / 8.0, 0.0, 1.0)
 	fx.play_event(event, shoe_node.global_position, strength)
 
@@ -3844,7 +3855,10 @@ func _metal_contact_sound(body: Node, shoe_node: Shoe) -> void:
 ## from its absorption episode (shoe.gd). The in-flight gate
 ## is the same one the metal sounds use: a shoe at rest, on a
 ## restock hop, or in a hand never raises a plume, a divot, or
-## a thud. Sand raises all three; grass a scuff mark only.
+## a thud. Sand raises all three; grass stamps its scuff
+## and (Fix Pass 33) sounds its own soft thud - before, a
+## lawn landing was silent and Chris's FP32 field test
+## caught it ("if grass has a sound, i cant hear it").
 func _on_surface_impact(kind: int, pos: Vector3, vel: Vector3,
 		strength: float, shoe_node: Shoe) -> void:
 	if fx == null:
@@ -3863,6 +3877,8 @@ func _on_surface_impact(kind: int, pos: Vector3, vel: Vector3,
 	fx.surface_impact(kind, pos, vel, strength, first_of_flight)
 	if kind == Shoe.ABSORB_SAND:
 		fx.play_event("sand_thud", pos, strength)
+	elif kind == Shoe.ABSORB_TURF:
+		fx.play_event("grass_thud", pos, strength)
 
 
 func _physics_process(delta: float) -> void:

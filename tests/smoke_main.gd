@@ -1404,10 +1404,16 @@ func _run() -> void:
 	check(main.fx.divot_count() == 4,
 		"Impact Dressing: a grass landing adds its lighter scuff")
 	var thuds2: int = 0
+	var grass_thuds: int = 0
 	for e2: Dictionary in main.fx.play_log:
 		if String(e2["event"]) == "sand_thud":
 			thuds2 += 1
-	check(thuds2 == thuds1, "Impact Dressing: grass stays silent - no thud")
+		elif String(e2["event"]) == "grass_thud":
+			grass_thuds += 1
+	check(thuds2 == thuds1,
+		"Impact Dressing: a grass landing never borrows the sand thud")
+	check(grass_thuds == 1,
+		"Impact Dressing (FP33): a grass landing sounds its own soft thud")
 	# The in-flight gate: the same impact reported while the
 	# shoe is NOT flying (at rest / held / hopping) is refused.
 	var divots_before_gate: int = main.fx.divot_count()

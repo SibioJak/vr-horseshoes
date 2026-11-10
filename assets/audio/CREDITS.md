@@ -17,3 +17,5 @@ All impact sounds in this folder come from one library:
 | `stake_clang.ogg` | `impactMetal_heavy_000.ogg` | shoe striking the stake |
 | `shoe_clink.ogg` | `impactMetal_light_000.ogg` | two shoes striking each other |
 | `ringer_ring.ogg` | `impactBell_heavy_000.ogg` | a shoe settling as a ringer (the ring) |
+| `wood_knock.ogg` | `impactWood_heavy_000.ogg` | shoe striking the pit's timber frame (Fix Pass 33) |
+| `grass_thud.ogg` | `impactSoft_medium_001.ogg` | shoe's first grass contact (Fix Pass 33) |
