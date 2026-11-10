@@ -33,6 +33,7 @@ const STREAM_SHOE_CLINK: String = "res://assets/audio/shoe_clink.ogg"
 const STREAM_RINGER_RING: String = "res://assets/audio/ringer_ring.ogg"
 const STREAM_WOOD_KNOCK: String = "res://assets/audio/wood_knock.ogg"
 const STREAM_GRASS_THUD: String = "res://assets/audio/grass_thud.ogg"
+const STREAM_STONE_KNOCK: String = "res://assets/audio/stone_knock.ogg"
 
 const SAND_SPRAY_COL := Color(0.72, 0.60, 0.42)
 const SAND_PUFF_COL := Color(0.70, 0.60, 0.44, 0.30)
@@ -71,6 +72,8 @@ static func stream_path_for_event(event: String) -> String:
 			return STREAM_WOOD_KNOCK
 		"grass_thud":
 			return STREAM_GRASS_THUD
+		"stone_knock":
+			return STREAM_STONE_KNOCK
 	return ""
 
 
@@ -102,13 +105,19 @@ static func volume_db_for(event: String, strength: float) -> float:
 			return lerpf(-6.0, -0.5, s)
 		"grass_thud":
 			return lerpf(-13.0, -5.0, s)
+		# Fix Pass 34: the stone knock - a strike event like
+		# the wood knock, floored at the clang's band: the
+		# mining clip's transient is a hard spike (struck
+		# rock), so it carries like the clang, not the wood.
+		"stone_knock":
+			return lerpf(-9.0, -1.5, s)
 	return -12.0
 
 
 static func pitch_for(event: String, strength: float) -> float:
 	var s: float = clampf(strength, 0.0, 1.0)
 	match event:
-		"stake_clang", "shoe_clink":
+		"stake_clang", "shoe_clink", "stone_knock":
 			return lerpf(0.94, 1.05, s)
 		"ringer":
 			return 1.0
@@ -141,6 +150,7 @@ func _ready() -> void:
 		"ringer": preload(STREAM_RINGER_RING),
 		"wood_knock": preload(STREAM_WOOD_KNOCK),
 		"grass_thud": preload(STREAM_GRASS_THUD),
+		"stone_knock": preload(STREAM_STONE_KNOCK),
 	}
 	_ensure_bus_limiter()
 	_build_plumes()

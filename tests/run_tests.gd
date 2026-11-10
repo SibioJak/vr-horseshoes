@@ -1442,6 +1442,15 @@ func test_impact_fx() -> void:
 		"Impact FX (FP33): the grass thud sits under the sand thud at every strength")
 	check(ImpactFX.volume_db_for("grass_thud", 0.0) >= -16.0,
 		"Impact FX (FP33): the grass floor still reaches the throwing line")
+	# Fix Pass 34: the stone knock floors with the strike
+	# family - struck rock is a real event, audible at the
+	# line; audio_measure proves it through a genuine throw
+	# into the edging stones.
+	check(ImpactFX.volume_db_for("stone_knock", 0.0) >= -10.0,
+		"Impact FX (FP34): a stone strike knocks audibly even at low speed")
+	check(ImpactFX.pitch_for("stone_knock", 0.5) >= 0.94
+		and ImpactFX.pitch_for("stone_knock", 0.5) <= 1.05,
+		"Impact FX (FP34): the stone knock pitches inside the clang jitter band")
 	var lim_found: bool = false
 	for bi: int in AudioServer.get_bus_effect_count(0):
 		var eff: AudioEffect = AudioServer.get_bus_effect(0, bi)

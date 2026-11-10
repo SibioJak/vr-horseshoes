@@ -19,3 +19,4 @@ All impact sounds in this folder come from one library:
 | `ringer_ring.ogg` | `impactBell_heavy_000.ogg` | a shoe settling as a ringer (the ring) |
 | `wood_knock.ogg` | `impactWood_heavy_000.ogg` | shoe striking the pit's timber frame (Fix Pass 33) |
 | `grass_thud.ogg` | `impactSoft_medium_001.ogg` | shoe's first grass contact (Fix Pass 33) |
+| `stone_knock.ogg` | `impactMining_000.ogg` | shoe striking landscape stone — bed edging, fountain rocks, stepping stones (Fix Pass 34; the pack's mining strikes are its struck-rock recordings, fetched 2026-11-10 from the same mirror) |

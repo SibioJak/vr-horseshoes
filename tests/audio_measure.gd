@@ -411,6 +411,34 @@ func _run() -> void:
 	check(float(res5["peak_db"]) > -22.0,
 		"line: the wood knock peaks above -22 dBFS (got %.1f)" % float(res5["peak_db"]))
 
+	# --- Window 6 (Fix Pass 34): a production throw aimed
+	# hard left onto the left bed's EDGING STONES (the row
+	# runs at x -2.78; the aim point sits on the row mid-bed)
+	# - a genuine flight into real placed stone, heard from
+	# the line. The stone knock must route through the
+	# flight watch and carry. Fresh game again, one throw.
+	main.start_game()
+	await frames(5)
+	cam.global_position = line_pos
+	cam.look_at(stake + Vector3(0.0, 0.3, 0.0))
+	cam.current = true
+	await frames(3)
+	_watch_start()
+	log0 = main.fx.play_log.size()
+	var ok10: bool = await player_throw(Vector3(-2.75, 0.0, 6.2))
+	await create_timer(0.5).timeout
+	var res6: Dictionary = await _watch_stop()
+	report_window("STONE KNOCK @ LINE (edging stones)", res6,
+		new_log_entries(log0), line_pos)
+	var saw_stone: bool = false
+	for e6: Variant in new_log_entries(log0):
+		if String((e6 as Dictionary)["event"]) == "stone_knock":
+			saw_stone = true
+	check(ok10, "stone: the edging-aimed production throw landed")
+	check(saw_stone, "stone: the edging strike routed the stone knock")
+	check(float(res6["peak_db"]) > -24.0,
+		"line: the stone knock peaks above -24 dBFS (got %.1f)" % float(res6["peak_db"]))
+
 	# --- CALIBRATION (not conviction evidence): the chain's own
 	# gain for the ring stream at its game volume, two distances.
 	for cfg: Array in [[line_pos, "12 m"], [pit_pos, "ringside"]]:

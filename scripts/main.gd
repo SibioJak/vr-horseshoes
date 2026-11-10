@@ -163,6 +163,24 @@ var scenery_root: Node3D
 ## (probed in isolation, Fix Pass 29), so the builder's
 ## own placement record is the measurable truth.
 var stage_a_shrub_positions: Array = []
+# Fix Pass 34 (item 3): LANDSCAPE INTERACTION records -
+# Chris: "landscape objects need interaction with the shoe.
+# If I hit a rock I wanna hear it. If I hit a plant, it
+# should move." The yard's stone (bed edging, fountain
+# rocks, gate-path stepping stones) and plants (shrubs,
+# tufts, flower dots) are instanced visuals with no
+# colliders, so the interaction rides the builders'
+# placement records: every stone centre+radius and every
+# plant's ground point, crown radius/height and MultiMesh
+# address is recorded at build time, and the flight watch
+# in _physics_process tests flying shoes against them.
+# Stones answer with a sound; plants bend (below). Shoe
+# physics is untouched in both cases.
+var landscape_stone_points: Array = [] # {pos: Vector3, r: float}
+var landscape_plant_points: Array = [] # {ground, r, h, mm: MultiMesh, idx, base: Transform3D, flex}
+var _plant_bends: Dictionary = {} # plant idx -> {ang, vel, axis}
+var _plant_last_hit: Dictionary = {} # plant idx -> msec
+var _stone_last_hit: Dictionary = {} # "shoeId:stoneIdx" -> msec
 
 var state: String = "STAND" # STAND, HELD, FLYING, DROPPED, RETURNING
 var grab_state := GrabState.new()
@@ -1831,6 +1849,10 @@ func _build_stage_a_beds(parent: Node, rng: RandomNumberGenerator) -> void:
 			stone_tfs.append(Transform3D(
 				Basis.from_euler(eul).scaled(Vector3(s, s * 0.55, s * 0.85)),
 				Vector3(p2.x, 0.085, p2.y)))
+			# Fix Pass 34: the stone joins the landscape
+			# record - a shoe that reaches it knocks.
+			landscape_stone_points.append(
+				{"pos": Vector3(p2.x, 0.085, p2.y), "r": s})
 			var g: float = rng.randf_range(0.42, 0.60)
 			stone_cols.append(Color(g, g * 0.99, g * 0.96))
 			d += rng.randf_range(0.26, 0.34)
@@ -1898,7 +1920,18 @@ func _build_stage_a_beds(parent: Node, rng: RandomNumberGenerator) -> void:
 		sm.height = sr * 2.0
 		sm.radial_segments = int(shrub_segs[form])
 		sm.rings = int(shrub_rings[form])
-		_stage_a_multimesh(beds, "Shrubs%d" % form, sm, shrub_tfs[form], shrub_cols[form])
+		var shrub_mmi := _stage_a_multimesh(beds, "Shrubs%d" % form,
+			sm, shrub_tfs[form], shrub_cols[form])
+		# Fix Pass 34: every shrub joins the plant record -
+		# a shoe through it bends it (see _bend_plant).
+		for i: int in shrub_tfs[form].size():
+			var stf: Transform3D = shrub_tfs[form][i]
+			var ssc: Vector3 = stf.basis.get_scale()
+			landscape_plant_points.append({
+				"ground": Vector3(stf.origin.x, 0.10, stf.origin.z),
+				"r": sr * ssc.x, "h": stf.origin.y + sr * ssc.y,
+				"mm": shrub_mmi.multimesh, "idx": i,
+				"base": stf, "flex": 1.0})
 
 	# --- Ornamental grass tufts: tapered straw-green spikes,
 	# scattered through the beds at ~2 per square metre.
@@ -1931,7 +1964,17 @@ func _build_stage_a_beds(parent: Node, rng: RandomNumberGenerator) -> void:
 	tuft_mesh.bottom_radius = 0.09
 	tuft_mesh.height = 0.42
 	tuft_mesh.radial_segments = 7
-	_stage_a_multimesh(beds, "Tufts", tuft_mesh, tuft_tfs, tuft_cols)
+	var tuft_mmi := _stage_a_multimesh(beds, "Tufts", tuft_mesh, tuft_tfs, tuft_cols)
+	# Fix Pass 34: tufts join the plant record (flexier
+	# than the shrubs - grass gives more than a bush).
+	for i: int in tuft_tfs.size():
+		var ttf: Transform3D = tuft_tfs[i]
+		var tsc: float = ttf.basis.get_scale().x
+		landscape_plant_points.append({
+			"ground": Vector3(ttf.origin.x, 0.10, ttf.origin.z),
+			"r": 0.11 * tsc, "h": 0.10 + 0.42 * tsc,
+			"mm": tuft_mmi.multimesh, "idx": i,
+			"base": ttf, "flex": 1.35})
 
 	# --- Flowering accents: small dot clusters at shrub bases,
 	# one restrained colour per cluster (white, lavender,
@@ -1964,7 +2007,16 @@ func _build_stage_a_beds(parent: Node, rng: RandomNumberGenerator) -> void:
 	flower_mesh.height = 0.07
 	flower_mesh.radial_segments = 6
 	flower_mesh.rings = 4
-	_stage_a_multimesh(beds, "Flowers", flower_mesh, flower_tfs, flower_cols)
+	var flower_mmi := _stage_a_multimesh(beds, "Flowers", flower_mesh, flower_tfs, flower_cols)
+	# Fix Pass 34: flower dots join the plant record too -
+	# the smallest, flexiest entries in it.
+	for i: int in flower_tfs.size():
+		var ftf: Transform3D = flower_tfs[i]
+		landscape_plant_points.append({
+			"ground": Vector3(ftf.origin.x, 0.10, ftf.origin.z),
+			"r": 0.05, "h": ftf.origin.y + 0.05,
+			"mm": flower_mmi.multimesh, "idx": i,
+			"base": ftf, "flex": 1.6})
 
 
 func _build_stage_a_trees(parent: Node, rng: RandomNumberGenerator) -> void:
@@ -2570,6 +2622,9 @@ func _build_fountain(parent: Node) -> void:
 		ring_tfs.append(Transform3D(
 			Basis.from_euler(eul).scaled(Vector3(s, s * 0.62, s * 0.88)),
 			Vector3(cos(a) * rr, 0.19, sin(a) * rr)))
+		# Fix Pass 34: basin stones join the landscape record.
+		landscape_stone_points.append({"pos": STAGE_B_FOUNTAIN_POS
+			+ Vector3(cos(a) * rr, 0.19, sin(a) * rr), "r": s})
 		var g: float = rng.randf_range(0.42, 0.60)
 		ring_cols.append(Color(g, g * 0.99, g * 0.96))
 	var ring_mesh := SphereMesh.new()
@@ -2611,6 +2666,9 @@ func _build_fountain(parent: Node) -> void:
 	for spec: Array in rock_specs:
 		rock_i += 1
 		var rp: Vector3 = spec[0]
+		# Fix Pass 34: the rock stack joins the landscape record.
+		landscape_stone_points.append({"pos": STAGE_B_FOUNTAIN_POS + rp,
+			"r": float(spec[1])})
 		var rock := MeshInstance3D.new()
 		rock.name = "Rock%d" % rock_i
 		rock.mesh = rock_mesh
@@ -2695,10 +2753,13 @@ func _build_gate(parent: Node) -> void:
 		var s: float = rng.randf_range(0.28, 0.34)
 		var eul := Vector3(rng.randf_range(-0.06, 0.06),
 			rng.randf_range(0.0, TAU), rng.randf_range(-0.06, 0.06))
+		var path_pos := Vector3(stone_x, 0.145 if on_bed else 0.045,
+			-6.0 + rng.randf_range(-0.06, 0.06))
 		path_tfs.append(Transform3D(
 			Basis.from_euler(eul).scaled(Vector3(s, s * 0.24, s * 0.82)),
-			Vector3(stone_x, 0.145 if on_bed else 0.045,
-				-6.0 + rng.randf_range(-0.06, 0.06))))
+			path_pos))
+		# Fix Pass 34: stepping stones join the landscape record.
+		landscape_stone_points.append({"pos": path_pos, "r": s})
 		var g: float = rng.randf_range(0.44, 0.58)
 		path_cols.append(Color(g, g * 0.99, g * 0.96))
 		stone_x -= 0.83
@@ -3441,6 +3502,7 @@ func _process(_delta: float) -> void:
 	_poll_buttons()
 	_process_fire(_delta) # Stage B: flicker, only while lit
 	_process_birds(_delta) # Stage B: crossings, long gaps apart
+	_process_plant_bends(_delta) # Fix Pass 34: springs back, idle-cost zero
 	_track_hand_speed("L")
 	_track_hand_speed("R")
 	if state == "HELD":
@@ -3965,6 +4027,159 @@ func _body_contact_sound(body: Node, shoe_node: Shoe) -> void:
 	fx.play_event(event, shoe_node.global_position, strength)
 
 
+## Fix Pass 34 (item 3): the landscape flight watch - every
+## physics frame, the shoes actually in flight (the player's
+## FLYING shoe, the AI's flight set) are tested against the
+## landscape records. Nothing runs when nothing flies.
+## STONES: a shoe whose centre reaches a stone's radius
+## (plus the shoe's own reach) knocks it - the stone_knock
+## event through the FP32 chain, per shoe+stone cooldown so
+## a tumble along an edging row knocks stone by stone, not
+## as one smeared burst. PLANTS: a shoe passing through a
+## plant's crown cylinder bends THAT plant away from the
+## hit (see _bend_plant). Pure reaction: no colliders, no
+## force on the shoe, flight untouched.
+func _landscape_flight_watch() -> void:
+	var flyers: Array = []
+	if state == "FLYING" and shoe != null:
+		flyers.append(shoe)
+	for key: Variant in ai_flight.keys():
+		flyers.append(key as Shoe)
+	if flyers.is_empty():
+		return
+	var now: int = Time.get_ticks_msec()
+	for f: Variant in flyers:
+		_landscape_check_shoe(f as Shoe, now)
+
+
+func _landscape_check_shoe(f: Shoe, now: int) -> void:
+	if f == null:
+		return
+	var pos: Vector3 = f.global_position
+	var vel: Vector3 = f.linear_velocity
+	var speed: float = vel.length()
+	if fx != null and speed > 0.8:
+		for i: int in landscape_stone_points.size():
+			var sp: Dictionary = landscape_stone_points[i]
+			var spos: Vector3 = sp["pos"]
+			var rr: float = float(sp["r"]) + 0.11
+			if pos.distance_squared_to(spos) < rr * rr:
+				var key: String = "%d:%d" % [f.get_instance_id(), i]
+				if int(_stone_last_hit.get(key, -100000)) + 350 < now:
+					_stone_last_hit[key] = now
+					fx.play_event("stone_knock", spos,
+						clampf(speed / 8.0, 0.0, 1.0))
+	var flat := Vector3(vel.x, 0.0, vel.z)
+	if flat.length() < 0.5:
+		return
+	var dir: Vector3 = flat.normalized()
+	for i: int in landscape_plant_points.size():
+		var pp: Dictionary = landscape_plant_points[i]
+		if pos.y > float(pp["h"]) + 0.06 or pos.y < 0.0:
+			continue
+		var g: Vector3 = pp["ground"]
+		var dx: float = pos.x - g.x
+		var dz: float = pos.z - g.z
+		var rr2: float = float(pp["r"]) + 0.10
+		if dx * dx + dz * dz < rr2 * rr2:
+			_bend_plant(i, dir, flat.length())
+
+
+## Kick one plant's spring: it bends AWAY from the hit -
+## rotating about the horizontal axis perpendicular to the
+## shoe's travel, so its crown travels the way the shoe was
+## going - then springs back over about a second (the spring
+## in _process_plant_bends). A watcher sees a clear bend,
+## not a tremble: a game-speed hit peaks near half a radian
+## on a shrub. Re-hits inside the cooldown are ignored.
+func _bend_plant(idx: int, dir: Vector3, flat_speed: float) -> void:
+	var now: int = Time.get_ticks_msec()
+	if int(_plant_last_hit.get(idx, -100000)) + 900 > now:
+		return
+	_plant_last_hit[idx] = now
+	var pp: Dictionary = landscape_plant_points[idx]
+	var axis := Vector3(dir.z, 0.0, -dir.x)
+	var kick: float = clampf(flat_speed * 0.55, 2.0, 5.2) * float(pp["flex"])
+	if _plant_bends.has(idx):
+		var b: Dictionary = _plant_bends[idx]
+		b["vel"] = float(b["vel"]) + kick * 0.5
+		b["axis"] = axis
+		_plant_bends[idx] = b
+	else:
+		_plant_bends[idx] = {"ang": 0.0, "vel": kick, "axis": axis}
+
+
+## The plant springs: a damped spring per bending plant,
+## integrated in _process and written into that plant's
+## MultiMesh instance as a rotation about its ground point.
+## Runs only while at least one plant bends - the dict is
+## empty in ordinary play, so the idle cost is one is_empty.
+func _process_plant_bends(delta: float) -> void:
+	if _plant_bends.is_empty():
+		return
+	var done: Array = []
+	for key: Variant in _plant_bends.keys():
+		var idx: int = int(key)
+		var b: Dictionary = _plant_bends[idx]
+		var ang: float = float(b["ang"])
+		var vel: float = float(b["vel"])
+		vel += (-60.0 * ang - 6.5 * vel) * delta
+		ang = clampf(ang + vel * delta, -0.9, 0.9)
+		b["ang"] = ang
+		b["vel"] = vel
+		_plant_bends[idx] = b
+		_apply_plant_bend(idx, ang, b["axis"])
+		if absf(ang) < 0.003 and absf(vel) < 0.03:
+			done.append(idx)
+	for idx: int in done:
+		var pp: Dictionary = landscape_plant_points[idx]
+		(pp["mm"] as MultiMesh).set_instance_transform(
+			int(pp["idx"]), pp["base"])
+		_plant_bends.erase(idx)
+
+
+func _apply_plant_bend(idx: int, ang: float, axis: Vector3) -> void:
+	var pp: Dictionary = landscape_plant_points[idx]
+	var ground: Vector3 = pp["ground"]
+	var pivot := Transform3D(Basis(axis, ang), ground) \
+		* Transform3D(Basis.IDENTITY, -ground)
+	(pp["mm"] as MultiMesh).set_instance_transform(
+		int(pp["idx"]), pivot * (pp["base"] as Transform3D))
+
+
+## Test/proof surfaces for the landscape interaction.
+func debug_stone_count() -> int:
+	return landscape_stone_points.size()
+
+
+func debug_plant_count() -> int:
+	return landscape_plant_points.size()
+
+
+func debug_active_bends() -> int:
+	return _plant_bends.size()
+
+
+func debug_plant_bend_angle(idx: int) -> float:
+	if _plant_bends.has(idx):
+		return float((_plant_bends[idx] as Dictionary)["ang"])
+	return 0.0
+
+
+## The plant record index of the plant nearest a ground
+## point (proofs/tests stage hits against real plants).
+func debug_nearest_plant(pos: Vector3) -> int:
+	var best: int = -1
+	var best_d: float = 1e9
+	for i: int in landscape_plant_points.size():
+		var g: Vector3 = (landscape_plant_points[i] as Dictionary)["ground"]
+		var d: float = Vector2(pos.x - g.x, pos.z - g.z).length()
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
+
+
 ## Impact Dressing: a shoe's surface first-contact, forwarded
 ## from its absorption episode (shoe.gd). The in-flight gate
 ## is the same one the metal sounds use: a shoe at rest, on a
@@ -3998,6 +4213,7 @@ func _on_surface_impact(kind: int, pos: Vector3, vel: Vector3,
 func _physics_process(delta: float) -> void:
 	_guard_origin_level()
 	_restock_to_player_line()
+	_landscape_flight_watch() # Fix Pass 34: stones knock, plants bend
 	if state == "HELD":
 		_add_sample()
 		shoe.global_transform = _hand_tf(held_hand) * rel_tf
