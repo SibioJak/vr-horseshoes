@@ -56,34 +56,60 @@ const PLAYER_SPOT_X: float = 0.8
 const AI_SPOT_X: float = -0.8
 const STAND_SIDE_X: float = 1.22 # station slot 0 outboard of the owner's spot (FP11: 1.0 m; FP13: 1.22 m; FP19: measured from the spot)
 # Stage 2 / Stage B (the yard pass): how far BEHIND the
-# 40 ft foul line the game stations stand, slot 0 measured.
+# 40 ft foul line the game stations stood, slot 0 measured.
 # Chris walked the planted yard and ruled the stations out
 # of the court ("for now, stations should be moved behind
-# the line. right now they're in the middle") - they stand
-# on the patio now, so slot 0 sits 1.32 m behind the line
-# and the rail's midpoint - the station's centre, between
-# its two slots - sits 1.20 m behind it. The 30 ft practice
-# peg does NOT move: the FP7 home stays at its own line.
+# the line. right now they're in the middle") - they stood
+# on the patio then, slot 0 1.32 m behind the line and the
+# rail's midpoint - the station's centre, between its two
+# slots - 1.20 m behind it. Fix Pass 34/35 took both game
+# stations OFF the patio (the corner stations below solve
+# their own transforms), so this offset survives only in
+# make_rack_tf's 40 ft branch, which no station uses now;
+# the 30 ft practice peg never used it: the FP7 home stays
+# at its own line.
 const STAND_BACK_Z: float = 1.32
 const STAND_SHOE_Y: float = 0.785
 # Fix Pass 34 (Chris's tweak load, item 1): "the ongoing
 # 'where to put the fucking shelf' goes on" - the PLAYER's
-# 40 ft station leaves the patio. From the patio it sat
-# behind him: "right now you have to turn around, pain in
-# the ass." He pointed at the spot in the headset: the grass
-# at the patio's FRONT-LEFT corner, up against the left
-# bed's near corner (the fountain end of the bed). From his
-# throwing spot that is abeam to his left - a glance, not a
-# turnaround. The AI station stays on the patio (STAND_BACK_Z
-# now governs it alone); the 30 ft peg does not move. The
-# station's ground envelope (the _build_station furniture
-# built on slot 0, body WEST of the slots, face EAST to the
-# spot): x -4.24..-3.68, z -0.50..0.46 - clear of the bed
-# rect (rear edge z -0.60) by 0.10, of the fountain circle
-# (centre (-3.69, -1.50), r 0.80) by 0.20, of the patio slab
-# (west edge x -3.50) by 0.18, and west of the berm/lane
-# keep-outs entirely. Slot 0's hang point:
-const SHELF_SLOT0 := Vector3(-3.72, STAND_SHOE_Y, 0.10)
+# 40 ft station left the patio for the grass at its
+# front-left corner, up against the left bed's near corner.
+# Fix Pass 35 (Chris's field verdict on FP34): FAILED -
+# "now there's 2 sleves on left side." FP34 placed the
+# shelf back at patio latitude (z +0.10), beside the AI's
+# patio station; his pointing screenshots had marked the
+# open grass patch FORWARD, at the fountain's latitude,
+# and his correction is the law for this pass, verbatim:
+# "one shelf need to be in front of fountain there; the
+# other on the oppsing side." So the player's station
+# stands on that patch IN FRONT OF THE FOUNTAIN - the
+# fountain directly behind it, the station between the
+# fountain and the lane, at the fountain's own latitude
+# (z -1.50) - and the AI's station takes the opposing
+# side (AI_SLOT0 below). The 30 ft peg does not move.
+# The player's ground envelope (the _build_station
+# furniture built on slot 0, body WEST of the slots, face
+# back at the spot): x -2.66..-2.10, z -2.10..-1.14 -
+# clear of the fountain circle (centre (-3.69, -1.50),
+# r 0.80) by 0.23, of the left bed rect (inner edge
+# x -2.78) by 0.12, of the patio slab entirely (the slab
+# starts at z -0.55, 0.59 behind the envelope's rear
+# edge), of the walk corridor, and of the berm: the berm
+# ellipsoid (centre (-2.05, -6.05), radii 0.55 x 4.15)
+# only reaches z -1.90 at its tip, where its ground
+# footprint has already curved east of the station
+# body's east edge - the logic suite guards the body box
+# against the ellipsoid itself. Slot 0's hang point:
+const SHELF_SLOT0 := Vector3(-2.14, STAND_SHOE_Y, -1.50)
+# Fix Pass 35: the AI's game station on the OPPOSING side
+# - the mirror of the player's across the lane axis, on
+# the grass at the patio's front-RIGHT corner at the same
+# latitude, body EAST of its slots, face back at the AI
+# spot. Its envelope: x 2.10..2.66, z -2.10..-1.14 - the
+# same clearances mirrored (right bed inner edge x 2.78
+# by 0.12; the gate stepping path crosses the right bed
+# at z -6.55..-5.45, over 3 m down-lane, untouched).
+const AI_SLOT0 := Vector3(2.14, STAND_SHOE_Y, -1.50)
 const SLOT_STEP: float = 0.24 # pair slots along a rail stand (the rail runs down-lane since Fix Pass 13)
 const PLAYER_PAIR_COLOR := Color(0.92, 0.75, 0.16) # yellow (photo feed)
 const AI_PAIR_COLOR := Color(0.18, 0.36, 0.85) # blue (photo feed)
@@ -99,27 +125,33 @@ const CANDIDATE_RADIUS: float = 0.14
 # Stage B re-derivation (the 40 ft stations moved behind the
 # line onto the patio): the governing reach was the LEFT hand
 # at the throwing spot to slot 0, 1.98 m; radius 2.15.
-# Fix Pass 34 re-derivation (the player's station moved to
-# the shelf spot at the patio's front-left corner, slot 0 at
-# SHELF_SLOT0): the NEAR (left) hand at the throwing spot
-# (0.55, 0.85, FOUL_40_Z) measures 4.39 m to slot 0; the FAR
-# (right) hand (1.05, 0.85, FOUL_40_Z) governs at 4.88 m to
-# slot 0 (4.83 to slot 1). The radius is the governing 4.88 m
-# plus a working margin. What else falls inside 5.10 m is
-# refused by construction, not by distance: the AI's pair is
-# never the active shoe, a shoe in play is never RAILED, and
-# (FP34, named) in GAME play only a shoe stocked at the GAME
-# STATION's slots answers - the 30 ft peg, 3.19 m from the
-# 40 ft spot hand, is inside this radius now and is excluded
-# explicitly in _maybe_start_hop. Across the court it still
-# reaches nothing: the shelf sits 6.2 m from the 30 ft spot
-# hand, the pit ~12 m.
-const LONG_ARM_RADIUS: float = 5.10
+# Fix Pass 34 re-derivation (the shelf at the patio's
+# front-left corner): the FAR (right) hand governed at
+# 4.88 m; radius 5.10.
+# Fix Pass 35 re-derivation (the shelf corrected forward to
+# the fountain's latitude, SHELF_SLOT0 (-2.14, -1.50)): from
+# the throwing spot the far (right) hand (1.05, 0.85,
+# FOUL_40_Z) measures 3.24 m to slot 0 and 3.30 m to slot 1,
+# but the GOVERNING reach is the A-seat's: seated 0.55 m
+# behind the line for a continue, the far hand (1.05, 0.85,
+# FOUL_40_Z + 0.70) measures 3.44 m to slot 0 and 3.54 m to
+# slot 1. The radius is the governing 3.54 m plus a working
+# margin - the seat must be able to call either shoe, or the
+# continue flow breaks. What else falls inside 3.75 m is
+# refused by construction, not by distance: the far tier
+# only ever measures the ACTIVE shoe (the AI's pair is never
+# active, a shoe in play is never RAILED), and (FP34, named)
+# in GAME play only a shoe stocked at the GAME STATION's
+# slots answers - the 30 ft peg, 3.20 m from the 40 ft
+# spot's right hand (3.39 m from the left), is inside this
+# radius and is excluded explicitly in _maybe_start_hop.
+const LONG_ARM_RADIUS: float = 3.75
 const LONG_ARM_HOP_SEC: float = 0.2 # the hop into the hand at the old 2 m reach
-# Fix Pass 34: the hop's pace - the shelf flight is ~4.9 m,
-# so the hop time scales with the flight at this rate (the
-# old 2 m hop still takes its 0.2 s; the shelf hop ~0.49 s,
-# the same brisk speed, readable across the longer arc).
+# Fix Pass 34: the hop's pace - the hop time scales with
+# the flight at this rate (the old 2 m hop still takes its
+# 0.2 s). Fix Pass 35: the shelf flight is ~3.2 m from the
+# throwing spot, so the shelf hop takes ~0.32 s - the same
+# brisk speed, readable across the arc.
 const LONG_ARM_HOP_PER_M: float = 0.10
 const BOARD_POS := Vector3(-2.4, 0.0, -16.2) # Fix Pass 10: beyond the pit, left of the stake
 const BOARD_YAW_DEG: float = 10.0 # face turned back at the pitching end
@@ -847,8 +879,12 @@ static func make_rack_tf(line_ft: int, is_ai: bool) -> Transform3D:
 	# pinned to -1.
 	#
 	# Stage B (the yard pass): "at the line's own z" now holds
-	# only for the 30 ft peg - the 40 ft racks stand back on
-	# the patio by STAND_BACK_Z (see the solve below).
+	# only for the 30 ft peg - the 40 ft racks stood back on
+	# the patio by STAND_BACK_Z then (see the solve below).
+	# Fix Pass 34/35: the 40 ft game stations are corner
+	# stations now and solve their own transforms
+	# (corner_station_tf); this function's 40 ft branch is
+	# kept for the record and serves nothing.
 	#
 	# The yaw is solved per rack (owner's side) so the face
 	# normal (the hang basis applied to +Y) points across the
@@ -861,12 +897,11 @@ static func make_rack_tf(line_ft: int, is_ai: bool) -> Transform3D:
 	var spot: Vector3 = spot_pos(line_ft, is_ai)
 	var yaw: float = atan2(0.8660254 * side, 0.5)
 	# Stage B: at the 40 ft line the rack (and with it the
-	# whole station, built on this origin) stands BACK by
+	# whole station, built on this origin) stood BACK by
 	# STAND_BACK_Z, on the patio behind the line; the 30 ft
 	# peg rack keeps the line's own z. The yaw solve is
-	# unchanged: from behind the line the spot direction only
-	# steepens toward the solved slant, so the hang still
-	# presents face-on (the smoke suite asserts it).
+	# unchanged. (Fix Pass 34/35: no station takes the 40 ft
+	# branch any more - see corner_station_tf.)
 	var back: float = STAND_BACK_Z if line_ft == 40 else 0.0
 	return Transform3D(
 		Basis.from_euler(Vector3(deg_to_rad(-78.0), yaw, 0.0)),
@@ -904,32 +939,57 @@ func _pair_index_of(shoe_node: Shoe) -> int:
 	return maxi(ai_pair.find(shoe_node), 0)
 
 
-## Fix Pass 34: the PLAYER's game station - THE SHELF - at
-## its new home (see SHELF_SLOT0). Not a make_rack_tf rack:
-## it no longer stands beside its owner's spot, so its hang
-## yaw is solved directly from the slot back at the throwing
-## spot - the same FP13 face-on solve (hang normal horizontal
-## = (-sin yaw, -cos yaw)), aimed at the spot itself, so the
-## pair presents face-on across the yard's corner. Slot 1
-## steps down-lane from slot 0 along the rail, as everywhere.
-static func player_shelf_tf() -> Transform3D:
-	var spot: Vector3 = spot_pos(40, false)
-	var dir := Vector3(spot.x - SHELF_SLOT0.x, 0.0,
-		spot.z - SHELF_SLOT0.z).normalized()
+## Fix Pass 34/35: a game station - a CORNER station - at
+## its off-patio home (see SHELF_SLOT0 / AI_SLOT0). Not a
+## make_rack_tf rack: it no longer stands beside its owner's
+## spot, so its hang yaw is solved directly from the slot
+## back at the owner's throwing spot - the same FP13 face-on
+## solve (hang normal horizontal = (-sin yaw, -cos yaw)),
+## aimed at the spot itself, so the pair presents face-on
+## across the yard's corner. Slot 1 steps down-lane from
+## slot 0 along the rail, as everywhere.
+static func corner_station_tf(slot0: Vector3, spot: Vector3) -> Transform3D:
+	var dir := Vector3(spot.x - slot0.x, 0.0,
+		spot.z - slot0.z).normalized()
 	var yaw: float = atan2(-dir.x, -dir.z)
 	return Transform3D(
 		Basis.from_euler(Vector3(deg_to_rad(-78.0), yaw, 0.0)),
-		SHELF_SLOT0)
+		slot0)
 
 
-## The shelf's ground envelope [x0, z0, x1, z1]: the
-## _build_station furniture built on slot 0 with the body
-## WEST of the slots (shelf overhang west edge, rail east
-## edge, slab/shelf z span) - the logic suite guards the
-## yard against this box.
+## The PLAYER's game station - THE SHELF - in front of the
+## fountain (Fix Pass 35; see SHELF_SLOT0).
+static func player_shelf_tf() -> Transform3D:
+	return corner_station_tf(SHELF_SLOT0, spot_pos(40, false))
+
+
+## The AI's game station on the opposing side (Fix Pass 35;
+## see AI_SLOT0).
+static func ai_station_tf() -> Transform3D:
+	return corner_station_tf(AI_SLOT0, spot_pos(40, true))
+
+
+## A corner station's ground envelope [x0, z0, x1, z1]: the
+## _build_station furniture built on slot 0 with the body on
+## body_sx's side of the slots (shelf overhang edge on the
+## body side, rail edge on the lane side, slab/shelf z span)
+## - the logic suite guards the yard against these boxes.
+static func station_envelope(slot0: Vector3, body_sx: float) -> Array:
+	if body_sx < 0.0:
+		return [slot0.x - 0.52, slot0.z - 0.60,
+			slot0.x + 0.04, slot0.z + 0.36]
+	return [slot0.x - 0.04, slot0.z - 0.60,
+		slot0.x + 0.52, slot0.z + 0.36]
+
+
+## The shelf's ground envelope (body WEST of its slots).
 static func player_shelf_envelope() -> Array:
-	return [SHELF_SLOT0.x - 0.52, SHELF_SLOT0.z - 0.60,
-		SHELF_SLOT0.x + 0.04, SHELF_SLOT0.z + 0.36]
+	return station_envelope(SHELF_SLOT0, -1.0)
+
+
+## The AI station's ground envelope (body EAST of its slots).
+static func ai_station_envelope() -> Array:
+	return station_envelope(AI_SLOT0, 1.0)
 
 
 func _init_stands() -> void:
@@ -939,7 +999,9 @@ func _init_stands() -> void:
 	# Any gather/restock that names a 30 ft line sends the AI
 	# pair to the 40 ft station instead (see _gather_to_rail
 	# and _restock_to_player_line).
-	ai_stand_tfs = {40: make_rack_tf(40, true)}
+	# Fix Pass 35: that station is the corner station on the
+	# opposing side of the player's shelf (see AI_SLOT0).
+	ai_stand_tfs = {40: ai_station_tf()}
 	active_stand_line_ft = 40
 	stand_tf = stand_tfs[active_stand_line_ft]
 
@@ -1192,15 +1254,19 @@ func _build_world() -> void:
 	# nobody pitches from there.
 	# Stage B: the two stations no longer stand AT the
 	# 37 ft line - their rack origins (and so the furniture
-	# built on them) stand back on the patio by
+	# built on them) stood back on the patio by
 	# STAND_BACK_Z. The peg post stays at its line.
-	# Fix Pass 34: the PLAYER's station - the shelf - has
-	# left the patio for the grass at its front-left corner
-	# (see SHELF_SLOT0); its body stands WEST of its slots,
-	# away from the throwing spot it faces, so it takes the
-	# mirrored side sign. The AI station keeps the patio.
+	# Fix Pass 34: the PLAYER's station - the shelf - left
+	# the patio for the grass at its front-left corner; its
+	# body stands WEST of its slots, away from the throwing
+	# spot it faces, so it takes the mirrored side sign.
+	# Fix Pass 35: the shelf stands IN FRONT OF THE FOUNTAIN
+	# at the fountain's latitude (see SHELF_SLOT0), and the
+	# AI's station takes the opposing side - the grass at
+	# the patio's front-RIGHT corner, its body EAST of its
+	# slots, the plain side sign.
 	_build_station(stand_tfs[40].origin, -1.0, -1.0)
-	_build_station(ai_stand_tfs[40].origin, station_side(true), -1.0)
+	_build_station(ai_stand_tfs[40].origin, 1.0, -1.0)
 	_build_peg_post(stand_tfs[30].origin, station_side(false), -1.0)
 
 	_build_scenery()
@@ -2103,8 +2169,10 @@ func _build_stage_a_trees(parent: Node, rng: RandomNumberGenerator) -> void:
 
 ## The patio slab as [x0, z0, x1, z1]: behind the 40 ft foul
 ## line (front edge 0.36 m behind it), back to the house's
-## rear wall. Both stations stand on it (station timber
-## envelopes reach |x| 2.54, z -0.20..0.77).
+## rear wall. Both stations stood on it in the Stage B form
+## (station timber envelopes reached |x| 2.54, z -0.20..0.77);
+## Fix Pass 34/35 moved both off the slab to the grass at
+## its front corners - no station stands on it now.
 static func stage_b_patio_rect() -> Array:
 	return [-3.50, -0.55, 3.50, 4.90]
 
@@ -3622,11 +3690,12 @@ func _maybe_start_hop() -> void:
 	# Fix Pass 34 - THE PEG EXCLUSION, named: in GAME play
 	# the far tier serves ONLY a shoe stocked at the game
 	# station's own slots. The shelf move grew the radius
-	# past the 30 ft peg (3.19 m from the 40 ft spot hand),
-	# so distance alone no longer keeps a peg-stocked shoe
-	# out of a game squeeze - this check does. (In practice
-	# the active-stand home governs, exactly as FP25 left
-	# it: the peg answers from the 30 ft spot as always.)
+	# past the 30 ft peg (3.20 m from the 40 ft spot's right
+	# hand under Fix Pass 35's 3.75 m radius), so distance
+	# alone no longer keeps a peg-stocked shoe out of a game
+	# squeeze - this check does. (In practice the
+	# active-stand home governs, exactly as FP25 left it:
+	# the peg answers from the 30 ft spot as always.)
 	if mode == "GAME":
 		var at_station: bool = false
 		for idx: int in 2:
@@ -3654,7 +3723,8 @@ func _maybe_start_hop() -> void:
 			hop_t = 0.0
 			hop_from = shoe.global_transform
 			# Fix Pass 34: the hop keeps its old pace across
-			# the longer shelf flight (~0.49 s at 4.9 m).
+			# the longer shelf flight (Fix Pass 35: ~0.32 s
+			# at the shelf's 3.2 m).
 			hop_sec = clampf(hop_from.origin.distance_to(
 				_hand_tf(hand).origin) * LONG_ARM_HOP_PER_M,
 				LONG_ARM_HOP_SEC, 0.55)
@@ -3714,7 +3784,8 @@ func _apply_hop_pose() -> void:
 	var tf: Transform3D = hop_from.interpolate_with(target, e)
 	var dist: float = hop_from.origin.distance_to(target.origin)
 	# Fix Pass 34: the lift cap grows with the shelf's longer
-	# flight so the arc still reads as an arc at ~4.9 m.
+	# flight so the arc still reads as an arc (Fix Pass 35:
+	# the shelf flight is ~3.2 m now).
 	tf.origin.y += sin(e * PI) * clampf(dist * 0.08, 0.0, 0.16)
 	shoe.global_transform = tf
 

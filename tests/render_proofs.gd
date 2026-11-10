@@ -976,30 +976,70 @@ func _run() -> void:
 	check(main.origin.global_position.distance_to(walked) < 0.02,
 		"tracker smooth turn does not translate the origin (moved %.3f m)" % main.origin.global_position.distance_to(walked))
 
-	# --- Proof F34a: THE SHELF at its new home (Fix Pass 34) ---
-	# The player's game station on the grass at the patio's
-	# front-left corner, up against the left bed's near
-	# corner - and from the throwing spot, a 60-degree glance
-	# left puts it in frame: no turnaround.
+	# --- Proof F35a: THE SHELF in front of the fountain ---
+	# (Fix Pass 35, Chris's correction of FP34: "one shelf
+	# need to be in front of fountain there; the other on
+	# the oppsing side.") The player's game station on the
+	# grass patch at the fountain's latitude, the fountain
+	# directly behind it - and from the throwing spot, a
+	# glance left along its bearing puts it in frame: no
+	# turnaround.
 	var shelf_slot: Vector3 = main.rack_slot_tf(40, false, 0).origin
 	check(shelf_slot.distance_to(main.SHELF_SLOT0) < 0.01,
-		"FP34 proofs: the game shoes stock at the shelf on the grass")
-	var cam_f34a := Camera3D.new()
-	cam_f34a.fov = 55.0
-	cam_f34a.position = Vector3(0.3, 1.35, -1.9)
-	main.add_child(cam_f34a)
-	cam_f34a.look_at(Vector3(shelf_slot.x, 0.8, shelf_slot.z), Vector3.UP)
-	cam_f34a.current = true
+		"FP35 proofs: the game shoes stock at the shelf in front of the fountain")
+	var ai_slot: Vector3 = main.rack_slot_tf(40, true, 0).origin
+	check(ai_slot.distance_to(main.AI_SLOT0) < 0.01,
+		"FP35 proofs: the AI's game shoes stock at its station on the opposing side")
+	check(absf(shelf_slot.z - main.STAGE_B_FOUNTAIN_POS.z) < 0.01
+		and shelf_slot.x > main.STAGE_B_FOUNTAIN_POS.x,
+		"FP35 proofs: the shelf stands in front of the fountain, at its latitude")
+	check(absf(ai_slot.x + shelf_slot.x) < 0.01
+		and absf(ai_slot.z - shelf_slot.z) < 0.01,
+		"FP35 proofs: the two stations mirror across the lane axis")
+	var cam_f35a := Camera3D.new()
+	cam_f35a.fov = 55.0
+	cam_f35a.position = Vector3(0.2, 1.5, -0.4)
+	main.add_child(cam_f35a)
+	cam_f35a.look_at(Vector3(shelf_slot.x, 0.8, shelf_slot.z), Vector3.UP)
+	cam_f35a.current = true
 	await settle(6)
-	await snap(cam_f34a, "res://proofs/proof_shelf.png")
-	# The glance: standing at the spot, head turned 60 deg
-	# left off the pit axis - the shelf sits in frame.
-	cam_f34a.position = Vector3(0.8, 1.62, -0.914)
-	cam_f34a.fov = 70.0
-	cam_f34a.look_at(Vector3(0.8 - 4.33, 1.0, -0.914 - 2.5), Vector3.UP)
+	await snap(cam_f35a, "res://proofs/proof_shelf.png")
+	# The glance: standing at the spot, head turned along
+	# the shelf's own bearing (79 deg off the pit axis).
+	cam_f35a.position = Vector3(0.8, 1.62, -0.914)
+	cam_f35a.fov = 70.0
+	cam_f35a.look_at(Vector3(shelf_slot.x, 0.85, shelf_slot.z), Vector3.UP)
 	await settle(4)
-	await snap(cam_f34a, "res://proofs/proof_shelf_glance.png")
-	cam_f34a.queue_free()
+	await snap(cam_f35a, "res://proofs/proof_shelf_glance.png")
+	cam_f35a.queue_free()
+
+	# --- Proof F35b: THE PLAN - both stations from above ---
+	# Straight down on the pitching end: the shelf in front
+	# of the fountain on the left, the AI's station mirrored
+	# on the right, the patio's two front corners between
+	# them.
+	var cam_f35b := Camera3D.new()
+	cam_f35b.fov = 50.0
+	cam_f35b.position = Vector3(0.0, 12.0, -1.1)
+	main.add_child(cam_f35b)
+	cam_f35b.look_at(Vector3(0.0, 0.0, -1.1), Vector3(0.0, 0.0, -1.0))
+	cam_f35b.current = true
+	await settle(6)
+	await snap(cam_f35b, "res://proofs/proof_stations_plan.png")
+	cam_f35b.queue_free()
+
+	# --- Proof F35c: THE AI'S SHELF from the AI's spot ---
+	# The mirrored glance: from the AI's throwing spot, its
+	# station abeam outboard on the opposing side.
+	var cam_f35c := Camera3D.new()
+	cam_f35c.fov = 70.0
+	cam_f35c.position = Vector3(-0.8, 1.62, -0.914)
+	main.add_child(cam_f35c)
+	cam_f35c.look_at(Vector3(ai_slot.x, 0.85, ai_slot.z), Vector3.UP)
+	cam_f35c.current = true
+	await settle(4)
+	await snap(cam_f35c, "res://proofs/proof_ai_shelf.png")
+	cam_f35c.queue_free()
 
 	# --- Proof F34b: THE SCOREBOARD hanging over the lane ---
 	# From the throwing spot facing the pit: the board hangs

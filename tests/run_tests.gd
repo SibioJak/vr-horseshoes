@@ -865,9 +865,12 @@ func test_stage_a_layout() -> void:
 	# peg post's envelope, and the pit + ties themselves.
 	# Stage B re-derivation: the stations' envelope moved
 	# back with the stations (behind the line, on the patio -
-	# z -0.36..0.93 now, was -1.62..-0.28 at the line), and
+	# z -0.36..0.93 then, was -1.62..-0.28 at the line), and
 	# the patio slab itself joins the list: no bed may touch
-	# the slab.
+	# the slab. Fix Pass 34/35 moved both stations off the
+	# patio to the grass at its front corners (their own
+	# guards live in test_fp35_layout); this rect stays as
+	# the patio-front apron keep-out for the beds.
 	var keep_outs: Array = [
 		[-2.30, -11.30, 2.30, 1.60],
 		[-1.22, -13.41, 1.22, -10.98],
@@ -919,7 +922,9 @@ func test_stage_a_layout() -> void:
 ## visual-only dressing whose layout lives as data tables
 ## in main.gd - guard the DATA numerically here (the smoke
 ## suite guards the built tree): the patio stays behind the
-## foul line and holds both stations; the house wall stands
+## foul line (it held both stations until Fix Pass 34/35
+## moved them to the grass at its front corners - their
+## guards live in test_fp35_layout); the house wall stands
 ## on the patio's rear edge; every patio object stands on
 ## the slab, off the walk corridor and off the stations;
 ## the gate sits in the right fence mid-yard with its
@@ -942,21 +947,17 @@ func test_stage_b_layout() -> void:
 	check(float(patio[3]) < 7.0 and float(patio[0]) >= -13.0
 		and float(patio[2]) <= 13.0,
 		"Stage B: the patio stands inside the fence")
-	# The AI's 40 ft station stands ON the slab: a
-	# conservative envelope box around the rack's two slots
-	# (slot span plus the timber body's reach) inside the
-	# patio rect. (The PLAYER's game station stood here too
-	# until Fix Pass 34 moved it onto the grass - its guard
-	# lives in test_fp34_layout.)
-	var tf: Transform3D = main_script.make_rack_tf(40, true)
-	var o: Vector3 = tf.origin
-	var env: Array = [o.x - 0.55, o.z - 0.62, o.x + 0.55, o.z + 0.40]
-	check(float(env[0]) >= float(patio[0]) and float(env[2]) <= float(patio[2])
-		and float(env[1]) >= float(patio[1]) and float(env[3]) <= float(patio[3]),
-		"Stage B: the AI station stands on the patio (slots at %s)" % str(o))
-	check(absf((o.z - float(main_script.FOUL_40_Z)) - float(main_script.STAND_BACK_Z)) < 0.01,
-		"Stage B: the AI station stands %.2f m behind the line"
-		% float(main_script.STAND_BACK_Z))
+	# Fix Pass 35: NEITHER game station stands on the slab
+	# any more - the player's shelf is in front of the
+	# fountain and the AI's station mirrors it on the
+	# opposing side (their placement guards live in
+	# test_fp35_layout). What this suite still guards here:
+	# both station envelopes keep OFF the patio rect
+	# entirely - they stand on the grass in front of it.
+	for env: Array in [main_script.player_shelf_envelope(),
+			main_script.ai_station_envelope()]:
+		check(not rects_overlap(env, patio),
+			"FP35: a game station envelope keeps off the patio slab (%s)" % str(env))
 	# The house wall stands on the patio's rear edge, and
 	# its door and windows stand on the wall.
 	var hd: Dictionary = main_script.stage_b_house()
@@ -971,10 +972,11 @@ func test_stage_b_layout() -> void:
 	# Patio objects: on the slab, off the walk corridor
 	# (patio -> foul line), off both stations' envelopes.
 	var corridor: Array = [-0.30, -0.55, 1.50, 3.60]
-	# Only the AI station's envelope remains on the slab
-	# (Fix Pass 34: the player's shelf is on the grass).
-	var station_envs: Array = [
-		[-2.65, -0.40, -1.45, 1.00]]
+	# Fix Pass 35: both station envelopes stand on the grass
+	# at the patio's front corners now - the objects keep
+	# clear of the envelopes wherever they stand.
+	var station_envs: Array = [main_script.player_shelf_envelope(),
+		main_script.ai_station_envelope()]
 	var spots: Array = main_script.stage_b_object_spots()
 	check(spots.size() == 6, "Stage B: six patio objects dress the slab (%d)" % spots.size())
 	for spot: Array in spots:
@@ -1250,8 +1252,8 @@ func test_stage_b_light() -> void:
 			"Stage B light: the fire pit clears the table's chair ring")
 		check(circle_rect_clear(fpos, frad, [-0.30, -0.55, 1.50, 3.60]),
 			"Stage B light: the fire pit keeps clear of the walk line to the foul line")
-		var station_envs: Array = [
-			[1.45, -0.40, 2.65, 1.00], [-2.65, -0.40, -1.45, 1.00]]
+		var station_envs: Array = [main_script.player_shelf_envelope(),
+			main_script.ai_station_envelope()]
 		for ei: int in station_envs.size():
 			check(circle_rect_clear(fpos, frad, station_envs[ei]),
 				"Stage B light: the fire pit keeps clear of station envelope %d" % ei)
@@ -1268,32 +1270,55 @@ func test_stage_b_light() -> void:
 			"Stage B light: the fire pit stands on the patio behind the line, in the look-back view")
 
 
-func test_fp34_layout() -> void:
-	# Fix Pass 34 - the tweak load's placement guards.
+func test_fp35_layout() -> void:
+	# Fix Pass 35 - the shelf correction's placement guards.
+	# (The FP34 scoreboard guards ride along at the end,
+	# unchanged: that item was not touched.)
 	var main_script: GDScript = load("res://scripts/main.gd")
-	# ITEM 1 - THE SHELF: the player's game station stands
-	# on the grass at the patio's front-left corner, up
-	# against the left bed's near corner - abeam to the
-	# player's left from the throwing spot, not behind him.
+	var patio: Array = main_script.stage_b_patio_rect()
+	var beds: Array = main_script.stage_a_bed_rects()
+	var fountain: Vector3 = main_script.STAGE_B_FOUNTAIN_POS
+	# THE PLAYER'S SHELF - IN FRONT OF THE FOUNTAIN (Chris's
+	# law, verbatim: "one shelf need to be in front of
+	# fountain there"): slot 0 at the fountain's own
+	# latitude, the fountain directly behind it (west), the
+	# station between the fountain and the lane - NOT back
+	# at patio latitude, where FP34 put it.
 	var shelf_tf: Transform3D = main_script.player_shelf_tf()
 	check(shelf_tf.origin.distance_to(main_script.SHELF_SLOT0) < 0.001,
-		"FP34: the player's game station stands at the shelf slot (%s)"
+		"FP35: the player's game station stands at the shelf slot (%s)"
 		% str(shelf_tf.origin))
+	check(absf(shelf_tf.origin.z - fountain.z) < 0.01
+		and shelf_tf.origin.x > fountain.x,
+		"FP35: the shelf stands IN FRONT OF THE FOUNTAIN - the fountain's latitude (z %.2f), the fountain behind it"
+		% shelf_tf.origin.z)
 	var env: Array = main_script.player_shelf_envelope()
-	var patio: Array = main_script.stage_b_patio_rect()
-	check(float(env[2]) < float(patio[0]) - 0.10,
-		"FP34: the shelf stands on grass WEST of the patio slab (east edge %.2f vs slab west edge %.2f)"
-		% [float(env[2]), float(patio[0])])
-	var beds: Array = main_script.stage_a_bed_rects()
+	check(not rects_overlap(env, patio),
+		"FP35: the shelf envelope keeps off the patio slab")
 	for bi: int in beds.size():
 		check(not rects_overlap(env, beds[bi]),
-			"FP34: the shelf envelope clears bed %d" % bi)
-	check(float(env[1]) - float(beds[0][3]) >= 0.05,
-		"FP34: the shelf keeps a grass gap behind the left bed's rear edge (gap %.2f m)"
-		% (float(env[1]) - float(beds[0][3])))
-	check(circle_rect_clear(main_script.STAGE_B_FOUNTAIN_POS,
+			"FP35: the shelf envelope clears bed %d" % bi)
+	check(float(env[0]) - float(beds[0][2]) >= 0.05,
+		"FP35: the shelf keeps a grass gap inside the left bed's inner edge (gap %.2f m)"
+		% (float(env[0]) - float(beds[0][2])))
+	check(circle_rect_clear(fountain,
 			float(main_script.STAGE_B_FOUNTAIN_R) + 0.15, env),
-		"FP34: the shelf envelope clears the fountain circle by 0.15 m+")
+		"FP35: the shelf envelope clears the fountain circle by 0.15 m+")
+	check(not rects_overlap(env, [-0.30, -0.55, 1.50, 3.60]),
+		"FP35: the shelf envelope clears the walk corridor")
+	# The berm, guarded as the ELLIPSOID it is (its bounding
+	# rect would convict the feathered tip at z -1.90): the
+	# implicit at the station body box's closest point to
+	# the berm centre must stay outside (>= 1).
+	var pbody: Array = [shelf_tf.origin.x - 0.48, shelf_tf.origin.z - 0.55,
+		shelf_tf.origin.x - 0.12, shelf_tf.origin.z + 0.31]
+	var pbx: float = clampf(-2.05, float(pbody[0]), float(pbody[2]))
+	var pbz: float = clampf(-6.05, float(pbody[1]), float(pbody[3]))
+	var pdx: float = (pbx + 2.05) / 0.55
+	var pdz: float = (pbz + 6.05) / 4.15
+	var pimp: float = pdx * pdx + pdz * pdz
+	check(pimp >= 1.0,
+		"FP35: the shelf body clears the berm ellipsoid (implicit %.3f at its closest point)" % pimp)
 	# It faces its owner: shelf face dead-on to the 40 ft
 	# throwing spot, like every station (FP13 discipline).
 	var spot: Vector3 = main_script.spot_pos(40, false)
@@ -1301,28 +1326,72 @@ func test_fp34_layout() -> void:
 	var to_spot := Vector3(spot.x - shelf_tf.origin.x, 0.0,
 		spot.z - shelf_tf.origin.z).normalized()
 	check(face_n.dot(to_spot) > 0.85,
-		"FP34: the shelf face stands square to its throwing spot (dot %.3f)"
+		"FP35: the shelf face stands square to its throwing spot (dot %.3f)"
 		% face_n.dot(to_spot))
+	# THE AI STATION - THE OPPOSING SIDE (Chris: "the other
+	# on the oppsing side"): the mirror of the player's
+	# across the lane axis, body east, face back at the AI
+	# spot, the same clearances mirrored.
+	var ai_tf: Transform3D = main_script.ai_station_tf()
+	check(ai_tf.origin.distance_to(main_script.AI_SLOT0) < 0.001,
+		"FP35: the AI's game station stands at its slot (%s)" % str(ai_tf.origin))
+	check(absf(ai_tf.origin.x + shelf_tf.origin.x) < 0.001
+		and absf(ai_tf.origin.z - shelf_tf.origin.z) < 0.001,
+		"FP35: the AI station mirrors the shelf across the lane axis")
+	var aenv: Array = main_script.ai_station_envelope()
+	check(not rects_overlap(aenv, patio),
+		"FP35: the AI station envelope keeps off the patio slab")
+	for bi2: int in beds.size():
+		check(not rects_overlap(aenv, beds[bi2]),
+			"FP35: the AI station envelope clears bed %d" % bi2)
+	check(float(beds[2][0]) - float(aenv[2]) >= 0.05,
+		"FP35: the AI station keeps a grass gap inside the right bed's inner edge (gap %.2f m)"
+		% (float(beds[2][0]) - float(aenv[2])))
+	var gate: Dictionary = main_script.stage_b_gate()
+	check(float(aenv[1]) - float(gate["z_latch"]) > 3.0,
+		"FP35: the AI station stands well clear of the gate path (%.2f m past its latitude)"
+		% (float(aenv[1]) - float(gate["z_latch"])))
+	var abody: Array = [ai_tf.origin.x + 0.12, ai_tf.origin.z - 0.55,
+		ai_tf.origin.x + 0.48, ai_tf.origin.z + 0.31]
+	var abx: float = clampf(2.05, float(abody[0]), float(abody[2]))
+	var abz: float = clampf(-6.05, float(abody[1]), float(abody[3]))
+	var adx: float = (abx - 2.05) / 0.55
+	var adz: float = (abz + 6.05) / 4.15
+	var aimp: float = adx * adx + adz * adz
+	check(aimp >= 1.0,
+		"FP35: the AI station body clears the berm ellipsoid (implicit %.3f at its closest point)" % aimp)
+	var ai_spot: Vector3 = main_script.spot_pos(40, true)
+	var ai_face: Vector3 = (ai_tf.basis * Vector3.UP).normalized()
+	var ai_to := Vector3(ai_spot.x - ai_tf.origin.x, 0.0,
+		ai_spot.z - ai_tf.origin.z).normalized()
+	check(ai_face.dot(ai_to) > 0.85,
+		"FP35: the AI station face stands square to its throwing spot (dot %.3f)"
+		% ai_face.dot(ai_to))
 	# The long-arm numbers the radius was re-derived from:
-	# governing = the off (right) hand to slot 0; the peg
-	# now sits INSIDE the grown radius, which is why the
+	# the GOVERNING reach is the A-seat's far (right) hand
+	# to slot 1 - the seat must be able to call either shoe;
+	# the peg sits INSIDE the radius, which is why the
 	# game-mode exclusion exists and is named.
-	var hand_r := Vector3(spot.x + 0.25, 0.85, spot.z)
 	var slot1: Vector3 = shelf_tf.origin + Vector3(0.0, 0.0,
 		-main_script.SLOT_STEP)
-	var gov: float = hand_r.distance_to(shelf_tf.origin)
-	check(gov > 4.80 and gov < 4.95,
-		"FP34: the governing hand-to-slot distance is %.2f m (the re-derivation basis)" % gov)
-	check(hand_r.distance_to(slot1) > 4.75 and hand_r.distance_to(slot1) < 4.90,
-		"FP34: slot 1 sits just inside slot 0's reach (%.2f m)" % hand_r.distance_to(slot1))
+	var hand_r := Vector3(spot.x + 0.25, 0.85, spot.z)
+	var seat_r := Vector3(spot.x + 0.25, 0.85, spot.z + 0.70)
+	var gov: float = seat_r.distance_to(slot1)
+	check(hand_r.distance_to(shelf_tf.origin) > 3.15
+		and hand_r.distance_to(shelf_tf.origin) < 3.35,
+		"FP35: the throwing-spot reach to the shelf is %.2f m" % hand_r.distance_to(shelf_tf.origin))
+	check(gov > 3.45 and gov < 3.62
+		and gov >= seat_r.distance_to(shelf_tf.origin)
+		and gov >= hand_r.distance_to(slot1),
+		"FP35: the governing reach is the A-seat's far hand to slot 1 (%.2f m)" % gov)
 	check(main_script.LONG_ARM_RADIUS >= gov
 		and main_script.LONG_ARM_RADIUS < gov + 0.35,
-		"FP34: LONG_ARM_RADIUS %.2f covers the shelf with a hand's working margin"
+		"FP35: LONG_ARM_RADIUS %.2f covers the governing reach with a hand's working margin"
 		% float(main_script.LONG_ARM_RADIUS))
 	var peg0: Vector3 = main_script.make_rack_tf(30, false).origin
 	var peg_d: float = hand_r.distance_to(peg0)
 	check(peg_d < float(main_script.LONG_ARM_RADIUS) and peg_d > 3.0,
-		"FP34: the 30 ft peg (%.2f m from the 40 ft spot) sits INSIDE the grown radius - the explicit exclusion is load-bearing" % peg_d)
+		"FP35: the 30 ft peg (%.2f m from the 40 ft spot) sits INSIDE the radius - the explicit exclusion is load-bearing" % peg_d)
 	# ITEM 2 - THE SCOREBOARD: one fixed court transform,
 	# centred on the lane axis, hanging partway to the pit.
 	var sb: Transform3D = main_script.scoreboard_transform()
@@ -1501,7 +1570,7 @@ func _run() -> void:
 	test_stage_a_layout()
 	test_stage_b_layout()
 	test_stage_b_light()
-	test_fp34_layout()
+	test_fp35_layout()
 	var shoe_node := Shoe.new()
 	root.add_child(shoe_node)
 	await physics_frame

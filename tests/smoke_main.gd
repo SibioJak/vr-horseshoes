@@ -133,6 +133,11 @@ func sightline_dist(p: Vector3) -> float:
 ## The FP19 law survives untouched at the 30 ft peg, which
 ## did not move; the face-on and down-lane-step laws hold at
 ## both lines.
+## Fix Pass 35: no 40 ft rack is asserted here any more -
+## both game stations are corner stations with their own
+## guard (check_game_station). This helper now serves the
+## 30 ft peg alone; its patio branches remain as the Stage B
+## record.
 func check_rack(line_ft: int, is_ai: bool) -> void:
 	var lz: float = main.line_z_for_ft(line_ft)
 	var side: float = main.station_side(is_ai)
@@ -195,59 +200,80 @@ func check_rack(line_ft: int, is_ai: bool) -> void:
 		% [who, line_ft, face_n.dot(to_spot)])
 
 
-## Fix Pass 34: THE SHELF - the player's game station
-## stands on the GRASS at the patio's front-left corner, up
-## against the left bed's near corner. Chris: "right now you
-## have to turn around, pain in the ass" - from the throwing
-## spot the shelf is abeam to his LEFT (a glance, ~103 deg
-## off the pit-facing axis), facing him dead-on, and the
-## long-arm radius was re-derived to reach it.
-func check_shelf() -> void:
-	var rp0: Vector3 = main.rack_slot_tf(40, false, 0).origin
-	var rp1: Vector3 = main.rack_slot_tf(40, false, 1).origin
-	check(rp0.distance_to(main.SHELF_SLOT0) < 0.01,
-		"FP34: the player's game shoes stock at the shelf slot (%s)" % str(rp0))
+## Fix Pass 35: THE CORNER STATIONS - the player's shelf
+## IN FRONT OF THE FOUNTAIN and the AI's station on the
+## OPPOSING side (Chris's correction of FP34, verbatim:
+## "one shelf need to be in front of fountain there; the
+## other on the oppsing side"). Each stands on the grass
+## at its patio front corner at the fountain's latitude,
+## facing its owner dead-on; from the owner's spot each is
+## abeam on the owner's outboard side - a glance (bearing
+## ~79 deg off the pit-facing axis), not a turnaround -
+## and the long-arm radius was re-derived to reach the
+## player's pair, the A-seat's far hand to slot 1 governing.
+func check_game_station(is_ai: bool) -> void:
+	var who: String = "AI station" if is_ai else "shelf"
+	var want0: Vector3 = main.AI_SLOT0 if is_ai else main.SHELF_SLOT0
+	var rp0: Vector3 = main.rack_slot_tf(40, is_ai, 0).origin
+	var rp1: Vector3 = main.rack_slot_tf(40, is_ai, 1).origin
+	check(rp0.distance_to(want0) < 0.01,
+		"FP35: the %s's game shoes stock at its slot (%s)" % [who, str(rp0)])
 	var lz: float = main.line_z_for_ft(40)
 	var in_stance: bool = absf(rp0.x) <= main.STANCE_HALF_WIDTH \
 		and absf(rp0.z - lz) <= main.STANCE_HALF_DEPTH
 	check(not in_stance,
-		"FP34: the shelf stands outside the stance box (at %s)" % str(rp0))
-	var env: Array = main.player_shelf_envelope()
+		"FP35: the %s stands outside the stance box (at %s)" % [who, str(rp0)])
+	var env: Array = main.ai_station_envelope() if is_ai \
+		else main.player_shelf_envelope()
 	var patio: Array = main.stage_b_patio_rect()
-	check(float(env[2]) < float(patio[0]) - 0.10,
-		"FP34: the shelf stands on grass west of the patio slab")
+	var on_slab: bool = float(env[0]) < float(patio[2]) and float(env[2]) > float(patio[0]) \
+		and float(env[1]) < float(patio[3]) and float(env[3]) > float(patio[1])
+	check(not on_slab,
+		"FP35: the %s stands on grass, off the patio slab" % who)
 	var beds: Array = main.stage_a_bed_rects()
 	for bi: int in beds.size():
 		var b: Array = beds[bi]
 		var overlap: bool = float(env[0]) < float(b[2]) and float(env[2]) > float(b[0]) \
 			and float(env[1]) < float(b[3]) and float(env[3]) > float(b[1])
-		check(not overlap, "FP34: the shelf envelope clears bed %d" % bi)
-	var fn: Vector3 = main.STAGE_B_FOUNTAIN_POS
-	var fd: float = Vector2(fn.x, fn.z).distance_to(
-		Vector2(clampf(fn.x, float(env[0]), float(env[2])),
-			clampf(fn.z, float(env[1]), float(env[3]))))
-	check(fd >= main.STAGE_B_FOUNTAIN_R + 0.15,
-		"FP34: the shelf envelope clears the fountain circle (%.2f m)" % fd)
-	var spot: Vector3 = main.spot_pos(40, false)
-	var hang: Transform3D = main.rack_slot_tf(40, false, 0)
+		check(not overlap, "FP35: the %s envelope clears bed %d" % [who, bi])
+	if is_ai:
+		check(float(beds[2][0]) - float(env[2]) >= 0.05,
+			"FP35: the AI station keeps its grass gap inside the right bed (%.2f m)"
+			% (float(beds[2][0]) - float(env[2])))
+	else:
+		var fn: Vector3 = main.STAGE_B_FOUNTAIN_POS
+		var fd: float = Vector2(fn.x, fn.z).distance_to(
+			Vector2(clampf(fn.x, float(env[0]), float(env[2])),
+				clampf(fn.z, float(env[1]), float(env[3]))))
+		check(fd >= main.STAGE_B_FOUNTAIN_R + 0.15,
+			"FP35: the shelf envelope clears the fountain circle (%.2f m)" % fd)
+		check(absf(rp0.z - fn.z) < 0.01 and rp0.x > fn.x,
+			"FP35: the shelf stands in front of the fountain, at its latitude")
+	var spot: Vector3 = main.spot_pos(40, is_ai)
+	var hang: Transform3D = main.rack_slot_tf(40, is_ai, 0)
 	var face_n: Vector3 = hang.basis * Vector3.UP
 	var to_spot: Vector3 = (Vector3(spot.x, rp0.y, spot.z) - rp0).normalized()
 	check(face_n.dot(to_spot) > 0.7,
-		"FP34: the shelf presents its shoes FACE-ON to its spot (facing %.2f)"
-		% face_n.dot(to_spot))
+		"FP35: the %s presents its shoes FACE-ON to its spot (facing %.2f)"
+		% [who, face_n.dot(to_spot)])
 	var to_slot := Vector3(rp0.x - spot.x, 0.0, rp0.z - spot.z).normalized()
 	var bearing: float = rad_to_deg(acos(clampf(
 		to_slot.dot(Vector3(0.0, 0.0, -1.0)), -1.0, 1.0)))
-	check(to_slot.x < 0.0 and bearing > 85.0 and bearing < 120.0,
-		"FP34: from the throwing spot the shelf is abeam LEFT - a glance, not a turnaround (bearing %.0f deg)" % bearing)
+	var outboard: bool = to_slot.x > 0.0 if is_ai else to_slot.x < 0.0
+	check(outboard and bearing > 65.0 and bearing < 95.0,
+		"FP35: from its spot the %s is abeam outboard - a glance, not a turnaround (bearing %.0f deg)" % [who, bearing])
 	check(absf(rp1.x - rp0.x) < 0.01
 		and absf((rp1.z - rp0.z) - (-1.0) * main.SLOT_STEP) < 0.01,
-		"FP34: the shelf steps slot 1 down-lane along the rail (step %s)" % str(rp1 - rp0))
-	var hand_r := Vector3(spot.x + 0.25, 0.85, spot.z)
-	check(hand_r.distance_to(rp0) > 4.80 and hand_r.distance_to(rp0) < 4.95,
-		"FP34: the governing off-hand reach to the shelf is %.2f m" % hand_r.distance_to(rp0))
-	check(main.LONG_ARM_RADIUS >= hand_r.distance_to(rp0),
-		"FP34: the re-derived long-arm radius (%.2f) covers the shelf" % main.LONG_ARM_RADIUS)
+		"FP35: the %s steps slot 1 down-lane along the rail (step %s)" % [who, str(rp1 - rp0)])
+	if not is_ai:
+		var hand_r := Vector3(spot.x + 0.25, 0.85, spot.z)
+		check(hand_r.distance_to(rp0) > 3.15 and hand_r.distance_to(rp0) < 3.35,
+			"FP35: the off-hand reach to the shelf is %.2f m" % hand_r.distance_to(rp0))
+		var seat_r := Vector3(spot.x + 0.25, 0.85, spot.z + 0.70)
+		check(main.LONG_ARM_RADIUS >= seat_r.distance_to(rp1)
+			and main.LONG_ARM_RADIUS < seat_r.distance_to(rp1) + 0.35,
+			"FP35: the re-derived long-arm radius (%.2f) covers the governing seat reach (%.2f m)"
+			% [main.LONG_ARM_RADIUS, seat_r.distance_to(rp1)])
 
 
 ## Fix Pass 8: fire one shot at the stake through the production
@@ -1567,10 +1593,12 @@ func _run() -> void:
 	check(main.ai_stand_tfs.size() == 1 and not main.ai_stand_tfs.has(30),
 		"FP18/19: the AI stocks only at the 40 ft game station - no practice stock point (%d)"
 		% [main.ai_stand_tfs.size()])
-	# Fix Pass 34: the player's 40 ft station is the SHELF
-	# on the grass now - its own guard, not check_rack.
-	check_shelf()
-	check_rack(40, true)
+	# Fix Pass 35: both 40 ft stations are corner stations
+	# on the grass now - the shelf in front of the fountain,
+	# the AI's on the opposing side - each with its own
+	# guard, not check_rack.
+	check_game_station(false)
+	check_game_station(true)
 	# The player's 30 ft slots keep their full FP13 layout
 	# geometry - the slim peg post hangs the pair exactly
 	# where the deleted shelf did.
@@ -2373,18 +2401,16 @@ func _run() -> void:
 	root.remove_child(m3)
 	m3.free()
 	await frames(3)
-	# (i) Refusals. Fix Pass 34 re-derivation: the shelf
-	# move grew LONG_ARM_RADIUS to 5.10 m, and the old
-	# staged spots (written against 2.15 m) now sit INSIDE
-	# the grown radius of a peg-stocked shoe - so first
-	# home the origin to the 40 ft line (the FP7 (d) idiom)
-	# and let the shoe restock at the SHELF, then stage the
-	# out-of-range hand a measured 6.4 m from wherever the
-	# shoe actually sits.
+	# (i) Refusals. Fix Pass 35 re-derivation: the radius
+	# is 3.75 m now (the FP34 shelf's 5.10 m went with its
+	# placement) - first home the origin to the 40 ft line
+	# (the FP7 (d) idiom) and let the shoe restock at the
+	# SHELF, then stage the out-of-range hand a measured
+	# 6.4 m from wherever the shoe actually sits.
 	main.origin.global_transform = Transform3D(Basis.IDENTITY,
 		Vector3(0.0, 0.0, main.FOUL_40_Z))
 	check(await wait_shoe_at(40, 3.0) >= 0.0,
-		"FP34: the shoe restocks at the shelf before the refusal legs")
+		"FP35: the shoe restocks at the shelf before the refusal legs")
 	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
 		main.shoe.global_position + Vector3(4.5, 0.07, 4.5))
 	main.test_grip["R"] = 1.0
@@ -2396,17 +2422,17 @@ func _run() -> void:
 	await frames(3)
 	# The AI's pair refuses at ANY range: a hand parked on
 	# the AI's stocked shoe, squeezing - the far tier only
-	# ever measures the player's active shoe. Fix Pass 34
-	# re-derivation: the shelf moved the player's home NEXT
-	# DOOR to the AI station (the two slots stand 1.9 m
-	# apart), so a squeeze parked there now legitimately
-	# calls the PLAYER's own shoe - the long-arm working as
-	# designed. The refusal under test is the AI pair's, so
-	# stage it with the player's shoe already in hand: the
-	# parked squeeze must then call NOTHING at all.
+	# ever measures the player's active shoe. Fix Pass 35
+	# re-derivation: the AI station now stands on the
+	# OPPOSING side, and its slot sits just 1.24 m from the
+	# player's own right-hand spot - closer to his hands
+	# than his own shelf is. The refusal under test is the
+	# AI pair's, so stage it with the player's shoe already
+	# in hand: the parked squeeze must then call NOTHING at
+	# all, and the AI's shoe must never move.
 	var ai_slot: Vector3 = main.rack_slot_tf(40, true, 0).origin
 	check(await long_arm_grab(main, "R", hand_r40),
-		"FP34: the player's shoe comes to hand before the AI-refusal leg")
+		"FP35: the player's shoe comes to hand before the AI-refusal leg")
 	main.test_hand_tf["L"] = Transform3D(Basis.IDENTITY, ai_slot + Vector3(0.1, 0.07, 0.0))
 	main.test_grip["L"] = 1.0
 	await create_timer(0.6).timeout
@@ -2420,7 +2446,7 @@ func _run() -> void:
 	main.test_hand_tf.erase("L")
 	await frames(3)
 	check(await drop_and_restock(main, "R"),
-		"FP34: the refusal leg's shoe drops and restocks")
+		"FP35: the refusal leg's shoe drops and restocks")
 	main.test_hand_tf.erase("R")
 	# A round's down shoes refuse: manufacture a tabulating
 	# round (grab disarmed) and squeeze from the spot.
@@ -2438,9 +2464,9 @@ func _run() -> void:
 		"FP25: back to practice after the refusal legs")
 	# (i2) Stage B: the long-arm FROM THE A-SEAT. The FP20
 	# continue seats the camera 0.55 m behind the line, and
-	# the stations now stand on the patio behind the seated
-	# player - the far tier must still serve the seat (that
-	# reach is what LONG_ARM_RADIUS was re-derived from).
+	# the far tier must still serve the seat - under Fix
+	# Pass 35 the seat's far hand to slot 1 (3.54 m) is the
+	# governing reach LONG_ARM_RADIUS was re-derived from.
 	# Seat the origin through the production seat, hands at
 	# throwing height a hand's breadth ahead of the seated
 	# head, and squeeze with each hand in turn.
@@ -2490,14 +2516,14 @@ func _run() -> void:
 		Vector3(0.0, 0.0, main.FOUL_40_Z))
 	check(await wait_shoe_at(40, 3.0) >= 0.0,
 		"FP25: the shoe restocks at the standard end for the next section")
-	# (k) Fix Pass 34: THE PEG EXCLUSION. The shelf move
-	# grew LONG_ARM_RADIUS to 5.10 m, and the 30 ft peg
-	# (3.19 m from the 40 ft spot) now sits inside it - in
-	# GAME play the peg must NOT answer a far squeeze from
-	# the 40 ft spot; only the game station's stocked pair
-	# may. Stage it directly: the player shoe railed at the
-	# peg, mode flipped to GAME without the gather (a real
-	# start_game would collect the shoe to the shelf,
+	# (k) Fix Pass 34: THE PEG EXCLUSION (Fix Pass 35
+	# numbers: LONG_ARM_RADIUS 3.75 m, the 30 ft peg 3.20 m
+	# from the 40 ft spot's right hand - still inside it) -
+	# in GAME play the peg must NOT answer a far squeeze
+	# from the 40 ft spot; only the game station's stocked
+	# pair may. Stage it directly: the player shoe railed at
+	# the peg, mode flipped to GAME without the gather (a
+	# real start_game would collect the shoe to the shelf,
 	# destroying the staged state), a fresh squeeze from
 	# the 40 ft spot hand.
 	var peg_slot: Vector3 = main.rack_slot_tf(30, false, 0).origin
@@ -2509,16 +2535,16 @@ func _run() -> void:
 	main.shoe.angular_velocity = Vector3.ZERO
 	await frames(3)
 	check(main.shoe.global_position.distance_to(peg_slot) < 0.01,
-		"FP34: the exclusion leg's staging holds - the shoe railed at the peg")
+		"FP35: the exclusion leg's staging holds - the shoe railed at the peg")
 	main.mode = "GAME"
 	check(main.grab_armed and main.state == "STAND",
-		"FP34: the grab stands armed for the exclusion leg (so only the exclusion can refuse)")
+		"FP35: the grab stands armed for the exclusion leg (so only the exclusion can refuse)")
 	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, hand_r40)
 	main.test_grip["R"] = 1.0
 	await create_timer(0.6).timeout
 	check(main.hop_phase == "" and not main.grab_state.latched
 		and main.shoe.global_position.distance_to(peg_slot) < 0.01,
-		"FP34: in GAME the peg pair refuses a far squeeze from the 40 ft spot (the explicit exclusion; distance alone no longer protects it) (hop '%s', shoe at %s)"
+		"FP35: in GAME the peg pair refuses a far squeeze from the 40 ft spot (the explicit exclusion; distance alone no longer protects it) (hop '%s', shoe at %s)"
 		% [String(main.hop_phase), str(main.shoe.global_position)])
 	main.test_grip["R"] = 0.0
 	main.test_hand_tf.erase("R")
