@@ -1268,10 +1268,90 @@ func test_stage_b_light() -> void:
 			"Stage B light: the fire pit stands on the patio behind the line, in the look-back view")
 
 
+func test_fp34_layout() -> void:
+	# Fix Pass 34 - the tweak load's placement guards.
+	var main_script: GDScript = load("res://scripts/main.gd")
+	# ITEM 1 - THE SHELF: the player's game station stands
+	# on the grass at the patio's front-left corner, up
+	# against the left bed's near corner - abeam to the
+	# player's left from the throwing spot, not behind him.
+	var shelf_tf: Transform3D = main_script.player_shelf_tf()
+	check(shelf_tf.origin.distance_to(main_script.SHELF_SLOT0) < 0.001,
+		"FP34: the player's game station stands at the shelf slot (%s)"
+		% str(shelf_tf.origin))
+	var env: Array = main_script.player_shelf_envelope()
+	var patio: Array = main_script.stage_b_patio_rect()
+	check(float(env[2]) < float(patio[0]) - 0.10,
+		"FP34: the shelf stands on grass WEST of the patio slab (east edge %.2f vs slab west edge %.2f)"
+		% [float(env[2]), float(patio[0])])
+	var beds: Array = main_script.stage_a_bed_rects()
+	for bi: int in beds.size():
+		check(not rects_overlap(env, beds[bi]),
+			"FP34: the shelf envelope clears bed %d" % bi)
+	check(float(env[1]) - float(beds[0][3]) >= 0.05,
+		"FP34: the shelf keeps a grass gap behind the left bed's rear edge (gap %.2f m)"
+		% (float(env[1]) - float(beds[0][3])))
+	check(circle_rect_clear(main_script.STAGE_B_FOUNTAIN_POS,
+			float(main_script.STAGE_B_FOUNTAIN_R) + 0.15, env),
+		"FP34: the shelf envelope clears the fountain circle by 0.15 m+")
+	# It faces its owner: shelf face dead-on to the 40 ft
+	# throwing spot, like every station (FP13 discipline).
+	var spot: Vector3 = main_script.spot_pos(40, false)
+	var face_n: Vector3 = (shelf_tf.basis * Vector3.UP).normalized()
+	var to_spot := Vector3(spot.x - shelf_tf.origin.x, 0.0,
+		spot.z - shelf_tf.origin.z).normalized()
+	check(face_n.dot(to_spot) > 0.85,
+		"FP34: the shelf face stands square to its throwing spot (dot %.3f)"
+		% face_n.dot(to_spot))
+	# The long-arm numbers the radius was re-derived from:
+	# governing = the off (right) hand to slot 0; the peg
+	# now sits INSIDE the grown radius, which is why the
+	# game-mode exclusion exists and is named.
+	var hand_r := Vector3(spot.x + 0.25, 0.85, spot.z)
+	var slot1: Vector3 = shelf_tf.origin + Vector3(0.0, 0.0,
+		-main_script.SLOT_STEP)
+	var gov: float = hand_r.distance_to(shelf_tf.origin)
+	check(gov > 4.80 and gov < 4.95,
+		"FP34: the governing hand-to-slot distance is %.2f m (the re-derivation basis)" % gov)
+	check(hand_r.distance_to(slot1) > 4.75 and hand_r.distance_to(slot1) < 4.90,
+		"FP34: slot 1 sits just inside slot 0's reach (%.2f m)" % hand_r.distance_to(slot1))
+	check(main_script.LONG_ARM_RADIUS >= gov
+		and main_script.LONG_ARM_RADIUS < gov + 0.35,
+		"FP34: LONG_ARM_RADIUS %.2f covers the shelf with a hand's working margin"
+		% float(main_script.LONG_ARM_RADIUS))
+	var peg0: Vector3 = main_script.make_rack_tf(30, false).origin
+	var peg_d: float = hand_r.distance_to(peg0)
+	check(peg_d < float(main_script.LONG_ARM_RADIUS) and peg_d > 3.0,
+		"FP34: the 30 ft peg (%.2f m from the 40 ft spot) sits INSIDE the grown radius - the explicit exclusion is load-bearing" % peg_d)
+	# ITEM 2 - THE SCOREBOARD: one fixed court transform,
+	# centred on the lane axis, hanging partway to the pit.
+	var sb: Transform3D = main_script.scoreboard_transform()
+	check(absf(sb.origin.x) < 0.001 and sb.origin.z < -5.0
+		and sb.origin.z > -7.5 and sb.origin.y > 2.5,
+		"FP34: the scoreboard hangs centred over the lane partway to the pit (at %s)" % str(sb.origin))
+	var sn: Vector3 = (sb.basis * Vector3(0.0, 0.0, 1.0)).normalized()
+	check(sn.z > 0.9 and sn.y < -0.10,
+		"FP34: the scoreboard faces the throwing end, tilted down (normal %s)" % str(sn))
+	# It never covers the stake from the throwing spot's
+	# eye line: the panel's bottom edge rides ABOVE the
+	# depression angle to the stake top.
+	var eye := Vector3(0.0, 1.62, float(main_script.FOUL_40_Z))
+	var sb_up: Vector3 = (sb.basis * Vector3.UP).normalized()
+	var bottom: Vector3 = sb.origin - sb_up * (1.34
+		* float(main_script.SCOREBOARD_SCALE) * 0.5)
+	var dep_panel: float = atan2(eye.y - bottom.y,
+		Vector2(eye.x - bottom.x, eye.z - bottom.z).length())
+	var stake_top := Vector3(0.0, 0.36, (main_script.STAKE_POS as Vector3).z)
+	var dep_stake: float = atan2(eye.y - stake_top.y,
+		Vector2(eye.x - stake_top.x, eye.z - stake_top.z).length())
+	check(dep_panel < dep_stake,
+		"FP34: the scoreboard's bottom edge clears the stake sightline (%.3f rad over %.3f)" % [dep_panel, dep_stake])
+
+
 func test_impact_fx() -> void:
 	# Impact Dressing Pass: routing, scaling, pooling, lifecycle.
 	var events: Array = ["sand_thud", "stake_clang", "shoe_clink", "ringer",
-		"wood_knock", "grass_thud"]
+		"wood_knock", "grass_thud", "stone_knock"]
 	var paths: Array = []
 	for ev: String in events:
 		var p: String = ImpactFX.stream_path_for_event(ev)
@@ -1410,6 +1490,7 @@ func _run() -> void:
 	test_stage_a_layout()
 	test_stage_b_layout()
 	test_stage_b_light()
+	test_fp34_layout()
 	var shoe_node := Shoe.new()
 	root.add_child(shoe_node)
 	await physics_frame

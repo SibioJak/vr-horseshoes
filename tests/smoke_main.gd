@@ -3011,10 +3011,17 @@ func _run() -> void:
 		% [main.score_you, main.score_opp, main.cam.global_position.z])
 	check(main.insert_root.visible,
 		"FP20: the insert cam is up at the round's end")
-	var to_insert: Vector3 = main.insert_root.global_position - main.cam.global_position
-	to_insert.y = 0.0
-	check(absf(to_insert.length() - 2.0) < 0.05,
-		"FP20: the insert spawned ~2 m from the player (%.2f m)" % to_insert.length())
+	# Fix Pass 34: the gaze spawn is GONE - the board hangs
+	# at its one fixed court transform, centred over the
+	# lane, no matter where the player stands or looks.
+	var sb34: Transform3D = main.scoreboard_transform()
+	check(main.insert_root.global_transform.origin.distance_to(sb34.origin) < 0.001
+		and main.insert_root.global_transform.basis.is_equal_approx(sb34.basis),
+		"FP34: the scoreboard hangs at its fixed court transform (at %s)"
+		% str(main.insert_root.global_position))
+	check(absf(main.insert_root.global_position.x) < 0.01
+		and main.insert_root.global_position.y > 2.5,
+		"FP34: the board is centred on the lane axis, above the lane - not in the player's face")
 	var lines20: String = "\n".join(PackedStringArray(main.round_lines))
 	check(lines20.contains("OPP 1: RINGER")
 		and lines20.contains("YOU 1: NO SCORE (30.0 IN)")
@@ -3131,6 +3138,18 @@ func _run() -> void:
 	check(main.inning_results.size() == 3
 		and String(main.inning_results[2]["owner"]) == "AI",
 		"FP13 audit (i): the AI's dud is recorded under the AI's tag")
+	# Fix Pass 34 - THE REAL-PATH SCOREBOARD PROOF: pose
+	# the head facing the HOUSE and pitched DOWN before the
+	# last shoe settles. The old gaze spawn would have
+	# planted the board behind the player, face-down in the
+	# patio; the fixed board must come up at its court
+	# transform regardless - and this inning drives the
+	# full production flow (throws, settle, tabulation
+	# beat, posting) to get it there.
+	var head_home34: Transform3D = main.cam.transform
+	main.cam.transform = Transform3D(Basis.IDENTITY,
+		Vector3(0.0, 1.62, -0.914)).looking_at(
+			Vector3(0.0, 0.2, 3.0), Vector3.UP)
 	check(await scripted_ai_throw("dud"),
 		"FP13 audit (i): AI dud two settles")
 	check(main.phase == "TABULATE" and main.score_you == 0,
@@ -3141,6 +3160,12 @@ func _run() -> void:
 		and main.last_inning_text == "YOU +3 (RINGER)",
 		"FP13 audit (i): player ringer vs two AI duds scores YOU +3, posted by the tabulation (board %d-%d, '%s')"
 		% [main.score_you, main.score_opp, main.last_inning_text])
+	var sb34b: Transform3D = main.scoreboard_transform()
+	check(main.insert_root.visible
+		and main.insert_root.global_transform.origin.distance_to(sb34b.origin) < 0.001
+		and main.insert_root.global_transform.basis.is_equal_approx(sb34b.basis),
+		"FP34: with the head facing the house and pitched down at the settle, the board still hangs at its fixed court transform - not in the player's face")
+	main.cam.transform = head_home34
 	# The insert closeup frames ALL FOUR settled shoes - a
 	# framed-but-empty closeup is a fail (the duds sit ~2.5 m
 	# out, the stress case for the framing).

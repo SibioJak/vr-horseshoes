@@ -339,10 +339,37 @@ var _btn_prev: Dictionary = {"A": false, "B": false}
 
 # Fix Pass 20: the insert cam - an in-world panel carrying a
 # live closeup of the pit (a SubViewport sharing this world)
-# plus the round's score breakdown, spawned in front of the
-# player when a round tabulates and dismissed with A.
+# plus the round's score breakdown, raised when a round
+# tabulates and dismissed with A.
+# Fix Pass 34 (Chris's tweak load, item 2): the panel no
+# longer spawns in front of his face. His words: "the
+# scoring window appears wherever you're looking... it
+# takes up your view no matter if youre looking up down,
+# right left" / "should just sort of hang there like a
+# bowling alley scorboard kind of thing." The panel now
+# hangs at ONE FIXED court transform: centred on the lane
+# axis, partway toward the pit, high above the lane like a
+# bowling-alley scoreboard - facing the throwing end,
+# tilted down at the throwing spot, big enough to read
+# from the line (SCOREBOARD_SCALE x the FP20 panel: the
+# breakdown text keeps the old panel's angular size at
+# ~5.4 m that it had at 2 m). Its bottom edge (y ~1.49)
+# rides ABOVE the throwing spot's sightline to the stake,
+# so the stake is never covered when it is up; it is only
+# ever up between rounds, never during a flight.
 const ROUND_BEAT_SEC: float = 0.75 # settle -> tabulation beat
-const INSERT_DIST_M: float = 2.0 # panel distance at spawn
+const SCOREBOARD_POS := Vector3(0.0, 3.10, -6.10) # panel centre, fixed
+const SCOREBOARD_TILT_DEG: float = 14.0 # face tipped down at the throwing end
+const SCOREBOARD_SCALE: float = 2.4 # vs the FP20 2 m spawn panel
+
+
+## The scoreboard's one fixed world transform (Fix Pass 34):
+## yaw zero (face square to the throwing end), pitch tilt
+## only - the FP15 discipline, no head pose anywhere in it.
+static func scoreboard_transform() -> Transform3D:
+	return Transform3D(
+		Basis.from_euler(Vector3(deg_to_rad(SCOREBOARD_TILT_DEG), 0.0, 0.0)),
+		SCOREBOARD_POS)
 var tabulate_left: float = -1.0 # TABULATE countdown (<0 idle)
 var round_lines: Array = [] # the insert's breakdown lines
 var insert_root: Node3D = null
@@ -4361,13 +4388,28 @@ func _finish_inning_cycle() -> void:
 ## pit looking down at the stake (framed so all four settled
 ## shoes sit in the shot - the suites assert exactly that).
 ## The viewport renders only while the panel is up. Built
-## once, hidden, positioned at each showing.
+## once, hidden.
+## Fix Pass 34: the slab, screen and label are built at
+## SCOREBOARD_SCALE and the root is parked at the fixed
+## scoreboard transform FOR GOOD - it hangs there, on two
+## slim steel hangers rising from its top edge up out of
+## the playing view, showing and hiding in place.
 func _build_insert() -> void:
 	insert_root = Node3D.new()
 	insert_root.name = "InsertCam"
 	add_child(insert_root)
+	insert_root.global_transform = scoreboard_transform()
 	var wood := _mat(Color(0.30, 0.21, 0.12))
-	_box(insert_root, Vector3(0.0, 0.0, -0.03), Vector3(1.52, 1.34, 0.05), wood)
+	var sc: float = SCOREBOARD_SCALE
+	_box(insert_root, Vector3(0.0, 0.0, -0.03), Vector3(1.52 * sc, 1.34 * sc, 0.05), wood)
+	# The hangers: two slim steel straps from the top edge
+	# rising 1.5 m - outdoors there is no ceiling; the straps
+	# simply carry the board's weight up out of the frame,
+	# the bowling-alley read.
+	var steel := _mat(Color(0.16, 0.16, 0.18))
+	for hx: float in [-1.25, 1.25]:
+		_box(insert_root, Vector3(hx, 0.67 * sc + 0.75, -0.03),
+			Vector3(0.045, 1.5, 0.045), steel)
 	insert_viewport = SubViewport.new()
 	insert_viewport.name = "InsertViewport"
 	insert_viewport.size = Vector2i(1024, 512)
@@ -4384,49 +4426,42 @@ func _build_insert() -> void:
 	var quad := MeshInstance3D.new()
 	quad.name = "InsertScreen"
 	var qm := QuadMesh.new()
-	qm.size = Vector2(1.36, 0.68)
+	qm.size = Vector2(1.36 * sc, 0.68 * sc)
 	quad.mesh = qm
 	var qmat := StandardMaterial3D.new()
 	qmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	qmat.albedo_texture = insert_viewport.get_texture()
 	quad.material_override = qmat
-	quad.position = Vector3(0.0, 0.28, 0.001)
+	quad.position = Vector3(0.0, 0.28 * sc, 0.001)
 	insert_root.add_child(quad)
 	insert_label = Label3D.new()
 	insert_label.font_size = 48
-	insert_label.pixel_size = 0.00062
+	insert_label.pixel_size = 0.00062 * sc
 	insert_label.modulate = Color(0.95, 0.97, 0.90)
 	insert_label.outline_size = 5
 	insert_label.outline_modulate = Color(0.1, 0.07, 0.03)
 	insert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	insert_label.position = Vector3(0.0, -0.40, 0.0025)
+	insert_label.position = Vector3(0.0, -0.40 * sc, 0.0025)
 	insert_root.add_child(insert_label)
 	insert_root.visible = false
 
 
-## Raise the insert (Fix Pass 20): spawned head-relative -
-## INSERT_DIST_M ahead of where the player is looking,
-## slightly below eye level - then WORLD-LOCKED. It never
-## follows the head after spawn, so he can look around it,
-## walk around it, or stroll down to the pit while it is
-## up; it appears identically whether he stayed at the line
-## or wandered. The spawn basis is yaw-only by construction
-## (the look target shares the panel's height), the FP15
-## discipline: no head pitch can be written into the world.
+## Raise the insert (Fix Pass 20; placement re-ruled by Fix
+## Pass 34): the FP20 gaze spawn is DELETED - the panel was
+## planted INSERT_DIST_M ahead of wherever the player
+## happened to be looking when the round settled, so it
+## took up his view looking up, down, right or left. Now
+## showing is only a visibility flip: the panel already
+## hangs at the fixed scoreboard transform (set once in
+## _build_insert), centred over the lane like a bowling-
+## alley scoreboard. If he is looking elsewhere when the
+## round ends, it is not in his face; he turns to centre
+## court and it is there, in the same place every round.
 func _show_insert() -> void:
 	if insert_root == null:
 		return
 	insert_label.text = "\n".join(PackedStringArray(round_lines))
-	var cam_pos: Vector3 = cam.global_position
-	var fwd := Vector3(-cam.global_transform.basis.z.x, 0.0,
-		-cam.global_transform.basis.z.z)
-	if fwd.length() < 0.01:
-		fwd = Vector3(0.0, 0.0, -1.0)
-	fwd = fwd.normalized()
-	var pos: Vector3 = cam_pos + fwd * INSERT_DIST_M
-	pos.y = clampf(cam_pos.y - 0.12, 0.9, 1.75)
-	insert_root.global_transform = Transform3D(Basis(), pos).looking_at(
-		pos + fwd, Vector3.UP)
+	insert_root.global_transform = scoreboard_transform()
 	insert_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	insert_root.visible = true
 
