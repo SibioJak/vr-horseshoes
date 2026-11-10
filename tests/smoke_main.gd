@@ -2373,10 +2373,20 @@ func _run() -> void:
 	root.remove_child(m3)
 	m3.free()
 	await frames(3)
-	# (i) Refusals. Out of range first: a squeeze ~2.5 m
-	# from the stocked shoe starts nothing.
+	# (i) Refusals. Fix Pass 34 re-derivation: the shelf
+	# move grew LONG_ARM_RADIUS to 5.10 m, and the old
+	# staged spots (written against 2.15 m) now sit INSIDE
+	# the grown radius of a peg-stocked shoe - so first
+	# home the origin to the 40 ft line (the FP7 (d) idiom)
+	# and let the shoe restock at the SHELF, then stage the
+	# out-of-range hand a measured 6.4 m from wherever the
+	# shoe actually sits.
+	main.origin.global_transform = Transform3D(Basis.IDENTITY,
+		Vector3(0.0, 0.0, main.FOUL_40_Z))
+	check(await wait_shoe_at(40, 3.0) >= 0.0,
+		"FP34: the shoe restocks at the shelf before the refusal legs")
 	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
-		Vector3(spot40.x - 1.2, 0.85, spot40.z + 0.8))
+		main.shoe.global_position + Vector3(4.5, 0.07, 4.5))
 	main.test_grip["R"] = 1.0
 	await create_timer(0.6).timeout
 	check(main.state == "STAND" and main.hop_phase == "" and not main.grab_state.latched,
@@ -2386,18 +2396,32 @@ func _run() -> void:
 	await frames(3)
 	# The AI's pair refuses at ANY range: a hand parked on
 	# the AI's stocked shoe, squeezing - the far tier only
-	# ever measures the player's active shoe.
+	# ever measures the player's active shoe. Fix Pass 34
+	# re-derivation: the shelf moved the player's home NEXT
+	# DOOR to the AI station (the two slots stand 1.9 m
+	# apart), so a squeeze parked there now legitimately
+	# calls the PLAYER's own shoe - the long-arm working as
+	# designed. The refusal under test is the AI pair's, so
+	# stage it with the player's shoe already in hand: the
+	# parked squeeze must then call NOTHING at all.
 	var ai_slot: Vector3 = main.rack_slot_tf(40, true, 0).origin
+	check(await long_arm_grab(main, "R", hand_r40),
+		"FP34: the player's shoe comes to hand before the AI-refusal leg")
 	main.test_hand_tf["L"] = Transform3D(Basis.IDENTITY, ai_slot + Vector3(0.1, 0.07, 0.0))
 	main.test_grip["L"] = 1.0
 	await create_timer(0.6).timeout
-	check(main.state == "STAND" and main.hop_phase == "",
-		"FP25: a squeeze parked on the AI's shoe calls nothing")
+	check(main.state == "HELD" and main.hop_phase == ""
+		and String(main.held_hand) == "R",
+		"FP25: a squeeze parked on the AI's shoe calls nothing (state %s, hop '%s', held by %s)"
+		% [String(main.state), String(main.hop_phase), String(main.held_hand)])
 	check(main.ai_pair[0].global_position.distance_to(ai_slot) < 0.01,
 		"FP25: the AI's shoe never moved")
 	main.test_grip["L"] = 0.0
 	main.test_hand_tf.erase("L")
 	await frames(3)
+	check(await drop_and_restock(main, "R"),
+		"FP34: the refusal leg's shoe drops and restocks")
+	main.test_hand_tf.erase("R")
 	# A round's down shoes refuse: manufacture a tabulating
 	# round (grab disarmed) and squeeze from the spot.
 	manufacture_round()
@@ -2477,28 +2501,31 @@ func _run() -> void:
 	# destroying the staged state), a fresh squeeze from
 	# the 40 ft spot hand.
 	var peg_slot: Vector3 = main.rack_slot_tf(30, false, 0).origin
-	main.shoe.freeze = false
-	main.shoe.sleeping = false
+	# Staged as production keeps a RAILED shoe: frozen on
+	# its slot (the funnel and the gather both freeze).
+	main.shoe.freeze = true
 	main.shoe.global_position = peg_slot
 	main.shoe.linear_velocity = Vector3.ZERO
 	main.shoe.angular_velocity = Vector3.ZERO
-	main.shoe.sleeping = true
 	await frames(3)
+	check(main.shoe.global_position.distance_to(peg_slot) < 0.01,
+		"FP34: the exclusion leg's staging holds - the shoe railed at the peg")
 	main.mode = "GAME"
-	main.round_state = "PITCHING" # so only the exclusion can refuse
+	check(main.grab_armed and main.state == "STAND",
+		"FP34: the grab stands armed for the exclusion leg (so only the exclusion can refuse)")
 	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, hand_r40)
 	main.test_grip["R"] = 1.0
 	await create_timer(0.6).timeout
 	check(main.hop_phase == "" and not main.grab_state.latched
 		and main.shoe.global_position.distance_to(peg_slot) < 0.01,
-		"FP34: in GAME the peg pair refuses a far squeeze from the 40 ft spot (the explicit exclusion; distance alone no longer protects it)")
+		"FP34: in GAME the peg pair refuses a far squeeze from the 40 ft spot (the explicit exclusion; distance alone no longer protects it) (hop '%s', shoe at %s)"
+		% [String(main.hop_phase), str(main.shoe.global_position)])
 	main.test_grip["R"] = 0.0
 	main.test_hand_tf.erase("R")
 	main.mode = "PRACTICE"
-	main.shoe.sleeping = false
 	main.shoe.global_position = main.rack_slot_tf(40, false, 0).origin
 	main.shoe.linear_velocity = Vector3.ZERO
-	main.shoe.sleeping = true
+	main.shoe.freeze = true
 	await frames(3)
 
 	# --- Fix Pass 26: the full circuit - cross-grabs enter

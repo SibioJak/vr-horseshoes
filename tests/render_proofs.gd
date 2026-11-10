@@ -976,6 +976,130 @@ func _run() -> void:
 	check(main.origin.global_position.distance_to(walked) < 0.02,
 		"tracker smooth turn does not translate the origin (moved %.3f m)" % main.origin.global_position.distance_to(walked))
 
+	# --- Proof F34a: THE SHELF at its new home (Fix Pass 34) ---
+	# The player's game station on the grass at the patio's
+	# front-left corner, up against the left bed's near
+	# corner - and from the throwing spot, a 60-degree glance
+	# left puts it in frame: no turnaround.
+	var shelf_slot: Vector3 = main.rack_slot_tf(40, false, 0).origin
+	check(shelf_slot.distance_to(main.SHELF_SLOT0) < 0.01,
+		"FP34 proofs: the game shoes stock at the shelf on the grass")
+	var cam_f34a := Camera3D.new()
+	cam_f34a.fov = 55.0
+	cam_f34a.position = Vector3(0.3, 1.35, -1.9)
+	main.add_child(cam_f34a)
+	cam_f34a.look_at(Vector3(shelf_slot.x, 0.8, shelf_slot.z), Vector3.UP)
+	cam_f34a.current = true
+	await settle(6)
+	await snap(cam_f34a, "res://proofs/proof_shelf.png")
+	# The glance: standing at the spot, head turned 60 deg
+	# left off the pit axis - the shelf sits in frame.
+	cam_f34a.position = Vector3(0.8, 1.62, -0.914)
+	cam_f34a.fov = 70.0
+	cam_f34a.look_at(Vector3(0.8 - 4.33, 1.0, -0.914 - 2.5), Vector3.UP)
+	await settle(4)
+	await snap(cam_f34a, "res://proofs/proof_shelf_glance.png")
+	cam_f34a.queue_free()
+
+	# --- Proof F34b: THE SCOREBOARD hanging over the lane ---
+	# From the throwing spot facing the pit: the board hangs
+	# centred above the lane on its hangers, the stake clear
+	# beneath its bottom edge.
+	main.round_lines = ["YOU 1: RINGER  OPP 1: NO SCORE (30.0 IN)",
+		"RINGER STANDS: +3", "ROUND: YOU +3", "MATCH: YOU 3 - 0 OPP",
+		"NEXT: A CONTINUE  ·  X PLAY AGAIN  ·  B PRACTICE"]
+	main._show_insert()
+	check(main.insert_root.visible
+		and main.insert_root.global_transform.origin.distance_to(
+			main.scoreboard_transform().origin) < 0.001,
+		"FP34 proofs: the board is up at its fixed court transform")
+	var cam_f34b := Camera3D.new()
+	cam_f34b.fov = 55.0
+	cam_f34b.position = Vector3(0.8, 1.62, -0.914)
+	main.add_child(cam_f34b)
+	cam_f34b.look_at(Vector3(0.0, 0.3, -12.19), Vector3.UP)
+	cam_f34b.current = true
+	await settle(6)
+	await snap(cam_f34b, "res://proofs/proof_scoreboard.png")
+	main._hide_insert()
+	cam_f34b.queue_free()
+
+	# --- Proof F34c: A PLANT BENDS (Fix Pass 34) ---
+	# A staged AI-pair flight straight through a left-bed
+	# shrub: standing frame, a dense burst across the hit,
+	# the peak, and the recovered frame. The flight is a
+	# real RigidBody flight registered the production way;
+	# the bend comes from the production flight watch.
+	var bidx: int = -1
+	var bground := Vector3.ZERO
+	for i: int in main.landscape_plant_points.size():
+		var pp: Dictionary = main.landscape_plant_points[i]
+		var g: Vector3 = pp["ground"]
+		if float(pp["flex"]) == 1.0 and float(pp["r"]) >= 0.24 \
+				and g.x < -2.5 and g.z > -8.5 and g.z < -5.0:
+			bidx = i
+			bground = g
+			break
+	check(bidx >= 0, "FP34 proofs: a staging shrub was found in the left bed")
+	if bidx >= 0:
+		# A smaller frame for the burst section: the dense
+		# frames need render rate, and software GL at
+		# 1280x720 only manages ~2 fps here.
+		root.size = Vector2i(640, 360)
+		await settle(4)
+		var cam_f34c := Camera3D.new()
+		cam_f34c.fov = 42.0
+		cam_f34c.position = bground + Vector3(-1.55, 0.5, 1.15)
+		main.add_child(cam_f34c)
+		cam_f34c.look_at(bground + Vector3(0.0, 0.42, 0.0), Vector3.UP)
+		cam_f34c.current = true
+		await settle(6)
+		await snap(cam_f34c, "res://proofs/proof_bend_standing.png")
+		var bs: Shoe = main.ai_pair[1]
+		var bstart: Vector3 = bground + Vector3(-1.7, 0.52, 0.0)
+		var bvel := Vector3(6.5, 0.4, 0.0)
+		bs.freeze = false
+		bs.sleeping = false
+		bs.global_transform = Transform3D(Basis.IDENTITY, bstart)
+		bs.linear_velocity = bvel
+		bs.angular_velocity = Vector3(0.0, 0.0, -9.0)
+		main.shoe_status[bs] = "FLYING"
+		main.ai_flight[bs] = {
+			"fly_time": 0.0, "still_time": 0.0,
+			"pos_still": 0.0, "pos_anchor": bstart,
+			"flip": 0.0, "turn": 0.0,
+			"has_contact": false, "first_contact_pos": Vector3.ZERO,
+			"release": {"basis": Basis.IDENTITY, "pos": bstart,
+				"vel": bvel, "ang": Vector3(0.0, 0.0, -9.0)},
+			"line_ft": 40,
+		}
+		var bend_t0: int = Time.get_ticks_msec()
+		var burst_i: int = 0
+		var peak_ang: float = 0.0
+		var peak_snapped: bool = false
+		while Time.get_ticks_msec() - bend_t0 < 2400:
+			await process_frame
+			var ang: float = absf(main.debug_plant_bend_angle(bidx))
+			peak_ang = maxf(peak_ang, ang)
+			var el: float = float(Time.get_ticks_msec() - bend_t0) / 1000.0
+			if el >= float(burst_i) * 0.1 and burst_i < 24:
+				await snap_image("res://proofs/proof_bend_%02d.png" % burst_i)
+				burst_i += 1
+			if ang > 0.18 and not peak_snapped:
+				peak_snapped = true
+				await snap_image("res://proofs/proof_bend_peak.png")
+		check(peak_ang > 0.15,
+			"FP34 proofs: the struck shrub visibly bent (peak %.2f rad)" % peak_ang)
+		var rec_t: int = 0
+		while main.debug_active_bends() > 0 and rec_t < 40:
+			await create_timer(0.1).timeout
+			rec_t += 1
+		await settle(4)
+		await snap(cam_f34c, "res://proofs/proof_bend_recovered.png")
+		check(main.debug_active_bends() == 0,
+			"FP34 proofs: the shrub sprang back and the spring went idle")
+		cam_f34c.queue_free()
+
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))
 	print("---")
 	if failures == 0:

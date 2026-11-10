@@ -1446,8 +1446,10 @@ func test_impact_fx() -> void:
 	# family - struck rock is a real event, audible at the
 	# line; audio_measure proves it through a genuine throw
 	# into the edging stones.
-	check(ImpactFX.volume_db_for("stone_knock", 0.0) >= -10.0,
-		"Impact FX (FP34): a stone strike knocks audibly even at low speed")
+	check(ImpactFX.volume_db_for("stone_knock", 0.0) >= -15.0
+		and ImpactFX.volume_db_for("stone_knock", 1.0)
+			< ImpactFX.volume_db_for("stake_clang", 1.0),
+		"Impact FX (FP34): a stone strike knocks audibly yet stays under the clang")
 	check(ImpactFX.pitch_for("stone_knock", 0.5) >= 0.94
 		and ImpactFX.pitch_for("stone_knock", 0.5) <= 1.05,
 		"Impact FX (FP34): the stone knock pitches inside the clang jitter band")

@@ -105,12 +105,17 @@ static func volume_db_for(event: String, strength: float) -> float:
 			return lerpf(-6.0, -0.5, s)
 		"grass_thud":
 			return lerpf(-13.0, -5.0, s)
-		# Fix Pass 34: the stone knock - a strike event like
-		# the wood knock, floored at the clang's band: the
-		# mining clip's transient is a hard spike (struck
-		# rock), so it carries like the clang, not the wood.
+		# Fix Pass 34: the stone knock - a strike event, but
+		# floored BELOW the clang's band: the mining clip's
+		# transient is a hard spike, and its first measured
+		# floor (-9..-1.5) put a line-side stone strike at
+		# the limiter ceiling (-4.0 dBFS), dwarfing the
+		# ringer (-13.5 at the line). Stones ring the whole
+		# yard and take hits every game, so the knock sits
+		# present-but-subordinate: clear of the wood knock,
+		# under the clang.
 		"stone_knock":
-			return lerpf(-9.0, -1.5, s)
+			return lerpf(-14.0, -6.0, s)
 	return -12.0
 
 

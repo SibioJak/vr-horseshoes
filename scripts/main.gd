@@ -3502,7 +3502,6 @@ func _process(_delta: float) -> void:
 	_poll_buttons()
 	_process_fire(_delta) # Stage B: flicker, only while lit
 	_process_birds(_delta) # Stage B: crossings, long gaps apart
-	_process_plant_bends(_delta) # Fix Pass 34: springs back, idle-cost zero
 	_track_hand_speed("L")
 	_track_hand_speed("R")
 	if state == "HELD":
@@ -4099,7 +4098,10 @@ func _bend_plant(idx: int, dir: Vector3, flat_speed: float) -> void:
 	_plant_last_hit[idx] = now
 	var pp: Dictionary = landscape_plant_points[idx]
 	var axis := Vector3(dir.z, 0.0, -dir.x)
-	var kick: float = clampf(flat_speed * 0.55, 2.0, 5.2) * float(pp["flex"])
+	# The kick scale: a game-speed hit must read as a CLEAR
+	# bend, not a tremble (Chris's words) - 0.85 puts a
+	# 6.5 m/s shrub hit's peak near half a radian.
+	var kick: float = clampf(flat_speed * 0.85, 2.6, 7.0) * float(pp["flex"])
 	if _plant_bends.has(idx):
 		var b: Dictionary = _plant_bends[idx]
 		b["vel"] = float(b["vel"]) + kick * 0.5
@@ -4110,7 +4112,7 @@ func _bend_plant(idx: int, dir: Vector3, flat_speed: float) -> void:
 
 
 ## The plant springs: a damped spring per bending plant,
-## integrated in _process and written into that plant's
+## integrated in _physics_process and written into that plant's
 ## MultiMesh instance as a rotation about its ground point.
 ## Runs only while at least one plant bends - the dict is
 ## empty in ordinary play, so the idle cost is one is_empty.
@@ -4214,6 +4216,11 @@ func _physics_process(delta: float) -> void:
 	_guard_origin_level()
 	_restock_to_player_line()
 	_landscape_flight_watch() # Fix Pass 34: stones knock, plants bend
+	# Fix Pass 34: the bend spring integrates HERE, at the
+	# fixed physics rate - in _process its explicit-Euler
+	# step went numerically soft at low render rates (the
+	# Xvfb proof peaked 0.06 rad instead of ~0.45).
+	_process_plant_bends(delta)
 	if state == "HELD":
 		_add_sample()
 		shoe.global_transform = _hand_tf(held_hand) * rel_tf
