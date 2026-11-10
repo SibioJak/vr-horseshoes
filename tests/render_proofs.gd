@@ -590,11 +590,11 @@ func _run() -> void:
 	main.set_time_of_day("NOON")
 	await settle(4)
 
-	# --- Impact Dressing: plume mid-flight, divots, rake ---
+	# --- Impact Dressing: plume mid-flight; FP37: dents ---
 	# One camera over the pit. The plume is fired through
 	# the FX debug hook and caught within its ~1 s life; the
-	# divots are stamped by the same hook the smoke suite
-	# uses, then the restock funnel rakes them away.
+	# pit's marks are then staged as real dents (the decal
+	# divots retired in FP37) and raked away by the funnel.
 	var cam_i := Camera3D.new()
 	cam_i.fov = 55.0
 	cam_i.position = Vector3(1.7, 1.6, -10.4)
@@ -615,33 +615,63 @@ func _run() -> void:
 				grain_px += 1
 	check(grain_px > 12,
 		"Impact Dressing: the plume reads as dry-sand grains in flight (%d samples)" % grain_px)
-	var divot_spots: Array = [
-		Vector3(-0.25, 0.03, -11.95), Vector3(0.18, 0.03, -12.30),
-		Vector3(0.02, 0.03, -12.55), Vector3(-0.12, 0.03, -12.15),
-		Vector3(0.30, 0.03, -11.80)]
-	for di: int in divot_spots.size():
-		var dpos: Vector3 = divot_spots[di]
-		main.fx.debug_surface_impact(ImpactFX.KIND_SAND, dpos,
-			Vector3(0.0, -3.0, -6.0), 0.55 + 0.1 * float(di))
-	# Let the stamping plumes die (~1 s life) so the frame
-	# shows the MARKS, not the moment.
+	# Fix Pass 37: the pit's marks are real DENTS now. A
+	# punch-in and a skid staged through main's production
+	# stamp hooks, a buried-vs-on-top rest pair through its
+	# production sink, then the rake. The plume above gets
+	# its ~1 s life to die first, so the frames show the
+	# MARKS, not the moment (the old divot section's rule).
 	await create_timer(1.4).timeout
 	await settle(2)
-	check(main.fx.divot_count() == 5,
-		"Impact Dressing: five landings leave five marks in the pit (%d)"
-		% main.fx.divot_count())
-	var img_divots: Image = await snap_image("res://proofs/divots_pit.png")
-	var dv_px: Vector2 = cam_i.unproject_position(divot_spots[1])
-	var dv_region: Vector2 = region_stats(img_divots, int(dv_px.x), int(dv_px.y), 14)
+	var crater_pos := Vector3(0.18, 0.03, -12.30)
+	main.debug_sand_crater(crater_pos, 0.95)
+	await settle(2)
+	check(main.sand_surface().depth_at(crater_pos) > 0.008,
+		"Sand depth (FP37): a staged punch-in dents the pit (%.4f m)"
+			% main.sand_surface().depth_at(crater_pos))
+	var img_crater: Image = await snap_image("res://proofs/sand_crater.png")
+	var cr_px: Vector2 = cam_i.unproject_position(crater_pos)
+	main.debug_sand_furrow(Vector3(-0.32, 0.03, -11.80),
+		Vector3(0.28, 0.03, -12.02), 1.0)
+	await settle(2)
+	check(main.sand_surface().depth_at(Vector3(-0.02, 0.03, -11.91)) > 0.003,
+		"Sand depth (FP37): a staged skid plows its furrow (%.4f m)"
+			% main.sand_surface().depth_at(Vector3(-0.02, 0.03, -11.91)))
+	await snap_image("res://proofs/sand_furrow.png")
+	# The rest pair: a full-strength stamp buries its shoe;
+	# a soft one leaves its shoe on top. Both staged frozen
+	# through main's production sink path.
+	var rest_pair: Array = []
+	var rest_specs: Array = [
+		[Vector3(0.22, 0.02, -12.45), 0.5, 1.0],
+		[Vector3(-0.24, 0.02, -11.90), -0.4, 0.1],
+	]
+	for rs: Array in rest_specs:
+		var rshoe := Shoe.new()
+		main.add_child(rshoe)
+		rshoe.freeze = true
+		rshoe.global_transform = Transform3D(
+			Basis(Vector3.UP, float(rs[1])), rs[0])
+		rshoe.debug_set_flight_sand_strength(float(rs[2]))
+		rest_pair.append(rshoe)
+	await settle(2)
+	var sunk_hard: float = main._sink_settled_shoe(rest_pair[0])
+	var sunk_soft: float = main._sink_settled_shoe(rest_pair[1])
+	check(sunk_hard > 0.014 and sunk_soft < 0.002,
+		"Sand depth (FP37): the hard arrival sinks %.4f m, the soft one %.4f m"
+			% [sunk_hard, sunk_soft])
+	await settle(2)
+	await snap_image("res://proofs/sand_rest.png")
+	for rshoe2: Variant in rest_pair:
+		(rshoe2 as Shoe).queue_free()
 	main._gather_to_rail(40)
 	await settle(4)
-	check(main.fx.divot_count() == 0,
-		"Impact Dressing: the restock rakes every mark away")
-	var img_raked: Image = await snap_image("res://proofs/divots_raked.png")
-	var rk_region: Vector2 = region_stats(img_raked, int(dv_px.x), int(dv_px.y), 14)
-	check(rk_region.x > dv_region.x + 0.005,
-		"Impact Dressing: a divot reads darker than the same sand raked clean (lum %.3f vs %.3f)"
-		% [dv_region.x, rk_region.x])
+	check(main.sand_surface().max_abs_height() < 0.0001,
+		"Sand depth (FP37): the restock rake flattens every dent")
+	var img_raked: Image = await snap_image("res://proofs/sand_raked.png")
+	check(region_mean_diff(img_crater, img_raked, cr_px, 20) > 0.01,
+		"Sand depth (FP37): the crater visibly reads against the same sand raked flat (diff %.3f)"
+			% region_mean_diff(img_crater, img_raked, cr_px, 20))
 	cam_i.queue_free()
 
 	# --- Fix Pass 32: the plume at DUSK, dense frames ---
@@ -674,9 +704,17 @@ func _run() -> void:
 	# slow frames land where they land - the best frame is
 	# the evidence) and what shows must be warm sand, not
 	# white sparks.
-	var burst_best: int = maxi(changed_px(img_pb1, img_pbase, p_px, 0.24),
-		maxi(changed_px(img_pb2, img_pbase, p_px, 0.24),
-			changed_px(img_pb3, img_pbase, p_px, 0.24)))
+	# Fix Pass 37 recalibration: the visibility census counts
+	# at a 0.15 delta, not 0.24. The burst is unchanged, but
+	# its backdrop is - FP37 made the pit floor the sand's
+	# true bright tan (the deformable surface), replacing
+	# the darker apron sheet that used to cover it, so
+	# sand grains over sand differ by less per pixel than
+	# sand over apron did. (The spark and warmth censuses
+	# below keep their 0.24 threshold untouched.)
+	var burst_best: int = maxi(changed_px(img_pb1, img_pbase, p_px, 0.15),
+		maxi(changed_px(img_pb2, img_pbase, p_px, 0.15),
+			changed_px(img_pb3, img_pbase, p_px, 0.15)))
 	check(burst_best > 100,
 		"Fix Pass 32: at dusk the burst is plainly visible over the pit (%d changed samples)"
 		% burst_best)

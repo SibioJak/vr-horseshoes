@@ -1447,6 +1447,73 @@ func test_fp36_layout() -> void:
 		"FP34: the scoreboard's bottom edge clears the stake sightline (%.3f rad over %.3f)" % [dep_panel, dep_stake])
 
 
+func test_sand_depth() -> void:
+	# Fix Pass 37 - SAND DEPTH, the unit level: the sink
+	# mapping's shape and the deformable surface's stamp
+	# rules (crater + lip, the stake guard, the furrow, the
+	# rake). The behaviour level - real arrivals sinking by
+	# class, a buried ringer still scoring - is the arrival
+	# rig and the smoke suite.
+	check(is_zero_approx(Shoe.sink_depth_for_strength(0.0)),
+		"Sand depth (FP37): no strength, no sink")
+	check(is_equal_approx(Shoe.sink_depth_for_strength(1.0), Shoe.SINK_MAX),
+		"Sand depth (FP37): full strength sinks the full %.3f m" % Shoe.SINK_MAX)
+	var prev_d: float = -1.0
+	var mono: bool = true
+	for si: int in 9:
+		var dd: float = Shoe.sink_depth_for_strength(float(si) / 8.0)
+		if dd < prev_d:
+			mono = false
+		prev_d = dd
+	check(mono, "Sand depth (FP37): sink grows monotonically with strength")
+	check(Shoe.sink_depth_for_strength(0.15) < 0.003,
+		"Sand depth (FP37): a soft arrival (0.15) rests essentially on top")
+	var surf := SandSurface.new()
+	root.add_child(surf)
+	var sand_mat := StandardMaterial3D.new()
+	sand_mat.albedo_color = Color(0.76, 0.66, 0.47)
+	surf.build(Vector3(0.0, 0.002, -12.192), Vector2(0.914, 1.829),
+		Vector2(0.0, -12.192), sand_mat)
+	await process_frame
+	var gs: Dictionary = surf.grid_stats()
+	check(int(gs["verts"]) == 1128 and int(gs["tris"]) == 2116,
+		"Sand depth (FP37): the pit surface is a 24x47 grid (%d verts, %d tris)"
+			% [int(gs["verts"]), int(gs["tris"])])
+	check(is_zero_approx(surf.max_abs_height()),
+		"Sand depth (FP37): a fresh surface is flat")
+	var cp := Vector3(0.25, 0.002, -12.0)
+	surf.stamp_crater(cp, 0.16, 0.012)
+	check(surf.depth_at(cp) > 0.009,
+		"Sand depth (FP37): a crater's floor is at its stamped depth (%.4f)"
+			% surf.depth_at(cp))
+	check(surf.depth_at(cp + Vector3(0.16 * 1.35, 0.0, 0.0)) < -0.001,
+		"Sand depth (FP37): the crater raises a lip beside it")
+	# The stake guard: a crater centred ON the stake leaves
+	# its base untouched; the same stamp lands fully beyond
+	# the guard ring.
+	surf.rake()
+	surf.stamp_crater(Vector3(0.0, 0.002, -12.192), 0.20, 0.016)
+	check(surf.depth_at(Vector3(0.0, 0.002, -12.192)) < 0.001,
+		"Sand depth (FP37): the stake's base is never dented")
+	surf.rake()
+	surf.stamp_crater(Vector3(0.0, 0.002, -11.85), 0.16, 0.012)
+	check(surf.depth_at(Vector3(0.0, 0.002, -11.85)) > 0.009,
+		"Sand depth (FP37): the same stamp lands fully beyond the guard")
+	# A furrow along a skid, and only along it.
+	surf.rake()
+	surf.stamp_furrow(Vector3(-0.2, 0.002, -12.6), Vector3(0.2, 0.002, -12.6),
+		0.10, 0.012)
+	check(surf.depth_at(Vector3(0.0, 0.002, -12.6)) > 0.004,
+		"Sand depth (FP37): a skid plows a furrow (%.4f)"
+			% surf.depth_at(Vector3(0.0, 0.002, -12.6)))
+	check(surf.depth_at(Vector3(0.0, 0.002, -12.0)) < 0.001,
+		"Sand depth (FP37): the furrow stays on its line")
+	surf.rake()
+	check(is_zero_approx(surf.max_abs_height()) and surf.stamp_count == 0,
+		"Sand depth (FP37): the rake flattens the pit and clears the stamp count")
+	surf.queue_free()
+
+
 func test_impact_fx() -> void:
 	# Impact Dressing Pass: routing, scaling, pooling, lifecycle.
 	var events: Array = ["sand_thud", "stake_clang", "shoe_clink", "ringer",
@@ -1482,22 +1549,32 @@ func test_impact_fx() -> void:
 		"Impact FX: the audio pool is pre-allocated (%d players)" % ImpactFX.PLAYER_COUNT)
 	fx_node.debug_surface_impact(ImpactFX.KIND_SAND,
 		Vector3(0.0, 0.02, -12.19), Vector3(0.0, -3.0, -6.0), 0.9)
-	check(fx_node.divot_count() == 1, "Impact FX: a sand impact stamps one divot")
+	# Fix Pass 37: a sand impact stamps NO decal divot - in
+	# the pit the mark is a real dent in the deformable sand
+	# surface (main stamps it; the SandSurface checks below
+	# and the smoke suite prove that path). The decal pool
+	# now serves the lawn alone.
+	check(fx_node.divot_count() == 0,
+		"Impact FX (FP37): a sand impact stamps no decal - its mark is the dent")
 	check(fx_node.play_log.size() == 1
 		and String(fx_node.play_log[0]["event"]) == "sand_thud",
 		"Impact FX: a sand impact routes the thud")
 	fx_node.debug_surface_impact(ImpactFX.KIND_TURF,
 		Vector3(1.0, 0.0, -6.0), Vector3(0.0, -2.0, -4.0), 0.9)
-	check(fx_node.divot_count() == 2, "Impact FX: a grass impact stamps a scuff too")
+	check(fx_node.divot_count() == 1,
+		"Impact FX (FP37): a grass impact stamps its scuff - the decal's remaining surface")
 	# Fix Pass 33: grass has its OWN sound now - Chris's
 	# FP32 field test heard a lawn landing as silence. The
 	# grass thud is its own event/file, never the sand thud.
 	check(fx_node.play_log.size() == 2
 		and String(fx_node.play_log[1]["event"]) == "grass_thud",
 		"Impact FX (FP33): a grass impact routes its own soft thud")
+	# Fix Pass 37: the cap/recycle contract is exercised on
+	# the lawn now - the pit's marks are dents, uncapped by
+	# the decal pool.
 	for i: int in 40:
-		fx_node.surface_impact(ImpactFX.KIND_SAND,
-			Vector3(0.1 * float(i % 5), 0.02, -12.0), Vector3(0.0, -3.0, -6.0), 0.5)
+		fx_node.surface_impact(ImpactFX.KIND_TURF,
+			Vector3(0.1 * float(i % 5), 0.0, -6.0), Vector3(0.0, -3.0, -6.0), 0.5)
 	check(fx_node.divot_count() == ImpactFX.DIVOT_CAP,
 		"Impact FX: divots cap at %d and the oldest recycle" % ImpactFX.DIVOT_CAP)
 	fx_node.play_event("ringer", Vector3.ZERO, 1.0)
@@ -1560,17 +1637,20 @@ func test_impact_fx() -> void:
 			lim_found = true
 	check(lim_found,
 		"Impact FX (FP32): a master-bus limiter caps stacked ringside impacts")
-	# Fix Pass 32: one plume per flight. A later episode of the
-	# same landing stamps its divot but fires NO second burst
-	# (the bounce re-fires were the lingering sparkle cluster).
+	# Fix Pass 32: one plume per flight. A later episode of
+	# the same landing stamps its mark but fires NO second
+	# burst (the bounce re-fires were the lingering sparkle
+	# cluster). Fix Pass 37: the mark half is exercised on
+	# the lawn - in the pit the later episode's mark is its
+	# dent, proven through main in the smoke suite.
 	var fires0: int = fx_node.debug_plume_fire_count()
 	var div0: int = fx_node.divot_count()
-	fx_node.surface_impact(ImpactFX.KIND_SAND,
-		Vector3(0.0, 0.02, -12.19), Vector3(0.0, -3.0, -6.0), 0.9, false)
+	fx_node.surface_impact(ImpactFX.KIND_TURF,
+		Vector3(0.0, 0.0, -6.0), Vector3(0.0, -3.0, -6.0), 0.9, false)
 	check(fx_node.debug_plume_fire_count() == fires0,
 		"Impact FX (FP32): a later-episode impact fires no second plume")
 	check(fx_node.divot_count() == div0 + 1,
-		"Impact FX (FP32): a later-episode impact still stamps its divot")
+		"Impact FX (FP32): a later-episode impact still stamps its mark")
 	fx_node.surface_impact(ImpactFX.KIND_SAND,
 		Vector3(0.0, 0.02, -12.19), Vector3(0.0, -3.0, -6.0), 0.9, true)
 	check(fx_node.debug_plume_fire_count() == fires0 + 1,
@@ -1601,6 +1681,7 @@ func _run() -> void:
 	test_stage_b_layout()
 	test_stage_b_light()
 	test_fp36_layout()
+	await test_sand_depth()
 	var shoe_node := Shoe.new()
 	root.add_child(shoe_node)
 	await physics_frame

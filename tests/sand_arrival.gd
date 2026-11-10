@@ -69,6 +69,11 @@ func _find_pit_bodies() -> void:
 func _run_arrival(shoe_node: Shoe, rel: Dictionary) -> Dictionary:
 	_pit_contact_seen = false
 	_pit_contact_origin = Vector3.ZERO
+	# Fix Pass 37: a faithful release resets the guard AND
+	# the absorption/flight-stamp state, exactly as main's
+	# release paths do (reset_stake_guard) - without it the
+	# flight's sand stamp bleeds across arrivals.
+	shoe_node.reset_stake_guard()
 	shoe_node.freeze = true
 	shoe_node.global_transform = Transform3D(rel["basis"], rel["pos"])
 	shoe_node.linear_velocity = Vector3.ZERO
@@ -141,8 +146,24 @@ func _run_arrival(shoe_node: Shoe, rel: Dictionary) -> Dictionary:
 			or absf(settled_pos.z - main.STAKE_POS.z) > 0.914)
 		if squash_min < INF and rise_peak > 0.0:
 			rise_m = maxf(0.0, rise_peak - squash_min)
+	# Fix Pass 37: run the production sink (main's settle
+	# helper) and read the law's number - how far the shoe's
+	# lowest point ends below the sand plane (0.002). on_sand
+	# marks a rest ON the sand itself (not perched on the
+	# stake, a frame, or out on the lawn), read before sinking.
+	var pen: float = -1.0
+	var on_sand: bool = false
+	var fstr: float = shoe_node.flight_sand_strength()
+	if have_contact:
+		var low0: float = shoe_node.lowest_point_y()
+		on_sand = main._sand_surface_at(settled_pos) != null \
+			and low0 >= 0.002 - 0.006 and low0 <= 0.002 + 0.008
+		main._sink_settled_shoe(shoe_node)
+		pen = 0.002 - shoe_node.lowest_point_y()
 	return {"contact": have_contact, "bounce_m": bounce_m,
-		"rise_m": rise_m, "travel_m": travel, "left_pit": left_pit}
+		"rise_m": rise_m, "travel_m": travel, "left_pit": left_pit,
+		"pen_m": pen, "strength": fstr, "on_sand": on_sand,
+		"settled": settled_pos}
 
 
 func _sorted_stat(values: Array, frac: float) -> float:
@@ -202,10 +223,13 @@ func _run() -> void:
 		{"name": "GAME", "flight_t": 1.40, "reps": 3},
 		{"name": "HARD", "flight_t": 1.19, "reps": 2},
 	]
+	var pen_med: Dictionary = {}
 	for class_def: Dictionary in classes:
 		var bounces: Array = []
 		var rises: Array = []
 		var travels: Array = []
+		var pens: Array = []
+		var strs: Array = []
 		var contacts: int = 0
 		var ejections: int = 0
 		var total: int = 0
@@ -228,21 +252,102 @@ func _run() -> void:
 					bounces.append(float(res["bounce_m"]))
 					rises.append(float(res["rise_m"]))
 					travels.append(float(res["travel_m"]))
+					if bool(res["on_sand"]):
+						pens.append(float(res["pen_m"]))
+						strs.append(float(res["strength"]))
 					if bool(res["left_pit"]):
 						ejections += 1
 				# Park the shoe clear of the lane for the next one.
 				shoe_node.global_transform = Transform3D(Basis.IDENTITY,
 					Vector3(3.0, 0.4, -6.0))
 		if contacts > 0:
-			print("SAND ARRIVAL [%s] %s: arrivals %d, pit contacts %d, bounce med %.3f p90 %.3f max %.3f m, rise med %.3f p90 %.3f max %.3f m, travel med %.3f p90 %.3f max %.3f m, ejections %d" % [
+			var pen_line: String = "pen n/a"
+			if not pens.is_empty():
+				pen_med[String(class_def["name"])] = _sorted_stat(pens, 0.5)
+				pen_line = "pen med %.4f (n %d, strength med %.2f)" % [
+					_sorted_stat(pens, 0.5), pens.size(),
+					_sorted_stat(strs, 0.5)]
+			print("SAND ARRIVAL [%s] %s: arrivals %d, pit contacts %d, bounce med %.3f p90 %.3f max %.3f m, rise med %.3f p90 %.3f max %.3f m, travel med %.3f p90 %.3f max %.3f m, ejections %d, %s" % [
 				label, String(class_def["name"]), total, contacts,
 				_sorted_stat(bounces, 0.5), _sorted_stat(bounces, 0.9),
 				_sorted_stat(bounces, 1.0),
 				_sorted_stat(rises, 0.5), _sorted_stat(rises, 0.9),
 				_sorted_stat(rises, 1.0),
 				_sorted_stat(travels, 0.5), _sorted_stat(travels, 0.9),
-				_sorted_stat(travels, 1.0), ejections])
+				_sorted_stat(travels, 1.0), ejections, pen_line])
 		else:
 			print("SAND ARRIVAL [%s] %s: NO pit contact in %d arrivals" % [
 				label, String(class_def["name"]), total])
+	# Fix Pass 37 - THE LAW'S OWN CLASSES: arrivals kept by
+	# the sand stamp they actually recorded (the FP23 impact
+	# strength of their first sand episode). A direct pit
+	# strike saturates the stamp, so SOFT arrivals are
+	# stake-struck drops (aimed at the iron, energy shed on
+	# it) and MED are grazes and clips from the same lane -
+	# the arrivals real play produces at the soft end.
+	var pen_classes: Array = [
+		{"name": "SOFT", "lo": 0.0, "hi": 0.35, "aims": [
+			{"aim": Vector3(main.STAKE_POS.x, main.STAKE_POS.y,
+				main.STAKE_POS.z), "t": 1.22, "jx": 0.05, "jz": 0.12},
+		]},
+		# MED arrivals: real play makes them by deflection
+		# (stake grazes shed either ~all or ~nothing - too
+		# binary to sample), so the rig makes them the other
+		# honest way: a shorter flight from midway, whose
+		# arrival speed at the sand IS mid-band (0.35..0.75
+		# of the strength scale = 5.1..8.1 m/s). The class
+		# measures the sand's answer to a mid-strength
+		# impact, which is the law's question. A back-timber
+		# clip family rides along for variety.
+		{"name": "MED", "lo": 0.35, "hi": 0.75, "aims": [
+			{"from": Vector3(from_pos.x, from_pos.y, -6.67),
+				"aim": Vector3(main.STAKE_POS.x + 0.15, main.STAKE_POS.y,
+					main.STAKE_POS.z + 0.20),
+				"t": 0.90, "jx": 0.08, "jz": 0.15},
+			{"from": Vector3(from_pos.x, from_pos.y, -6.67),
+				"aim": Vector3(main.STAKE_POS.x - 0.10, main.STAKE_POS.y,
+					main.STAKE_POS.z - 0.25),
+				"t": 0.97, "jx": 0.08, "jz": 0.15},
+			{"aim": Vector3(main.STAKE_POS.x, main.STAKE_POS.y,
+				main.STAKE_POS.z - 0.86), "t": 1.22, "jx": 0.25, "jz": 0.10},
+		]},
+	]
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 37037
+	for pc: Dictionary in pen_classes:
+		var pens2: Array = []
+		var strs2: Array = []
+		var attempts: int = 0
+		while pens2.size() < 8 and attempts < 48:
+			attempts += 1
+			var fam: Dictionary = (pc["aims"] as Array)[attempts % (pc["aims"] as Array).size()]
+			var aim2: Vector3 = fam["aim"]
+			aim2.x += rng.randf_range(-float(fam["jx"]), float(fam["jx"]))
+			aim2.z += rng.randf_range(-float(fam["jz"]), float(fam["jz"]))
+			var from2: Vector3 = fam["from"] if fam.has("from") else from_pos
+			var rel2: Dictionary = _ballistic(from2, aim2, float(fam["t"]))
+			var res2: Dictionary = await _run_arrival(shoe_node, rel2)
+			shoe_node.global_transform = Transform3D(Basis.IDENTITY,
+				Vector3(3.0, 0.4, -6.0))
+			if not bool(res2["contact"]) or not bool(res2["on_sand"]):
+				continue
+			var st2: float = float(res2["strength"])
+			if st2 < float(pc["lo"]) or st2 >= float(pc["hi"]):
+				continue
+			pens2.append(float(res2["pen_m"]))
+			strs2.append(st2)
+		if pens2.is_empty():
+			print("SAND PEN [%s] %s: NO arrivals kept in %d attempts" % [
+				label, String(pc["name"]), attempts])
+		else:
+			pen_med[String(pc["name"])] = _sorted_stat(pens2, 0.5)
+			print("SAND PEN [%s] %s: kept %d of %d attempts, strength med %.2f, penetration med %.4f m min %.4f max %.4f" % [
+				label, String(pc["name"]), pens2.size(), attempts,
+				_sorted_stat(strs2, 0.5), _sorted_stat(pens2, 0.5),
+				_sorted_stat(pens2, 0.0), _sorted_stat(pens2, 1.0)])
+	print("SAND PEN [%s] SUMMARY: SOFT med %s / MED med %s / HARD med %s - the law wants SOFT < MED < HARD" % [
+		label,
+		("%.4f m" % float(pen_med["SOFT"])) if pen_med.has("SOFT") else "n/a",
+		("%.4f m" % float(pen_med["MED"])) if pen_med.has("MED") else "n/a",
+		("%.4f m" % float(pen_med["HARD"])) if pen_med.has("HARD") else "n/a"])
 	quit(0)

@@ -1478,8 +1478,12 @@ func _run() -> void:
 		main.fx.debug_surface_impact(ImpactFX.KIND_SAND,
 			Vector3(0.15 * float(k), 0.02, -12.05 + 0.2 * float(k)),
 			Vector3(0.0, -3.0, -6.0), 0.95)
-	check(main.fx.divot_count() == 3,
-		"Impact Dressing: sand landings accumulate divots in the pit (%d)"
+	# Fix Pass 37: sand landings stamp NO decal divots - in
+	# the pit the mark is a real dent in the deformable sand
+	# surface (stamped by main, proven in the latch section
+	# below). The decal pool serves the lawn alone now.
+	check(main.fx.divot_count() == 0,
+		"Impact Dressing (FP37): sand landings stamp no decals - their mark is the dent (%d)"
 		% main.fx.divot_count())
 	var thuds1: int = 0
 	for e1: Dictionary in main.fx.play_log:
@@ -1489,8 +1493,8 @@ func _run() -> void:
 		"Impact Dressing: each sand landing routes its thud (%d -> %d)" % [thuds0, thuds1])
 	main.fx.debug_surface_impact(ImpactFX.KIND_TURF,
 		Vector3(1.2, 0.0, -6.0), Vector3(0.0, -2.0, -4.0), 0.8)
-	check(main.fx.divot_count() == 4,
-		"Impact Dressing: a grass landing adds its lighter scuff")
+	check(main.fx.divot_count() == 1,
+		"Impact Dressing (FP37): a grass landing adds its lighter scuff - the decal's remaining surface")
 	var thuds2: int = 0
 	var grass_thuds: int = 0
 	for e2: Dictionary in main.fx.play_log:
@@ -1504,33 +1508,83 @@ func _run() -> void:
 		"Impact Dressing (FP33): a grass landing sounds its own soft thud")
 	# The in-flight gate: the same impact reported while the
 	# shoe is NOT flying (at rest / held / hopping) is refused.
+	# Fix Pass 37: the staged point sits off-stake, where a
+	# leaked stamp WOULD dent - the surface must not move.
 	var divots_before_gate: int = main.fx.divot_count()
+	var depth_before_gate: float = main.sand_surface().max_abs_height()
 	main._on_surface_impact(Shoe.ABSORB_SAND,
-		Vector3(0.0, 0.02, -12.19), Vector3(0.0, -3.0, -6.0), 0.95, main.shoe)
-	check(main.fx.divot_count() == divots_before_gate,
-		"Impact Dressing: a resting shoe raises no plume, divot, or thud")
+		Vector3(0.25, 0.02, -12.0), Vector3(0.0, -3.0, -6.0), 0.95, main.shoe)
+	check(main.fx.divot_count() == divots_before_gate
+		and is_equal_approx(main.sand_surface().max_abs_height(), depth_before_gate),
+		"Impact Dressing: a resting shoe raises no plume, divot, dent, or thud")
 	# Fix Pass 32: the one-plume-per-flight latch, through
 	# main's own handler: two absorption episodes inside one
-	# flight fire ONE plume but stamp BOTH divots (the bounce
-	# re-fires were the lingering sparkle cluster).
+	# flight fire ONE plume but stamp BOTH marks (the bounce
+	# re-fires were the lingering sparkle cluster). Fix Pass
+	# 37: in the pit the mark is a DENT - both episodes punch
+	# their own crater, staged off-stake where the stake
+	# guard lets dents land.
 	var state_was: String = main.state
 	main.state = "FLYING"
 	main._plume_flown[main.shoe] = false
 	var latch_fires0: int = main.fx.debug_plume_fire_count()
 	var latch_div0: int = main.fx.divot_count()
 	main._on_surface_impact(Shoe.ABSORB_SAND,
-		Vector3(0.0, 0.02, -12.19), Vector3(0.0, -3.0, -6.0), 0.95, main.shoe)
+		Vector3(-0.25, 0.02, -11.95), Vector3(0.0, -3.0, -6.0), 0.95, main.shoe)
 	main._on_surface_impact(Shoe.ABSORB_SAND,
-		Vector3(0.05, 0.02, -12.10), Vector3(0.0, -2.0, -4.0), 0.40, main.shoe)
+		Vector3(0.30, 0.02, -12.50), Vector3(0.0, -2.0, -4.0), 0.40, main.shoe)
 	check(main.fx.debug_plume_fire_count() == latch_fires0 + 1,
 		"Impact Dressing (FP32): two episodes in one flight fire ONE plume")
-	check(main.fx.divot_count() == latch_div0 + 2,
-		"Impact Dressing (FP32): both episodes still stamp their divots")
+	check(main.fx.divot_count() == latch_div0
+		and main.sand_surface().depth_at(Vector3(-0.25, 0.02, -11.95)) > 0.004
+		and main.sand_surface().depth_at(Vector3(0.30, 0.02, -12.50)) > 0.002,
+		"Impact Dressing (FP37): both episodes still stamp their mark - a dent each, no decals")
 	main.state = state_was
 	# The rake: the restock funnel cleans the pit.
 	main._gather_to_rail(40)
 	check(main.fx.divot_count() == 0,
 		"Impact Dressing: restock rakes the pit clean for the next round")
+	check(main.sand_surface().max_abs_height() < 0.0001,
+		"Impact Dressing (FP37): the same restock flattens the pit's dents")
+	# Fix Pass 37: THE SINK + SCORING. A shoe staged around
+	# the stake with a full-strength flight stamp sinks the
+	# full depth through main's production settle helper -
+	# and the game's own measures still call it a ringer,
+	# because both read horizontally. A point shoe keeps its
+	# exact distance through the same sink.
+	var sh37: Shoe = main.shoe
+	sh37.freeze = true
+	sh37.global_transform = Transform3D(Basis.IDENTITY,
+		Vector3(main.STAKE_POS.x, 0.02, main.STAKE_POS.z))
+	await physics_frame
+	var at37 := Vector3(main.STAKE_POS.x, sh37.global_position.y,
+		main.STAKE_POS.z)
+	var ring_pre: bool = ThrowMath.is_ringer(sh37.global_transform, at37,
+		Shoe.RINGER_INNER_HALF, Shoe.RINGER_Z_MIN, Shoe.RINGER_Z_MAX)
+	sh37.debug_set_flight_sand_strength(1.0)
+	var sunk37: float = main._sink_settled_shoe(sh37)
+	check(ring_pre and sunk37 > 0.014,
+		"FP37 sink: a full-strength arrival at the stake sinks (%.4f m)" % sunk37)
+	var at37b := Vector3(main.STAKE_POS.x, sh37.global_position.y,
+		main.STAKE_POS.z)
+	check(ThrowMath.is_ringer(sh37.global_transform, at37b,
+			Shoe.RINGER_INNER_HALF, Shoe.RINGER_Z_MIN, Shoe.RINGER_Z_MAX),
+		"FP37 scoring: a half-buried ringer still registers as a ringer")
+	sh37.global_transform = Transform3D(Basis.IDENTITY,
+		Vector3(main.STAKE_POS.x + 0.32, 0.02, main.STAKE_POS.z))
+	await physics_frame
+	var at37c := Vector3(main.STAKE_POS.x, sh37.global_position.y,
+		main.STAKE_POS.z)
+	var dist_pre37: float = ThrowMath.nearest_distance_inches(
+		sh37.global_transform, at37c, Shoe.WIDTH * 0.5, Shoe.LENGTH * 0.5)
+	main._sink_settled_shoe(sh37)
+	var at37d := Vector3(main.STAKE_POS.x, sh37.global_position.y,
+		main.STAKE_POS.z)
+	check(absf(ThrowMath.nearest_distance_inches(sh37.global_transform,
+			at37d, Shoe.WIDTH * 0.5, Shoe.LENGTH * 0.5) - dist_pre37) < 0.01,
+		"FP37 scoring: a buried point shoe measures its true distance (%.2f in)"
+			% dist_pre37)
+	main._gather_to_rail(40)
 	# A full game at DUSK: manufactured rounds (the win
 	# probes' method) to 21 - the game must complete under
 	# dusk light, with the insert carrying its breakdown.
