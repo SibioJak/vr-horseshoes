@@ -304,13 +304,18 @@ func _build_players() -> void:
 ## a bouncing shoe's come-downs still stamp their divot and
 ## thud, but the plume is one burst per landing, never a
 ## re-fired sparkle cluster at the pit.
+## Fix Pass 37: with_divot=false for SAND - in the pit the
+## mark is a real dent in the deformable sand surface now
+## (main stamps it from the same impact), and the decal
+## would double-draw under it. Lawn scuffs keep the decal.
 func surface_impact(kind: int, pos: Vector3, vel: Vector3, strength: float,
-		with_plume: bool = true) -> void:
+		with_plume: bool = true, with_divot: bool = true) -> void:
 	var flat := Vector3(vel.x, 0.0, vel.z)
 	var dir: Vector3 = flat.normalized() if flat.length() > 0.1 else Vector3(0.0, 0.0, -1.0)
 	if with_plume:
 		_fire_plume(kind, pos, dir, strength)
-	_stamp_divot(kind, pos, dir, strength)
+	if with_divot:
+		_stamp_divot(kind, pos, dir, strength)
 	impact_log.append({"kind": kind, "strength": strength,
 		"pos": pos, "radius": divot_radius_for(kind, strength)})
 	if impact_log.size() > 96:
@@ -427,8 +432,11 @@ func play_event(event: String, pos: Vector3, strength: float) -> void:
 ## Test/proof hooks: stage the full dressing for one impact
 ## (plume + divot + the surface's sound) without a throw, and
 ## a plume alone caught mid-flight for the proof frame.
+## Fix Pass 37: the staging follows the production rule - a
+## sand impact stamps no decal divot (its mark is the dent
+## main stamps in the pit's surface).
 func debug_surface_impact(kind: int, pos: Vector3, vel: Vector3, strength: float) -> void:
-	surface_impact(kind, pos, vel, strength)
+	surface_impact(kind, pos, vel, strength, true, kind != KIND_SAND)
 	if kind == KIND_SAND:
 		play_event("sand_thud", pos, strength)
 	elif kind == KIND_TURF:

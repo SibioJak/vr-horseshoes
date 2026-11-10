@@ -229,6 +229,16 @@ var _plant_bends: Dictionary = {} # plant idx -> {ang, vel, axis}
 var _plant_last_hit: Dictionary = {} # plant idx -> msec
 var _stone_last_hit: Dictionary = {} # "shoeId:stoneIdx" -> msec
 
+# Fix Pass 37 - SAND DEPTH: each pit's deformable sand
+# surface (scripts/sand_surface.gd), built in _build_pit.
+# Layer 1 (the sink) and Layer 2 (the dents) hang off these;
+# Layer 3 (depth-graded drag) lives in shoe.gd's absorption.
+var sand_surfaces: Array = [] # of SandSurface, one per pit
+var _furrow_last: Dictionary = {} # Shoe -> Vector3, last furrow stamp point
+const SAND_REST_CRATER_R: float = 0.16 # rest crater under a settled shoe
+const SAND_FURROW_W: float = 0.10 # furrow width across a skid
+const SAND_FURROW_STEP: float = 0.03 # min skid travel between furrow stamps
+
 var state: String = "STAND" # STAND, HELD, FLYING, DROPPED, RETURNING
 var grab_state := GrabState.new()
 var held_hand: String = ""
@@ -1244,6 +1254,34 @@ func _build_world() -> void:
 	# behaviour is the judged one (see shoe.gd).
 	var ground_body: StaticBody3D = _static_box(Vector3(0.0, -0.05, -6.0), Vector3(40.0, 0.1, 48.0), _mat(Color(0.32, 0.52, 0.26)), ground_phys)
 	ground_body.add_to_group("turf")
+	# Fix Pass 37: the ground BODY is untouched (it underlies
+	# the pit and its behaviour there is judged - see above),
+	# but its box MESH no longer draws. The slab's top face
+	# runs under the pit only 2 mm below the sand plane, so
+	# every real dent (up to 45 mm) punched through to lawn
+	# green. The lawn now draws as four visual boxes around
+	# a hole at the pit footprint, plus a dark sand lining
+	# under the pit at -48 mm (below the deepest dent the
+	# surface allows), so a crater's floor reads as deep
+	# shadowed sand, never lawn. Visual only, all of it.
+	for gch: Node in ground_body.get_children():
+		if gch is MeshInstance3D:
+			(gch as MeshInstance3D).visible = false
+	var lawn_mat := _mat(Color(0.32, 0.52, 0.26))
+	var hole_x0: float = STAKE_POS.x - PIT_SIZE.x * 0.5
+	var hole_x1: float = STAKE_POS.x + PIT_SIZE.x * 0.5
+	var hole_z0: float = STAKE_POS.z - PIT_SIZE.z * 0.5
+	var hole_z1: float = STAKE_POS.z + PIT_SIZE.z * 0.5
+	_box(self, Vector3((-20.0 + hole_x0) * 0.5, -0.05, -6.0),
+		Vector3(hole_x0 + 20.0, 0.1, 48.0), lawn_mat)
+	_box(self, Vector3((20.0 + hole_x1) * 0.5, -0.05, -6.0),
+		Vector3(20.0 - hole_x1, 0.1, 48.0), lawn_mat)
+	_box(self, Vector3(STAKE_POS.x, -0.05, (-30.0 + hole_z0) * 0.5),
+		Vector3(PIT_SIZE.x, 0.1, hole_z0 + 30.0), lawn_mat)
+	_box(self, Vector3(STAKE_POS.x, -0.05, (18.0 + hole_z1) * 0.5),
+		Vector3(PIT_SIZE.x, 0.1, 18.0 - hole_z1), lawn_mat)
+	_box(self, Vector3(STAKE_POS.x, -0.073, STAKE_POS.z),
+		Vector3(PIT_SIZE.x, 0.05, PIT_SIZE.z), _mat(Color(0.45, 0.38, 0.26)))
 
 	# Fix Pass 19: ONE pit - the real backyard form (Chris's
 	# call, verified against NHPA geometry): one timber sand
@@ -1339,19 +1377,52 @@ func _build_pit(stake_pos: Vector3, key: String) -> void:
 	var sand_mat := StandardMaterial3D.new()
 	sand_mat.albedo_color = Color(0.76, 0.66, 0.47)
 	sand_mat.roughness = 1.0
+	# Fix Pass 37: the deformable surface tints its vertices
+	# (hollows shaded, lips lit) so dents read in flat light.
+	sand_mat.vertex_color_use_as_albedo = true
 	var sand_body: StaticBody3D = _static_box(pit_pos, PIT_SIZE, sand_mat, sand_phys)
 	sand_body.add_to_group("sand")
+	# Fix Pass 37: the body's own box mesh no longer draws.
+	# The pit's visible face is the deformable SandSurface
+	# built below - the body keeps the collision and the
+	# physics material, nothing else.
+	for sch: Node in sand_body.get_children():
+		if sch is MeshInstance3D:
+			(sch as MeshInstance3D).visible = false
 	# The box zone's apron (Fix Pass 19): regulation puts the
 	# pit inside a 6 ft x 6 ft pitcher's box with platforms
-	# flanking it LEVEL with the pit top. Here that whole zone
-	# is one flat sheet of worn apron at grade - standing
-	# beside this pit reads as standing on the ground, because
-	# it is the ground. (It replaces Stage 1's big spilled-sand
-	# surround, which read as part of the pit and put the
-	# "standing in a pit" feeling under the player's feet at
-	# the old home end.)
-	_box(self, Vector3(stake_pos.x, 0.004, stake_pos.z),
-		Vector3(1.83, 0.008, 1.83), _mat(Color(0.60, 0.57, 0.38)))
+	# flanking it LEVEL with the pit top. (It replaces Stage
+	# 1's big spilled-sand surround, which read as part of
+	# the pit and put the "standing in a pit" feeling under
+	# the player's feet at the old home end.)
+	# Fix Pass 37: the apron is now two SIDE STRIPS, level
+	# with the sand face (+2 mm, its own proud convention).
+	# The FP19 sheet ran 6 mm PROUD of the sand across the
+	# whole zone - it covered the pit's own face, and
+	# real-play divot decals stamped at physics height sat
+	# under it (only the staged proofs, placed high, showed
+	# them). The pit interior belongs to the sand surface.
+	var apron_mat := _mat(Color(0.60, 0.57, 0.38))
+	var strip_w: float = (1.83 - PIT_SIZE.x) * 0.5
+	for sx2: float in [-1.0, 1.0]:
+		_box(self, Vector3(stake_pos.x + sx2 * (PIT_SIZE.x * 0.5
+			+ strip_w * 0.5), stake_pos.y - 0.002, stake_pos.z),
+			Vector3(strip_w, 0.008, 1.83), apron_mat)
+	# The deformable sand face (Fix Pass 37, Layer 2): a
+	# heightfield over the footprint at the physics top
+	# plane. Guarded against a double build at one stake.
+	var have_surf: bool = false
+	for es: Variant in sand_surfaces:
+		if (es as SandSurface).global_position.distance_to(
+				Vector3(stake_pos.x, stake_pos.y + 0.002, stake_pos.z)) < 0.01:
+			have_surf = true
+	if not have_surf:
+		var surf := SandSurface.new()
+		surf.build(Vector3(stake_pos.x, stake_pos.y + 0.002, stake_pos.z),
+			Vector2(PIT_SIZE.x, PIT_SIZE.z),
+			Vector2(stake_pos.x, stake_pos.z), sand_mat)
+		add_child(surf)
+		sand_surfaces.append(surf)
 	# Timber frame, SUNK TO GRADE (Fix Pass 19): two courses
 	# of weathered railroad ties on the pit border, the lower
 	# course buried (its top at grade), one course standing
@@ -4307,17 +4378,134 @@ func _on_surface_impact(kind: int, pos: Vector3, vel: Vector3,
 	# still stamp their divot and sound their (softer) thud.
 	var first_of_flight: bool = not bool(_plume_flown.get(shoe_node, false))
 	_plume_flown[shoe_node] = true
-	fx.surface_impact(kind, pos, vel, strength, first_of_flight)
+	# Fix Pass 37: a sand contact stamps its CRATER in the
+	# pit's deformable surface (same impact, same stamp -
+	# the crater depth is the sink-depth mapping), and the
+	# decal divot stands down in the pit so the two never
+	# double-draw. The lawn keeps its decal scuff.
+	if kind == Shoe.ABSORB_SAND:
+		_stamp_sand_crater(pos, strength)
+	fx.surface_impact(kind, pos, vel, strength, first_of_flight,
+		kind != Shoe.ABSORB_SAND)
 	if kind == Shoe.ABSORB_SAND:
 		fx.play_event("sand_thud", pos, strength)
 	elif kind == Shoe.ABSORB_TURF:
 		fx.play_event("grass_thud", pos, strength)
 
 
+# --- Fix Pass 37: sand depth (Layers 1 + 2) ---
+
+## The pit surface a world point stands over, or null.
+func _sand_surface_at(p: Vector3) -> SandSurface:
+	for sv: Variant in sand_surfaces:
+		var surf := sv as SandSurface
+		if surf.contains_xz(p):
+			return surf
+	return null
+
+
+## The one pit's surface (this court has one pit; the park
+## will ask by point). Test/proof surface.
+func sand_surface() -> SandSurface:
+	if sand_surfaces.is_empty():
+		return null
+	return sand_surfaces[0] as SandSurface
+
+
+## An arrival's punch-in, stamped from its impact strength:
+## crater radius follows the dressing's sand-divot sizing,
+## crater depth IS the sink-depth mapping (one stamp).
+func _stamp_sand_crater(pos: Vector3, strength: float) -> void:
+	var surf := _sand_surface_at(pos)
+	if surf == null:
+		return
+	surf.stamp_crater(pos,
+		ImpactFX.divot_radius_for(ImpactFX.KIND_SAND, strength),
+		Shoe.sink_depth_for_strength(strength))
+
+
+## While a shoe is flying and touching sand, plow its
+## furrow: consecutive contact points become segments in
+## the surface. Runs beside the FP34 landscape watch; the
+## shoe's own feed (sand_touching / sand_touch_pos) is the
+## only input - no colliders, no physics reads.
+func _sand_flight_watch() -> void:
+	var flyers: Array = []
+	if state == "FLYING" and shoe != null:
+		flyers.append(shoe)
+	for key: Variant in ai_flight.keys():
+		flyers.append(key as Shoe)
+	# Drop track of shoes no longer flying.
+	for old: Variant in _furrow_last.keys():
+		if not flyers.has(old):
+			_furrow_last.erase(old)
+	for f: Variant in flyers:
+		var fs := f as Shoe
+		if not fs.sand_touching:
+			_furrow_last.erase(fs)
+			continue
+		var p: Vector3 = fs.sand_touch_pos
+		var surf := _sand_surface_at(p)
+		if surf == null:
+			_furrow_last.erase(fs)
+			continue
+		if _furrow_last.has(fs):
+			var last: Vector3 = _furrow_last[fs]
+			if Vector2(p.x - last.x, p.z - last.z).length() >= SAND_FURROW_STEP:
+				var d: float = Shoe.sink_depth_for_strength(
+					fs.sand_episode_strength()) * 0.5
+				if d > 0.0005:
+					surf.stamp_furrow(last, p, SAND_FURROW_W, d)
+				_furrow_last[fs] = p
+		else:
+			_furrow_last[fs] = p
+
+
+## Layer 1 - THE SINK, at a settle path: a shoe whose
+## flight touched sand and which has come to rest ON the
+## sand ends buried as deep as its arrival earned. The
+## rest crater is stamped first (same depth), then the
+## shoe drops into it, attitude kept. Scoring has already
+## read the physics rest (and measures horizontally
+## anyway); the gather lifts the shoe out with everything
+## else, transform absolute. Returns the depth sunk.
+func _sink_settled_shoe(s: Shoe) -> float:
+	var depth: float = s.pending_sink_depth()
+	if depth <= 0.0:
+		return 0.0
+	var surf := _sand_surface_at(s.global_position)
+	if surf == null:
+		return 0.0
+	# Resting ON the sand? The lowest point must sit in the
+	# surface's own band - a shoe down on the frame, the
+	# stake, or another shoe rests higher and stays out.
+	var low: float = s.lowest_point_y()
+	if low > surf.top_y() + 0.012 or low < surf.top_y() - 0.008:
+		return 0.0
+	surf.stamp_crater(s.global_position, SAND_REST_CRATER_R, depth)
+	s.apply_sand_sink(depth)
+	_furrow_last.erase(s)
+	return depth
+
+
+## Proof/test hooks: the production stamps, staged.
+func debug_sand_crater(pos: Vector3, strength: float) -> void:
+	_stamp_sand_crater(pos, strength)
+
+
+func debug_sand_furrow(a: Vector3, b: Vector3, strength: float) -> void:
+	var surf := _sand_surface_at(a)
+	if surf == null:
+		return
+	surf.stamp_furrow(a, b, SAND_FURROW_W,
+		Shoe.sink_depth_for_strength(strength) * 0.5)
+
+
 func _physics_process(delta: float) -> void:
 	_guard_origin_level()
 	_restock_to_player_line()
 	_landscape_flight_watch() # Fix Pass 34: stones knock, plants bend
+	_sand_flight_watch() # Fix Pass 37: skids plow their furrows
 	# Fix Pass 34: the bend spring integrates HERE, at the
 	# fixed physics rate - in _process its explicit-Euler
 	# step went numerically soft at low render rates (the
@@ -4423,6 +4611,11 @@ func _settle_throw() -> void:
 	last_turn_rev = turn_rot
 	last_ringer = ringer
 	_update_board()
+	# Fix Pass 37: the sink - scoring has read the physics
+	# rest above; the shoe now settles INTO the sand by the
+	# depth its arrival earned, before the record is written
+	# (the record keeps the true final rest).
+	_sink_settled_shoe(shoe)
 	var vel: Vector3 = release_cache["velocity"]
 	var ang: Vector3 = release_cache["angular_velocity"]
 	var origin_at_release: Vector3 = release_cache["origin_pos"]
@@ -4516,6 +4709,11 @@ func _gather_to_rail(line_ft: int) -> void:
 	# practice) funnels through this function.
 	if fx != null:
 		fx.clear_marks()
+	# Fix Pass 37: the rake is literal now - the deformable
+	# sand goes back to flat with the decals.
+	for sv2: Variant in sand_surfaces:
+		(sv2 as SandSurface).rake()
+	_furrow_last.clear()
 	# Fix Pass 25: end any hop first - the gather below seats
 	# every shoe itself, and a live hop would fight it for
 	# its shoe. (The hop's own guard aborts on the state
@@ -4971,6 +5169,10 @@ func _settle_ai_shoe(s: Shoe) -> void:
 		# here, the only place an AI ringer is named.
 		fx.play_event("ringer", s.global_position, 1.0)
 	s.freeze = true
+	# Fix Pass 37: the AI's shoe sinks by the same law -
+	# scoring read the physics rest above; the record below
+	# keeps the true final (sunken) rest.
+	_sink_settled_shoe(s)
 	shoe_status[s] = "DOWN"
 	throw_count += 1
 	last_hold_text = "FLIP (TOE)"

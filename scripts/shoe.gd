@@ -115,9 +115,36 @@ var _absorb_steps: int = 0
 var _absorb_strength: float = 0.0
 var _absorb_kind: int = 0 # ABSORB_* of the running episode
 var _prev_lv := Vector3.ZERO # velocity on the previous step (pre-contact at a touchdown)
+var _prev2_lv := Vector3.ZERO # Fix Pass 37: the step before that - the impact-speed history (see _absorb_surface)
 
 const ABSORB_SAND: int = 1
 const ABSORB_TURF: int = 2
+
+# Fix Pass 37 - SAND DEPTH. Three layers on the FP23 path:
+# (1) SINK - the flight's sand stamp (the FIRST sand
+# episode's impact strength) sets how deep the shoe ends up
+# buried when it settles in the pit (main calls
+# apply_sand_sink at its settle paths; the mapping lives
+# here so the arrival rig reads the same numbers).
+# (2) DENTS - main stamps the pit's deformable surface from
+# the same stamp (crater depth == sink depth, so the shoe
+# rests IN its crater) and plows furrows from the contact
+# feed below (sand_touch_pos while sand_touching).
+# (3) DEPTH-GRADED DRAG - during a sand episode the linear
+# continuation cut grows with the episode's virtual
+# penetration depth instead of arriving as one flat rate:
+# the depth starts at the impact's plunge fraction (a steep
+# arrival is deep at once) and grows while the shoe stays
+# in contact, so a glancing shoe plows - bleeding speed
+# across its skid - before the sand takes it.
+var _flight_sand_strength: float = -1.0 # -1 = no sand yet this flight
+var _absorb_depth: float = 0.0 # running sand episode's penetration, 0..1
+var sand_touch_pos := Vector3.ZERO # latest sand contact point this step
+var sand_touching: bool = false # a sand contact exists this step
+
+const SINK_MAX: float = 0.016 # m of rest sink at full strength (of 21 mm bar)
+const SAND_DRAG_FLOOR: float = 0.30 # continuation drag at zero depth, x FP23 rate
+const SAND_DEPTH_GROWTH: float = 0.14 # penetration gained per contact step
 
 # Sand profile: ~0.17 s of dig-in at 60 Hz; the impact
 # window is a game arrival's speed range.
@@ -386,6 +413,11 @@ func reset_stake_guard() -> void:
 	_absorb_episode = false
 	_absorb_steps = 0
 	_absorb_kind = 0
+	# Fix Pass 37: a new flight carries no sand stamp yet.
+	_flight_sand_strength = -1.0
+	_absorb_depth = 0.0
+	sand_touching = false
+	_prev2_lv = Vector3.ZERO
 
 
 func _axis_closest(p: Vector3) -> Vector3:
@@ -496,6 +528,16 @@ func _in_box_zone(pos: Vector3) -> bool:
 func _absorb_surface(state: PhysicsDirectBodyState3D) -> void:
 	var pos: Vector3 = state.transform.origin
 	var in_zone: bool = _in_box_zone(pos)
+	# Fix Pass 37: the latest sand contact this step - main's
+	# furrow watch reads it, and the depth growth below keys
+	# on the contact persisting.
+	sand_touching = false
+	for ci0: int in state.get_contact_count():
+		var obj0: Object = state.get_contact_collider_object(ci0)
+		if obj0 != null and (obj0 as Node).is_in_group("sand"):
+			sand_touching = true
+			sand_touch_pos = state.get_contact_collider_position(ci0)
+			break
 	var touch_kind: int = 0
 	for ci: int in state.get_contact_count():
 		var obj: Object = state.get_contact_collider_object(ci)
@@ -528,9 +570,52 @@ func _absorb_surface(state: PhysicsDirectBodyState3D) -> void:
 		_absorb_episode = true
 		_absorb_kind = touch_kind
 		_absorb_steps = 0
+		# Fix Pass 37: the impact velocity is read from a
+		# TWO-STEP history. At game speed the shoe penetrates
+		# deep in a single step and the solver crushes its
+		# velocity in that same solve, while the contact only
+		# becomes visible here on the FOLLOWING call - by
+		# which time _prev_lv already holds the crushed
+		# value (measured on the FP37 trace: 10.90 -> 1.32
+		# across the blind step, episode strength 0.0 on a
+		# full-speed arrival). The longer of the last two
+		# end-of-step velocities is the true pre-impact
+		# speed: in free flight they differ by ~0.1 m/s.
+		var impact_lv: Vector3 = _prev_lv \
+			if _prev_lv.length() >= _prev2_lv.length() else _prev2_lv
 		_absorb_strength = clampf(
-			(_prev_lv.length() - soft) / (full - soft), 0.0, 1.0)
-		if enabled and _absorb_strength > 0.0:
+			(impact_lv.length() - soft) / (full - soft), 0.0, 1.0)
+		if touch_kind == ABSORB_SAND:
+			# Fix Pass 37: the FIRST sand episode of the
+			# flight fixes the flight's sand stamp - later
+			# episodes are the same arrival rattling down,
+			# weaker by construction. The episode's virtual
+			# depth starts at the plunge fraction: a steep
+			# arrival is already deep; a flat skid starts
+			# shallow and digs as it plows.
+			if _flight_sand_strength < 0.0:
+				_flight_sand_strength = _absorb_strength
+			var spd: float = maxf(impact_lv.length(), 0.0001)
+			_absorb_depth = clampf(-impact_lv.y / spd, 0.0, 1.0)
+		# Fix Pass 37 note: the cut is scaled by the TRUE
+		# impact strength (the two-step history above). An
+		# earlier FP37 build gated this cut off whenever the
+		# solver had already crushed the state speed in the
+		# blind step; the arrival rig judged the gate a
+		# regression (HARD bounce med 0.007 ungated -> 0.141
+		# gated) and the ungated lines improved on FP23
+		# across the board, so the cut stands as FP23 wrote
+		# it - only its strength measure was repaired.
+		# One exemption, also FP37: while the stake guard's
+		# verdict is PENDING (its two-step window), the shoe
+		# is still the stake's - a sand contact at the base
+		# in that window must not eat the velocity the
+		# guard's replay is about to spend, or dead-on
+		# arrivals stop wrapping (the smoke suite's scripted
+		# ringer settled as a point shoe). The window is at
+		# most two steps; the episode's continuation cuts
+		# are unaffected.
+		if enabled and _absorb_strength > 0.0 and _guard_pending.is_empty():
 			state.linear_velocity *= 1.0 - cut_lin * _absorb_strength
 			state.angular_velocity *= 1.0 - cut_ang * _absorb_strength
 		if impact_callback.is_valid():
@@ -548,7 +633,7 @@ func _absorb_surface(state: PhysicsDirectBodyState3D) -> void:
 						or (touch_kind == ABSORB_TURF and node2.is_in_group("turf")):
 					cpos = state.get_contact_collider_position(ci2)
 					break
-			impact_callback.call(touch_kind, cpos, _prev_lv, _absorb_strength)
+			impact_callback.call(touch_kind, cpos, impact_lv, _absorb_strength)
 	if _absorb_episode:
 		_absorb_steps += 1
 		var ep_steps: int = SAND_ABSORB_STEPS if _absorb_kind == ABSORB_SAND \
@@ -570,9 +655,90 @@ func _absorb_surface(state: PhysicsDirectBodyState3D) -> void:
 				and _absorb_steps > 1 and _absorb_steps <= ep_steps:
 			# Continuation: the dig-in finishes over the next
 			# few steps, contact or micro-bounce alike.
-			state.linear_velocity *= 1.0 - cont_lin * _absorb_strength
+			# Fix Pass 37 (sand only): the LINEAR rate is
+			# graded by the episode's penetration depth -
+			# SAND_DRAG_FLOOR of the FP23 rate at the
+			# surface, the full rate once the shoe is deep.
+			# The angular rate is NOT graded: the corner's
+			# grab is what vaults a tumbling shoe, and FP23
+			# killed the vault with the flat angular cut.
+			var lin_rate: float = cont_lin
+			if _absorb_kind == ABSORB_SAND:
+				if touch_kind == ABSORB_SAND:
+					_absorb_depth = clampf(
+						_absorb_depth + SAND_DEPTH_GROWTH, 0.0, 1.0)
+				lin_rate = cont_lin * (SAND_DRAG_FLOOR
+					+ (1.0 - SAND_DRAG_FLOOR) * _absorb_depth)
+			state.linear_velocity *= 1.0 - lin_rate * _absorb_strength
 			state.angular_velocity *= 1.0 - cont_ang * _absorb_strength
+	_prev2_lv = _prev_lv
 	_prev_lv = state.linear_velocity
+
+
+# --- Fix Pass 37: the sand-depth surface main reads ---
+
+## The flight's sand stamp: the first sand episode's impact
+## strength, or -1 if the flight never touched sand.
+func flight_sand_strength() -> float:
+	return _flight_sand_strength
+
+
+## The running sand episode's strength (the furrow watch
+## grades its depth by the live dig, not the settled stamp).
+func sand_episode_strength() -> float:
+	if _absorb_episode and _absorb_kind == ABSORB_SAND:
+		return _absorb_strength
+	return 0.0
+
+
+## Impact strength -> rest sink / crater depth (m). One
+## mapping for the sink and the dent, by law: the shoe sits
+## IN the crater its own arrival dug. The 1.25 knee keeps a
+## soft arrival essentially on top; a full-strength arrival
+## ends buried to ~3/4 of the bar.
+static func sink_depth_for_strength(s: float) -> float:
+	return SINK_MAX * pow(clampf(s, 0.0, 1.0), 1.25)
+
+
+## The sink this shoe has earned, from its flight stamp.
+func pending_sink_depth() -> float:
+	if _flight_sand_strength <= 0.0:
+		return 0.0
+	return sink_depth_for_strength(_flight_sand_strength)
+
+
+## Drop the shoe straight down by `depth`, attitude kept -
+## the low side stays down; only the sand closes over it.
+## Called by main at its settle paths, after scoring has
+## read the physics rest (distances are horizontal anyway).
+func apply_sand_sink(depth: float) -> void:
+	if depth <= 0.0:
+		return
+	global_transform = Transform3D(global_transform.basis,
+		global_position + Vector3(0.0, -depth, 0.0))
+
+
+## The shoe's lowest collision point, world y. Settle-time
+## geometry: is the shoe resting on a surface, and how far
+## under it has it ended up (the arrival rig's penetration
+## measure reads this after the sink).
+func lowest_point_y() -> float:
+	var low: float = INF
+	for ch: Node in get_children():
+		if ch is CollisionShape3D:
+			var cs := ch as CollisionShape3D
+			if cs.shape == null:
+				continue
+			var aabb: AABB = cs.global_transform \
+				* cs.shape.get_debug_mesh().get_aabb()
+			low = minf(low, aabb.position.y)
+	return low
+
+
+## Test hook (the render proofs stage a buried-vs-on-top
+## pair through main's production sink path).
+func debug_set_flight_sand_strength(s: float) -> void:
+	_flight_sand_strength = s
 
 
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
