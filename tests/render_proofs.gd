@@ -976,70 +976,98 @@ func _run() -> void:
 	check(main.origin.global_position.distance_to(walked) < 0.02,
 		"tracker smooth turn does not translate the origin (moved %.3f m)" % main.origin.global_position.distance_to(walked))
 
-	# --- Proof F35a: THE SHELF in front of the fountain ---
-	# (Fix Pass 35, Chris's correction of FP34: "one shelf
-	# need to be in front of fountain there; the other on
-	# the oppsing side.") The player's game station on the
-	# grass patch at the fountain's latitude, the fountain
-	# directly behind it - and from the throwing spot, a
-	# glance left along its bearing puts it in frame: no
-	# turnaround.
+	# --- Proof F36a: THE SHELF on the player's OWN side ---
+	# (Fix Pass 36, the Shelf War Treaty. FP35 built the
+	# two corner stations at the fountain's latitude but
+	# assigned each to the owner across the lane; Chris's
+	# verdict: "Player shelf is on wrong side. AI shelf is
+	# on wrong side. switch em." So: the player's shelf on
+	# HIS side (+x), the AI's station on its side (-x), IN
+	# FRONT OF THE FOUNTAIN - the fountain directly behind
+	# the AI's station now.)
 	var shelf_slot: Vector3 = main.rack_slot_tf(40, false, 0).origin
 	check(shelf_slot.distance_to(main.SHELF_SLOT0) < 0.01,
-		"FP35 proofs: the game shoes stock at the shelf in front of the fountain")
+		"FP36 proofs: the player's game shoes stock at his shelf slot")
 	var ai_slot: Vector3 = main.rack_slot_tf(40, true, 0).origin
 	check(ai_slot.distance_to(main.AI_SLOT0) < 0.01,
-		"FP35 proofs: the AI's game shoes stock at its station on the opposing side")
-	check(absf(shelf_slot.z - main.STAGE_B_FOUNTAIN_POS.z) < 0.01
-		and shelf_slot.x > main.STAGE_B_FOUNTAIN_POS.x,
-		"FP35 proofs: the shelf stands in front of the fountain, at its latitude")
+		"FP36 proofs: the AI's game shoes stock at its station slot")
+	check(shelf_slot.x > 0.0 and ai_slot.x < 0.0,
+		"FP36 proofs: OWNERSHIP - the player's shelf stands on HIS side (+x), the AI's on its side (-x)")
+	check(absf(ai_slot.z - main.STAGE_B_FOUNTAIN_POS.z) < 0.01
+		and ai_slot.x > main.STAGE_B_FOUNTAIN_POS.x,
+		"FP36 proofs: the AI station stands in front of the fountain, at its latitude - the fountain behind IT now")
 	check(absf(ai_slot.x + shelf_slot.x) < 0.01
 		and absf(ai_slot.z - shelf_slot.z) < 0.01,
-		"FP35 proofs: the two stations mirror across the lane axis")
-	var cam_f35a := Camera3D.new()
-	cam_f35a.fov = 55.0
-	cam_f35a.position = Vector3(0.2, 1.5, -0.4)
-	main.add_child(cam_f35a)
-	cam_f35a.look_at(Vector3(shelf_slot.x, 0.8, shelf_slot.z), Vector3.UP)
-	cam_f35a.current = true
+		"FP36 proofs: the two stations mirror across the lane axis")
+	# The stocked pairs themselves, per owner: each pair
+	# hangs at its own station wearing its owner's colour -
+	# the fact the plan frame below has to SHOW. Stage it
+	# through the production gather (the Impact Dressing
+	# section's idiom) so the pairs stand stocked whatever
+	# the earlier proofs left lying around.
+	main._gather_to_rail(40)
+	await settle(4)
+	for pi: int in 2:
+		var pshoe: Shoe = main.player_pair[pi]
+		check(pshoe.global_position.distance_to(
+				main.rack_slot_tf(40, false, pi).origin) < 0.01
+			and pshoe.tint == main.PLAYER_PAIR_COLOR,
+			"FP36 proofs: the player's yellow shoe %d hangs at HIS shelf (+2.14)" % pi)
+		var ashoe: Shoe = main.ai_pair[pi]
+		check(ashoe.global_position.distance_to(
+				main.rack_slot_tf(40, true, pi).origin) < 0.01
+			and ashoe.tint == main.AI_PAIR_COLOR,
+			"FP36 proofs: the AI's blue shoe %d hangs at ITS station (-2.14, in front of the fountain)" % pi)
+	var cam_f36a := Camera3D.new()
+	cam_f36a.fov = 55.0
+	cam_f36a.position = Vector3(0.2, 1.5, -0.4)
+	main.add_child(cam_f36a)
+	cam_f36a.look_at(Vector3(shelf_slot.x, 0.8, shelf_slot.z), Vector3.UP)
+	cam_f36a.current = true
 	await settle(6)
-	await snap(cam_f35a, "res://proofs/proof_shelf.png")
+	await snap(cam_f36a, "res://proofs/proof_shelf.png")
 	# The glance: standing at the spot, head turned along
-	# the shelf's own bearing (79 deg off the pit axis).
-	cam_f35a.position = Vector3(0.8, 1.62, -0.914)
-	cam_f35a.fov = 70.0
-	cam_f35a.look_at(Vector3(shelf_slot.x, 0.85, shelf_slot.z), Vector3.UP)
+	# the shelf's own bearing (66 deg off the pit axis) -
+	# a glance RIGHT now, to his own side.
+	cam_f36a.position = Vector3(0.8, 1.62, -0.914)
+	cam_f36a.fov = 70.0
+	cam_f36a.look_at(Vector3(shelf_slot.x, 0.85, shelf_slot.z), Vector3.UP)
 	await settle(4)
-	await snap(cam_f35a, "res://proofs/proof_shelf_glance.png")
-	cam_f35a.queue_free()
+	await snap(cam_f36a, "res://proofs/proof_shelf_glance.png")
+	cam_f36a.queue_free()
 
-	# --- Proof F35b: THE PLAN - both stations from above ---
-	# Straight down on the pitching end: the shelf in front
-	# of the fountain on the left, the AI's station mirrored
-	# on the right, the patio's two front corners between
-	# them.
-	var cam_f35b := Camera3D.new()
-	cam_f35b.fov = 50.0
-	cam_f35b.position = Vector3(0.0, 12.0, -1.1)
-	main.add_child(cam_f35b)
-	cam_f35b.look_at(Vector3(0.0, 0.0, -1.1), Vector3(0.0, 0.0, -1.0))
-	cam_f35b.current = true
+	# --- Proof F36b: THE PLAN - both stations, OWNED ---
+	# High oblique from the house side (a straight-down
+	# plan hid FP35's pairs under the top shelves - two
+	# boxes, no owners; that gap is part of why this pass
+	# exists): the player's shelf on the RIGHT of frame
+	# with his YELLOW pair hanging on it, the AI's station
+	# on the LEFT with its BLUE pair, the fountain directly
+	# behind the AI's station, the patio's two front
+	# corners between them.
+	var cam_f36b := Camera3D.new()
+	cam_f36b.fov = 50.0
+	cam_f36b.position = Vector3(0.0, 9.5, 3.4)
+	main.add_child(cam_f36b)
+	cam_f36b.look_at(Vector3(0.0, 0.0, -1.55), Vector3.UP)
+	cam_f36b.current = true
 	await settle(6)
-	await snap(cam_f35b, "res://proofs/proof_stations_plan.png")
-	cam_f35b.queue_free()
+	await snap(cam_f36b, "res://proofs/proof_stations_plan.png")
+	cam_f36b.queue_free()
 
-	# --- Proof F35c: THE AI'S SHELF from the AI's spot ---
+	# --- Proof F36c: THE AI'S STATION from the AI's spot ---
 	# The mirrored glance: from the AI's throwing spot, its
-	# station abeam outboard on the opposing side.
-	var cam_f35c := Camera3D.new()
-	cam_f35c.fov = 70.0
-	cam_f35c.position = Vector3(-0.8, 1.62, -0.914)
-	main.add_child(cam_f35c)
-	cam_f35c.look_at(Vector3(ai_slot.x, 0.85, ai_slot.z), Vector3.UP)
-	cam_f35c.current = true
+	# station abeam outboard on ITS OWN side, the fountain
+	# directly behind it.
+	var cam_f36c := Camera3D.new()
+	cam_f36c.fov = 70.0
+	cam_f36c.position = Vector3(-0.8, 1.62, -0.914)
+	main.add_child(cam_f36c)
+	cam_f36c.look_at(Vector3(ai_slot.x, 0.85, ai_slot.z), Vector3.UP)
+	cam_f36c.current = true
 	await settle(4)
-	await snap(cam_f35c, "res://proofs/proof_ai_shelf.png")
-	cam_f35c.queue_free()
+	await snap(cam_f36c, "res://proofs/proof_ai_shelf.png")
+	cam_f36c.queue_free()
 
 	# --- Proof F34b: THE SCOREBOARD hanging over the lane ---
 	# From the throwing spot facing the pit: the board hangs

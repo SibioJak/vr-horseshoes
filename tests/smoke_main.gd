@@ -200,80 +200,87 @@ func check_rack(line_ft: int, is_ai: bool) -> void:
 		% [who, line_ft, face_n.dot(to_spot)])
 
 
-## Fix Pass 35: THE CORNER STATIONS - the player's shelf
-## IN FRONT OF THE FOUNTAIN and the AI's station on the
-## OPPOSING side (Chris's correction of FP34, verbatim:
-## "one shelf need to be in front of fountain there; the
-## other on the oppsing side"). Each stands on the grass
-## at its patio front corner at the fountain's latitude,
-## facing its owner dead-on; from the owner's spot each is
-## abeam on the owner's outboard side - a glance (bearing
-## ~79 deg off the pit-facing axis), not a turnaround -
-## and the long-arm radius was re-derived to reach the
-## player's pair, the A-seat's far hand to slot 1 governing.
+## Fix Pass 36: THE CORNER STATIONS after the Shelf War
+## Treaty - each station on its OWNER's side (the FP19
+## side law): the player's shelf on HIS side (+x), the
+## AI's station on its side (-x), IN FRONT OF THE FOUNTAIN
+## (Chris's FP35 law, verbatim: "one shelf need to be in
+## front of fountain there" - the fountain spot is the
+## AI's now). Each stands on the grass at its patio front
+## corner at the fountain's latitude, facing its owner
+## dead-on; from the owner's spot each is abeam on the
+## owner's OWN side - a glance (bearing ~66 deg off the
+## pit-facing axis), not a turnaround - and the long-arm
+## radius was re-derived to reach the player's pair, the
+## A-seat's far (left) hand to slot 1 governing.
 func check_game_station(is_ai: bool) -> void:
 	var who: String = "AI station" if is_ai else "shelf"
 	var want0: Vector3 = main.AI_SLOT0 if is_ai else main.SHELF_SLOT0
 	var rp0: Vector3 = main.rack_slot_tf(40, is_ai, 0).origin
 	var rp1: Vector3 = main.rack_slot_tf(40, is_ai, 1).origin
 	check(rp0.distance_to(want0) < 0.01,
-		"FP35: the %s's game shoes stock at its slot (%s)" % [who, str(rp0)])
+		"FP36: the %s's game shoes stock at its slot (%s)" % [who, str(rp0)])
+	check(signf(rp0.x) == main.station_side(is_ai),
+		"FP36: the %s stands on its OWNER's side of the lane (x %.2f)" % [who, rp0.x])
 	var lz: float = main.line_z_for_ft(40)
 	var in_stance: bool = absf(rp0.x) <= main.STANCE_HALF_WIDTH \
 		and absf(rp0.z - lz) <= main.STANCE_HALF_DEPTH
 	check(not in_stance,
-		"FP35: the %s stands outside the stance box (at %s)" % [who, str(rp0)])
+		"FP36: the %s stands outside the stance box (at %s)" % [who, str(rp0)])
 	var env: Array = main.ai_station_envelope() if is_ai \
 		else main.player_shelf_envelope()
 	var patio: Array = main.stage_b_patio_rect()
 	var on_slab: bool = float(env[0]) < float(patio[2]) and float(env[2]) > float(patio[0]) \
 		and float(env[1]) < float(patio[3]) and float(env[3]) > float(patio[1])
 	check(not on_slab,
-		"FP35: the %s stands on grass, off the patio slab" % who)
+		"FP36: the %s stands on grass, off the patio slab" % who)
 	var beds: Array = main.stage_a_bed_rects()
 	for bi: int in beds.size():
 		var b: Array = beds[bi]
 		var overlap: bool = float(env[0]) < float(b[2]) and float(env[2]) > float(b[0]) \
 			and float(env[1]) < float(b[3]) and float(env[3]) > float(b[1])
-		check(not overlap, "FP35: the %s envelope clears bed %d" % [who, bi])
+		check(not overlap, "FP36: the %s envelope clears bed %d" % [who, bi])
 	if is_ai:
-		check(float(beds[2][0]) - float(env[2]) >= 0.05,
-			"FP35: the AI station keeps its grass gap inside the right bed (%.2f m)"
-			% (float(beds[2][0]) - float(env[2])))
-	else:
 		var fn: Vector3 = main.STAGE_B_FOUNTAIN_POS
 		var fd: float = Vector2(fn.x, fn.z).distance_to(
 			Vector2(clampf(fn.x, float(env[0]), float(env[2])),
 				clampf(fn.z, float(env[1]), float(env[3]))))
 		check(fd >= main.STAGE_B_FOUNTAIN_R + 0.15,
-			"FP35: the shelf envelope clears the fountain circle (%.2f m)" % fd)
+			"FP36: the AI station envelope clears the fountain circle (%.2f m)" % fd)
 		check(absf(rp0.z - fn.z) < 0.01 and rp0.x > fn.x,
-			"FP35: the shelf stands in front of the fountain, at its latitude")
+			"FP36: the AI station stands in front of the fountain, at its latitude")
+		check(float(env[0]) - float(beds[0][2]) >= 0.05,
+			"FP36: the AI station keeps its grass gap inside the left bed (%.2f m)"
+			% (float(env[0]) - float(beds[0][2])))
+	else:
+		check(float(beds[2][0]) - float(env[2]) >= 0.05,
+			"FP36: the shelf keeps its grass gap inside the right bed (%.2f m)"
+			% (float(beds[2][0]) - float(env[2])))
 	var spot: Vector3 = main.spot_pos(40, is_ai)
 	var hang: Transform3D = main.rack_slot_tf(40, is_ai, 0)
 	var face_n: Vector3 = hang.basis * Vector3.UP
 	var to_spot: Vector3 = (Vector3(spot.x, rp0.y, spot.z) - rp0).normalized()
 	check(face_n.dot(to_spot) > 0.7,
-		"FP35: the %s presents its shoes FACE-ON to its spot (facing %.2f)"
+		"FP36: the %s presents its shoes FACE-ON to its spot (facing %.2f)"
 		% [who, face_n.dot(to_spot)])
 	var to_slot := Vector3(rp0.x - spot.x, 0.0, rp0.z - spot.z).normalized()
 	var bearing: float = rad_to_deg(acos(clampf(
 		to_slot.dot(Vector3(0.0, 0.0, -1.0)), -1.0, 1.0)))
-	var outboard: bool = to_slot.x > 0.0 if is_ai else to_slot.x < 0.0
-	check(outboard and bearing > 65.0 and bearing < 95.0,
-		"FP35: from its spot the %s is abeam outboard - a glance, not a turnaround (bearing %.0f deg)" % [who, bearing])
+	var outboard: bool = signf(to_slot.x) == main.station_side(is_ai)
+	check(outboard and bearing > 55.0 and bearing < 80.0,
+		"FP36: from its spot the %s is abeam on its owner's OWN side - a glance, not a turnaround (bearing %.0f deg)" % [who, bearing])
 	check(absf(rp1.x - rp0.x) < 0.01
 		and absf((rp1.z - rp0.z) - (-1.0) * main.SLOT_STEP) < 0.01,
-		"FP35: the %s steps slot 1 down-lane along the rail (step %s)" % [who, str(rp1 - rp0)])
+		"FP36: the %s steps slot 1 down-lane along the rail (step %s)" % [who, str(rp1 - rp0)])
 	if not is_ai:
-		var hand_r := Vector3(spot.x + 0.25, 0.85, spot.z)
-		check(hand_r.distance_to(rp0) > 3.15 and hand_r.distance_to(rp0) < 3.35,
-			"FP35: the off-hand reach to the shelf is %.2f m" % hand_r.distance_to(rp0))
-		var seat_r := Vector3(spot.x + 0.25, 0.85, spot.z + 0.70)
-		check(main.LONG_ARM_RADIUS >= seat_r.distance_to(rp1)
-			and main.LONG_ARM_RADIUS < seat_r.distance_to(rp1) + 0.35,
-			"FP35: the re-derived long-arm radius (%.2f) covers the governing seat reach (%.2f m)"
-			% [main.LONG_ARM_RADIUS, seat_r.distance_to(rp1)])
+		var hand_l := Vector3(spot.x - 0.25, 0.85, spot.z)
+		check(hand_l.distance_to(rp0) > 1.60 and hand_l.distance_to(rp0) < 1.80,
+			"FP36: the far-hand reach to the shelf is %.2f m" % hand_l.distance_to(rp0))
+		var seat_l := Vector3(spot.x - 0.25, 0.85, spot.z + 0.70)
+		check(main.LONG_ARM_RADIUS >= seat_l.distance_to(rp1)
+			and main.LONG_ARM_RADIUS < seat_l.distance_to(rp1) + 0.35,
+			"FP36: the re-derived long-arm radius (%.2f) covers the governing seat reach (%.2f m)"
+			% [main.LONG_ARM_RADIUS, seat_l.distance_to(rp1)])
 
 
 ## Fix Pass 8: fire one shot at the stake through the production
@@ -2261,15 +2268,41 @@ func _run() -> void:
 		"FP25: the default is walked back to TOE for the section (got %d)" % main.default_grip)
 	check(await drop_and_restock(main, "R"), "FP25: the reset shoe drops and restocks")
 	main.test_hand_tf.erase("R")
+	# Fix Pass 36: home the origin to the 40 ft line first
+	# (the FP7 (d) idiom), so the pair's stock point for the
+	# summon proof below is the game station itself.
+	main.origin.global_transform = Transform3D(Basis.IDENTITY,
+		Vector3(0.0, 0.0, main.FOUL_40_Z))
+	check(await wait_shoe_at(40, 3.0) >= 0.0,
+		"FP36: the shoe homes to the game station before the summon proof")
 	var spot40: Vector3 = main.spot_pos(40, false)
 	var hand_r40 := Vector3(spot40.x + 0.25, 0.85, spot40.z)
 	var hand_l40 := Vector3(spot40.x - 0.25, 0.85, spot40.z)
 	var d_far: float = hand_r40.distance_to(main.shoe.global_position)
 	check(d_far > main.CANDIDATE_RADIUS and d_far <= main.LONG_ARM_RADIUS,
 		"FP25: the throwing-spot hand sits in far-tier range of the station pair (%.2f m)" % d_far)
+	# Fix Pass 36 - THE SUMMON'S ORIGIN (an ownership proof,
+	# not just a latch): the shoe that answers the throwing-
+	# spot squeeze must come off the PLAYER's OWN station -
+	# the shelf on his side at (+2.14, -1.50) - never the
+	# AI's station across the lane. Capture where the active
+	# shoe sits stocked; after the latch, read the hop's own
+	# origin record (hop_from) and name the station it came
+	# from.
+	var summon_origin: Vector3 = main.shoe.global_position
+	var origin_slot: int = -1
+	for oi: int in 2:
+		if summon_origin.distance_to(main.rack_slot_tf(40, false, oi).origin) < 0.01:
+			origin_slot = oi
+	check(origin_slot >= 0 and summon_origin.x > 2.0,
+		"FP36: the stocked shoe waits at the player's OWN-side station (+2.14) before the summon (at %s, slot %d)"
+		% [str(summon_origin), origin_slot])
 	# (a) Long-arm from the throwing spot, RIGHT hand.
 	check(await long_arm_grab(main, "R", hand_r40),
 		"FP25: a squeeze from the throwing spot latches the station shoe")
+	check(main.hop_from.origin.distance_to(summon_origin) < 0.01,
+		"FP36: the summoned shoe came FROM the player's own-side station (+2.14) (hop origin %s)"
+		% str(main.hop_from.origin))
 	check(main.held_zone == "toe" and main._grip_index() == 0
 		and main.grip_label.text == "TOE GRIP · FLIP",
 		"FP25: the long-arm arrival holds the default grip (TOE at first run, got idx %d / '%s')"
@@ -2401,16 +2434,16 @@ func _run() -> void:
 	root.remove_child(m3)
 	m3.free()
 	await frames(3)
-	# (i) Refusals. Fix Pass 35 re-derivation: the radius
-	# is 3.75 m now (the FP34 shelf's 5.10 m went with its
-	# placement) - first home the origin to the 40 ft line
-	# (the FP7 (d) idiom) and let the shoe restock at the
-	# SHELF, then stage the out-of-range hand a measured
-	# 6.4 m from wherever the shoe actually sits.
+	# (i) Refusals. Fix Pass 36 re-derivation: the radius
+	# is 2.40 m now (the FP35 cross-lane shelf's 3.75 m went
+	# with the treaty swap) - first home the origin to the
+	# 40 ft line (the FP7 (d) idiom) and let the shoe
+	# restock at the SHELF, then stage the out-of-range hand
+	# a measured 6.4 m from wherever the shoe actually sits.
 	main.origin.global_transform = Transform3D(Basis.IDENTITY,
 		Vector3(0.0, 0.0, main.FOUL_40_Z))
 	check(await wait_shoe_at(40, 3.0) >= 0.0,
-		"FP35: the shoe restocks at the shelf before the refusal legs")
+		"FP36: the shoe restocks at the shelf before the refusal legs")
 	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
 		main.shoe.global_position + Vector3(4.5, 0.07, 4.5))
 	main.test_grip["R"] = 1.0
@@ -2422,17 +2455,19 @@ func _run() -> void:
 	await frames(3)
 	# The AI's pair refuses at ANY range: a hand parked on
 	# the AI's stocked shoe, squeezing - the far tier only
-	# ever measures the player's active shoe. Fix Pass 35
-	# re-derivation: the AI station now stands on the
-	# OPPOSING side, and its slot sits just 1.24 m from the
-	# player's own right-hand spot - closer to his hands
-	# than his own shelf is. The refusal under test is the
-	# AI pair's, so stage it with the player's shoe already
+	# ever measures the player's active shoe. Fix Pass 36
+	# re-derivation: the AI station now stands IN FRONT OF
+	# THE FOUNTAIN on its own side; its slot sits 3.24 m
+	# from the player's right-hand spot, and a hand parked
+	# on it sits ~4.18 m from the player's stocked shoe -
+	# outside the 2.40 m radius too, so the refusal is
+	# double-locked. The refusal under test is the AI
+	# pair's, so stage it with the player's shoe already
 	# in hand: the parked squeeze must then call NOTHING at
 	# all, and the AI's shoe must never move.
 	var ai_slot: Vector3 = main.rack_slot_tf(40, true, 0).origin
 	check(await long_arm_grab(main, "R", hand_r40),
-		"FP35: the player's shoe comes to hand before the AI-refusal leg")
+		"FP36: the player's shoe comes to hand before the AI-refusal leg")
 	main.test_hand_tf["L"] = Transform3D(Basis.IDENTITY, ai_slot + Vector3(0.1, 0.07, 0.0))
 	main.test_grip["L"] = 1.0
 	await create_timer(0.6).timeout
@@ -2446,7 +2481,7 @@ func _run() -> void:
 	main.test_hand_tf.erase("L")
 	await frames(3)
 	check(await drop_and_restock(main, "R"),
-		"FP35: the refusal leg's shoe drops and restocks")
+		"FP36: the refusal leg's shoe drops and restocks")
 	main.test_hand_tf.erase("R")
 	# A round's down shoes refuse: manufacture a tabulating
 	# round (grab disarmed) and squeeze from the spot.
@@ -2465,8 +2500,9 @@ func _run() -> void:
 	# (i2) Stage B: the long-arm FROM THE A-SEAT. The FP20
 	# continue seats the camera 0.55 m behind the line, and
 	# the far tier must still serve the seat - under Fix
-	# Pass 35 the seat's far hand to slot 1 (3.54 m) is the
-	# governing reach LONG_ARM_RADIUS was re-derived from.
+	# Pass 36 the seat's far (left) hand to slot 1 (2.20 m)
+	# is the governing reach LONG_ARM_RADIUS was re-derived
+	# from.
 	# Seat the origin through the production seat, hands at
 	# throwing height a hand's breadth ahead of the seated
 	# head, and squeeze with each hand in turn.
@@ -2516,16 +2552,20 @@ func _run() -> void:
 		Vector3(0.0, 0.0, main.FOUL_40_Z))
 	check(await wait_shoe_at(40, 3.0) >= 0.0,
 		"FP25: the shoe restocks at the standard end for the next section")
-	# (k) Fix Pass 34: THE PEG EXCLUSION (Fix Pass 35
-	# numbers: LONG_ARM_RADIUS 3.75 m, the 30 ft peg 3.20 m
-	# from the 40 ft spot's right hand - still inside it) -
-	# in GAME play the peg must NOT answer a far squeeze
-	# from the 40 ft spot; only the game station's stocked
-	# pair may. Stage it directly: the player shoe railed at
-	# the peg, mode flipped to GAME without the gather (a
-	# real start_game would collect the shoe to the shelf,
-	# destroying the staged state), a fresh squeeze from
-	# the 40 ft spot hand.
+	# (k) Fix Pass 34: THE PEG EXCLUSION (Fix Pass 36
+	# numbers: LONG_ARM_RADIUS 2.40 m, the 30 ft peg 3.20 m
+	# from the 40 ft spot's right hand, 3.39 m from the
+	# left - OUTSIDE the radius again) - in GAME play the
+	# peg must NOT answer a far squeeze from the 40 ft
+	# spot; only the game station's stocked pair may. Stage
+	# it directly: the player shoe railed at the peg, mode
+	# flipped to GAME without the gather (a real start_game
+	# would collect the shoe to the shelf, destroying the
+	# staged state), a fresh squeeze from the 40 ft spot
+	# hand. Then - because distance alone would refuse the
+	# spot squeeze now - stage the walked case too: a hand
+	# INSIDE the radius beside the peg, still in GAME, so
+	# the explicit exclusion alone carries that refusal.
 	var peg_slot: Vector3 = main.rack_slot_tf(30, false, 0).origin
 	# Staged as production keeps a RAILED shoe: frozen on
 	# its slot (the funnel and the gather both freeze).
@@ -2535,16 +2575,28 @@ func _run() -> void:
 	main.shoe.angular_velocity = Vector3.ZERO
 	await frames(3)
 	check(main.shoe.global_position.distance_to(peg_slot) < 0.01,
-		"FP35: the exclusion leg's staging holds - the shoe railed at the peg")
+		"FP36: the exclusion leg's staging holds - the shoe railed at the peg")
 	main.mode = "GAME"
 	check(main.grab_armed and main.state == "STAND",
-		"FP35: the grab stands armed for the exclusion leg (so only the exclusion can refuse)")
+		"FP36: the grab stands armed for the exclusion leg (so the refusal is the peg's, not the grab's)")
 	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, hand_r40)
 	main.test_grip["R"] = 1.0
 	await create_timer(0.6).timeout
 	check(main.hop_phase == "" and not main.grab_state.latched
 		and main.shoe.global_position.distance_to(peg_slot) < 0.01,
-		"FP35: in GAME the peg pair refuses a far squeeze from the 40 ft spot (the explicit exclusion; distance alone no longer protects it) (hop '%s', shoe at %s)"
+		"FP36: in GAME the peg pair refuses a far squeeze from the 40 ft spot (3.20 m - outside the 2.40 m radius, the exclusion behind it) (hop '%s', shoe at %s)"
+		% [String(main.hop_phase), str(main.shoe.global_position)])
+	main.test_grip["R"] = 0.0
+	await create_timer(0.25).timeout
+	# The walked case: the hand 1.50 m from the peg-stocked
+	# shoe - well inside the radius - still in GAME.
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
+		peg_slot + Vector3(1.5, 0.065, 0.0))
+	main.test_grip["R"] = 1.0
+	await create_timer(0.6).timeout
+	check(main.hop_phase == "" and not main.grab_state.latched
+		and main.shoe.global_position.distance_to(peg_slot) < 0.01,
+		"FP36: in GAME a within-radius squeeze beside the peg STILL refuses - the explicit exclusion alone carries it (hop '%s', shoe at %s)"
 		% [String(main.hop_phase), str(main.shoe.global_position)])
 	main.test_grip["R"] = 0.0
 	main.test_hand_tf.erase("R")
@@ -3115,6 +3167,18 @@ func _run() -> void:
 	check(all_railed() and max_slot_error() < 0.01,
 		"FP20: the continue stocks both pairs per owner on the stations (worst %.3f m)"
 		% max_slot_error())
+	# Fix Pass 36 - THE GATHER'S DESTINATION, named per
+	# owner: the same gather routes the AI pair to the AI's
+	# OWN station - the one in front of the fountain at
+	# (-2.14, -1.50) - not merely "a station".
+	check(main.ai_pair[0].global_position.distance_to(
+			main.rack_slot_tf(40, true, 0).origin) < 0.01
+		and main.ai_pair[1].global_position.distance_to(
+			main.rack_slot_tf(40, true, 1).origin) < 0.01
+		and main.rack_slot_tf(40, true, 0).origin.x < -2.0,
+		"FP36: the game's gather routes the AI pair to ITS station in front of the fountain (-2.14) (at %s / %s)"
+		% [str(main.ai_pair[0].global_position),
+			str(main.ai_pair[1].global_position)])
 	# Inning 2 (stocked by the seat-back continue above)
 	# plays out from the line, end to end.
 	var guard12: int = 0
