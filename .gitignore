@@ -3,9 +3,10 @@
 *.uid
 /android/
 
-# Per-machine import sidecars for test/proof images (PNGs stay tracked)
-proofs/*.png.import
-tests/*.png.import
+# Per-machine import sidecars: Godot regenerates these per machine/editor;
+# tracking them makes every pull demand a Discard Changes on the other side.
+# All resources are referenced by path, so nothing needs them in the repo.
+*.import
 
 # Build/export output
 /build/
