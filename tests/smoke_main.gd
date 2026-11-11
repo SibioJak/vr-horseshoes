@@ -1607,7 +1607,7 @@ func _run() -> void:
 		if main.phase == "INSERT":
 			check(main.insert_label != null
 				and main.insert_label.text.contains("OPP +3"),
-				"Stage B light: the insert carries its breakdown at DUSK (round %d)"
+				"Stage B light: the billboard carries its breakdown at DUSK (round %d)"
 				% dusk_rounds)
 			await pulse_button("A")
 	check(main.phase == "OVER" and main.score_opp >= 21,
@@ -1615,7 +1615,7 @@ func _run() -> void:
 		% [dusk_rounds, main.score_opp])
 	check(main.insert_label != null
 		and main.insert_label.text.contains("FINAL"),
-		"Stage B light: the final breakdown stands on the insert at DUSK")
+		"Stage B light: the final breakdown stands on the billboard at DUSK")
 	main.set_time_of_day("NOON")
 	await pulse_button("B") # exit the finished game - spent on the exit
 	check(main.mode == "PRACTICE" and main.time_of_day == "NOON",
@@ -3168,19 +3168,23 @@ func _run() -> void:
 		and main.cam.global_position.z > -0.5,
 		"FP20: the manufactured score posted with the player standing at the line (board %d-%d, cam z %.2f)"
 		% [main.score_you, main.score_opp, main.cam.global_position.z])
-	check(main.insert_root.visible,
-		"FP20: the insert cam is up at the round's end")
-	# Fix Pass 34: the gaze spawn is GONE - the board hangs
-	# at its one fixed court transform, centred over the
-	# lane, no matter where the player stands or looks.
-	var sb34: Transform3D = main.scoreboard_transform()
-	check(main.insert_root.global_transform.origin.distance_to(sb34.origin) < 0.001
-		and main.insert_root.global_transform.basis.is_equal_approx(sb34.basis),
-		"FP34: the scoreboard hangs at its fixed court transform (at %s)"
+	check(main.billboard_up and main.insert_label.visible,
+		"FP20: the round-end display is up on the billboard at the round's end")
+	# Fix Pass 38 (re-derives FP34's fixed-transform guard):
+	# the display stands at ONE fixed transform - the
+	# billboard's, left of the lane at halfway - no matter
+	# where the player stands or looks. The hanging
+	# scoreboard and its gaze-spawn ancestors are gone.
+	var bb38: Transform3D = main.billboard_transform()
+	check(main.insert_root.visible
+		and main.insert_root.global_transform.origin.distance_to(bb38.origin) < 0.001
+		and main.insert_root.global_transform.basis.is_equal_approx(bb38.basis),
+		"FP38: the billboard stands at its fixed transform (at %s)"
 		% str(main.insert_root.global_position))
-	check(absf(main.insert_root.global_position.x) < 0.01
-		and main.insert_root.global_position.y > 2.5,
-		"FP34: the board is centred on the lane axis, above the lane - not in the player's face")
+	check(main.insert_root.global_position.x < -3.3
+		and main.insert_root.global_position.z < -6.1
+		and main.insert_root.global_position.z > -7.0,
+		"FP38: the billboard is LEFT of the lane at halfway - not centred over it, not in the player's face")
 	var lines20: String = "\n".join(PackedStringArray(main.round_lines))
 	check(lines20.contains("OPP 1: RINGER")
 		and lines20.contains("YOU 1: NO SCORE (30.0 IN)")
@@ -3188,7 +3192,7 @@ func _run() -> void:
 		and lines20.contains("ROUND: OPP +3")
 		and lines20.contains("MATCH: YOU 0 - 3 OPP")
 		and lines20.contains("NEXT ROUND"),
-		"FP20: the insert carries the breakdown - shoes, arithmetic, totals, continue (%s)"
+		"FP20: the billboard carries the breakdown - shoes, arithmetic, totals, continue (%s)"
 		% lines20.replace("\n", " | "))
 	check(main.ai_pitcher.position.distance_to(
 			AIPitcher.box_root(main.game_line_z())) < 0.05,
@@ -3216,8 +3220,8 @@ func _run() -> void:
 		"FP20: the A-continue seated him back behind the line (origin z %.3f, cam z %.3f)"
 		% [main.origin.global_position.z, main.cam.global_position.z])
 	check_origin_level("FP20: the A-continue seat-back leaves the origin level (pitch/roll 0)")
-	check(not main.insert_root.visible,
-		"FP20: the insert is dismissed by the continue")
+	check(not main.billboard_up and not main.insert_label.visible,
+		"FP20: the round-end display is dismissed by the continue - the billboard is back to the full live feed")
 	check(all_railed() and max_slot_error() < 0.01,
 		"FP20: the continue stocks both pairs per owner on the stations (worst %.3f m)"
 		% max_slot_error())
@@ -3260,6 +3264,114 @@ func _run() -> void:
 	await pulse_button("B")
 	check(main.mode == "PRACTICE",
 		"FP20: B during the tabulation beat returns to practice")
+
+	# ============ Fix Pass 38: THE BILLBOARD ============
+	# The feed's update policy and the round-end display,
+	# through the production paths only (entry: practice).
+	# (a) THE FEED RUNS HOT IN FLIGHT: a production grab +
+	# constructed release (the scripted_shot idiom) drives
+	# the pit-cam viewport to full frame rate while the
+	# shoe flies.
+	check(main.insert_root.visible and not main.billboard_up
+		and not main.insert_label.visible,
+		"FP38: the billboard stands with the live feed up and no breakdown (it never hides)")
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
+		main.shoe.zone_world_center("toe"))
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	for i: int in 2:
+		await physics_frame
+	check(main.state == "HELD",
+		"FP38: the practice grab holds the shoe for the policy throw")
+	var fp38_line_z: float = main.game_line_z()
+	var fp38_release := Vector3(0.25, 1.25, fp38_line_z + 0.35)
+	var fp38_rel: Dictionary = AIPitcher.base_release(
+		fp38_release, main.target_stake_pos())
+	var fp38_vel: Vector3 = fp38_rel["vel"]
+	var fp38_ang: Vector3 = fp38_rel["ang"]
+	var fp38_rel_tf: Transform3D = Shoe.hold_transform("toe", "R")
+	var fp38_basis: Basis = (fp38_rel["basis"] as Basis) * fp38_rel_tf.basis.inverse()
+	main.test_hand_tf["R"] = Transform3D(fp38_basis,
+		fp38_release - fp38_basis * fp38_rel_tf.origin)
+	await frames(4)
+	for i: int in 2:
+		await physics_frame
+	var fp38_samples: Array = []
+	var fp38_axis: Vector3 = fp38_ang.normalized()
+	var fp38_rate: float = fp38_ang.length()
+	var fp38_now: float = float(Time.get_ticks_msec()) / 1000.0
+	for i: int in 28:
+		var fp38_t: float = float(i - 27) / 90.0
+		fp38_samples.append(ThrowMath.make_sample(
+			fp38_now + fp38_t,
+			fp38_release + fp38_vel * fp38_t,
+			Quaternion(fp38_axis, fp38_rate * fp38_t)))
+	main.samples = fp38_samples
+	var fp38_gov: bool = main.spin_governor_enabled
+	main.spin_governor_enabled = false
+	main._release_shoe(fp38_samples)
+	main.spin_governor_enabled = fp38_gov
+	main.grab_state.reset()
+	main.test_grip["R"] = 0.0
+	check(main.state == "FLYING", "FP38: the policy release flies")
+	var fp38_hot: bool = false
+	var fp38_fly_guard: float = 0.0
+	while main.state == "FLYING" and fp38_fly_guard < 3.0:
+		await physics_frame
+		if main.insert_viewport.render_target_update_mode == SubViewport.UPDATE_ALWAYS:
+			fp38_hot = true
+		fp38_fly_guard += 1.0 / 60.0
+	check(fp38_hot,
+		"FP38: the pit-cam viewport runs at FULL RATE while a shoe is in flight")
+	# The settle budget is the suite's AI-turn class (40 s):
+	# a shoe plowing a long sand furrow at low speed resets
+	# the stillness test while it creeps, and under a loaded
+	# box the physics clock dilates against the wall clock -
+	# the FP38 probe of this same throw settled in ~2 s on a
+	# quiet pit, the suite's worked-over pit takes longer.
+	# Settle, in the state machine's own word: the player's
+	# shoe leaves FLYING (practice then RETURNS it to the
+	# stand - its shoe_status only leaves FLYING at the end
+	# of that return, so the status is not the settle
+	# signal here; an earlier wording of this check read
+	# the status and failed on a settled shoe).
+	var fp38_land: float = 0.0
+	while main.state == "FLYING" and fp38_land < 40.0:
+		await create_timer(0.25).timeout
+		fp38_land += 0.25
+	check(main.state != "FLYING",
+		"FP38: the policy throw settled (practice returns the shoe to the stand; %.1f s)" % fp38_land)
+	# (b) IDLE LAZY: once the post-settle beat burns off
+	# with the pit quiet, the viewport leaves full rate -
+	# polled for the transition (the beat is physics time,
+	# which dilates under load).
+	var fp38_idle: float = 0.0
+	while main.insert_viewport.render_target_update_mode == SubViewport.UPDATE_ALWAYS \
+			and fp38_idle < 20.0:
+		await create_timer(0.25).timeout
+		fp38_idle += 0.25
+	check(main.insert_viewport.render_target_update_mode != SubViewport.UPDATE_ALWAYS,
+		"FP38: the idle pit-cam leaves full rate (lazy pulses only; %.1f s)" % fp38_idle)
+	# (c) THE BREAKDOWN ON THE BILLBOARD: a manufactured
+	# round posts itself (the FP20 idiom) - settle -> the
+	# display is up with the breakdown text, the feed
+	# shrunk to the panel's top half.
+	manufacture_round()
+	check(await wait_phase("INSERT", 5.0),
+		"FP38: the manufactured round posts to the billboard")
+	check(main.billboard_up and main.insert_label.visible
+		and main.insert_label.text.contains("OPP +3")
+		and (main.insert_screen.mesh as QuadMesh).size == main.BILLBOARD_FEED_UP,
+		"FP38: the breakdown stands on the billboard - text up, feed shrunk to the panel's top")
+	# (d) CONTINUE returns the full live feed.
+	await pulse_button("A")
+	await frames(4)
+	check(not main.billboard_up and not main.insert_label.visible
+		and (main.insert_screen.mesh as QuadMesh).size == main.BILLBOARD_FEED_LIVE,
+		"FP38: A-continue returns the billboard to the full live feed")
+	await pulse_button("B")
+	check(main.mode == "PRACTICE",
+		"FP38: B returns to practice for the sections below")
 
 	# ============ Fix Pass 13: the scoring audit ============
 	# Chris played a full game: "it scored all the points, I
@@ -3331,11 +3443,11 @@ func _run() -> void:
 		and main.last_inning_text == "YOU +3 (RINGER)",
 		"FP13 audit (i): player ringer vs two AI duds scores YOU +3, posted by the tabulation (board %d-%d, '%s')"
 		% [main.score_you, main.score_opp, main.last_inning_text])
-	var sb34b: Transform3D = main.scoreboard_transform()
-	check(main.insert_root.visible
-		and main.insert_root.global_transform.origin.distance_to(sb34b.origin) < 0.001
-		and main.insert_root.global_transform.basis.is_equal_approx(sb34b.basis),
-		"FP34: with the head facing the house and pitched down at the settle, the board still hangs at its fixed court transform - not in the player's face")
+	var bb38b: Transform3D = main.billboard_transform()
+	check(main.billboard_up
+		and main.insert_root.global_transform.origin.distance_to(bb38b.origin) < 0.001
+		and main.insert_root.global_transform.basis.is_equal_approx(bb38b.basis),
+		"FP38: with the head facing the house and pitched down at the settle, the round-end display still comes up on the billboard at its fixed transform - not in the player's face")
 	main.cam.transform = head_home34
 	# The insert closeup frames ALL FOUR settled shoes - a
 	# framed-but-empty closeup is a fail (the duds sit ~2.5 m

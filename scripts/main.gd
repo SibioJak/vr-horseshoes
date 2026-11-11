@@ -452,17 +452,17 @@ var _btn_prev: Dictionary = {"A": false, "B": false}
 # ~15 deg off its normal. Tilt 5 deg tips the face
 # slightly down at the spot. Panel 2.40 x 2.00 m (centre
 # y 1.90, spans y 0.90..2.90): at 7.16 m the feed quad
-# (2.28 m in live mode) and the breakdown glyphs (0.083 m)
-# hold the angular size the retired scoreboard's text had
-# - legibility proven from the throwing spot by the
-# render proofs, not assumed.
+# (2.28 m in live mode) and the breakdown glyphs
+# (0.078 m capitals - the retired scoreboard's own
+# letter size) - legibility proven from the throwing
+# spot by the render proofs, not assumed.
 const ROUND_BEAT_SEC: float = 0.75 # settle -> tabulation beat
 const BILLBOARD_POS := Vector3(-3.62, 1.90, -6.55) # panel centre
 const BILLBOARD_YAW_DEG: float = 24.0 # face back at the throwing end
 const BILLBOARD_TILT_DEG: float = 5.0 # face tipped slightly down
 const BILLBOARD_PANEL_SIZE := Vector2(2.40, 2.00) # the derived size
 const BILLBOARD_FEED_LIVE := Vector2(2.28, 1.14) # feed quad, live mode
-const BILLBOARD_FEED_UP := Vector2(1.90, 0.95) # feed quad, breakdown up
+const BILLBOARD_FEED_UP := Vector2(1.80, 0.88) # feed quad, breakdown up
 # The pit-cam feed's update policy (Quest budget): the ONE
 # viewport renders at full frame rate while any shoe is in
 # flight or settling, plus PITCAM_BEAT_SEC after the last
@@ -5066,14 +5066,22 @@ func _build_billboard() -> void:
 	insert_screen.material_override = qmat
 	insert_root.add_child(insert_screen)
 	insert_label = Label3D.new()
-	insert_label.font_size = 64
-	insert_label.pixel_size = 0.0013
+	# Sized on the fallback font's TRUE line pitch
+	# (get_height = 1.375 x font_size, measured): the
+	# breakdown runs 8-10 lines in ordinary rounds and 12
+	# at the compound worst (cancelled ringers + a standing
+	# ringer + a point + closest-only). Ten lines fit the
+	# zone under the shrunken feed; the rare 12-line round
+	# spills a line's width onto the frame/feed edge, drawn
+	# in front, still readable.
+	insert_label.font_size = 58
+	insert_label.pixel_size = 0.00126
 	insert_label.modulate = Color(0.95, 0.97, 0.90)
 	insert_label.outline_size = 5
 	insert_label.outline_modulate = Color(0.1, 0.07, 0.03)
 	insert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	insert_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	insert_label.position = Vector3(0.0, -0.50, 0.013)
+	insert_label.position = Vector3(0.0, -0.46, 0.013)
 	insert_root.add_child(insert_label)
 	_pitcam_idle_acc = PITCAM_IDLE_SEC # first policy call pulses a frame
 	_billboard_layout()
@@ -5108,7 +5116,7 @@ func _billboard_layout() -> void:
 	var qm: QuadMesh = insert_screen.mesh as QuadMesh
 	if billboard_up:
 		qm.size = BILLBOARD_FEED_UP
-		insert_screen.position = Vector3(0.0, 0.48, 0.012)
+		insert_screen.position = Vector3(0.0, 0.545, 0.012)
 	else:
 		qm.size = BILLBOARD_FEED_LIVE
 		insert_screen.position = Vector3(0.0, 0.0, 0.012)
