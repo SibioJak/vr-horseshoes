@@ -25,17 +25,27 @@ from the judged test — 1:1 release, no assist. Design skeleton:
   6 inches scores — 1 point per shoe closer than the opponent's
   closest. Only one side scores per inning.
 - **The rhythm (Fix Pass 20):** when the last shoe settles, the
-  round tabulates itself — no walking anywhere. An **insert cam**
-  appears in front of you: a live close-up of the pit with all
-  four shoes around the stake, over the round's score breakdown
-  (each shoe's result, the cancellation arithmetic in plain
-  words, the round's points, the match totals). **A** dismisses
-  it and the next round is stocked, shoes gathered back to the
-  pitching end. The side that scored throws first (a scoreless
-  inning alternates). While a round is live you can't walk past
-  the foul line; while the insert is up you can stroll down to
-  the pit if you like — **A** seats you back behind the line for
-  the next round.
+  round tabulates itself — no walking anywhere. The round's
+  score breakdown (each shoe's result, the cancellation
+  arithmetic in plain words, the round's points, the match
+  totals) goes up on the **rear scoreboard** behind the pit.
+  **A** dismisses it and the next round is stocked, shoes
+  gathered back to the pitching end. The side that scored
+  throws first (a scoreless inning alternates). While a round
+  is live you can't walk past the foul line; while the
+  breakdown is up you can stroll down to the pit if you like —
+  **A** seats you back behind the line for the next round.
+- **The broadcast (Fix Pass 39):** a permanent billboard on the
+  left of the lane, halfway down, carries a pit camera and
+  nothing else — no text. The camera is a close-up camera: the
+  pit fills the panel at rest, it eases to follow each flight
+  (stake kept in frame), settles into a close-up of the lie,
+  and when a shoe rings — yours or the AI's — it plays that
+  throw back in slow motion (0.30×) all by itself. The rear
+  board is the scoreboard: match score biggest, then the
+  running state and per-throw readouts, and the round-end
+  breakdown in their place; the full controls list stands in
+  two columns underneath.
 - **First to 21** at an inning's end wins (no win-by-two). At game
   over: **A** plays again, **B** returns to practice. In a game,
   **B** returns to practice at any time.
@@ -111,7 +121,10 @@ harness that produced the line quoted above.
 Rendered proofs land in `proofs/` (court_view.png — the one-pit
 yard on-axis: line end in front, pit under the board at the far
 end; board_closeup.png — the board mid-game;
-board_from_foul_line.png, held_shoe.png; insert_view.png — the
-insert cam up at a round's end, live pit closeup over the
-breakdown).
+board_from_foul_line.png, held_shoe.png; board_breakdown.png —
+the scoreboard at a round's end with the breakdown up, shot
+from the throwing line; proof_billboard_flight.png /
+proof_billboard_feed.png / proof_billboard_replay.png — the
+billboard's close-up follow mid-flight, the settled-lie
+close-up, and a slow-mo replay frame).
 Suites verify math and wiring — feel is judged in the headset only.

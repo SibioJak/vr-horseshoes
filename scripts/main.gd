@@ -7,11 +7,16 @@ extends Node3D
 ## scoring to 21 against a visible AI club player, and a
 ## one-way inning rhythm - both pitchers throw from the line
 ## end, and when the last shoe settles the round tabulates
-## itself and the INSERT CAM shows a live closeup of the pit
-## with the score breakdown (Fix Pass 20: no mandatory walk
-## down and back; walking is free, it just does nothing
-## functional - though a live round clamps the player behind
-## the foul line). The judged core is
+## itself (Fix Pass 20: no mandatory walk down and back;
+## walking is free, it just does nothing functional - though
+## a live round clamps the player behind the foul line).
+## Fix Pass 39 (the broadcast pass): the roadside billboard
+## halfway down the lane is CAM ONLY - a smart closeup pit
+## camera that follows each flight, holds the lie, and
+## replays a ringer in slow motion all by itself - and the
+## rear board beyond the pit is THE scoreboard, carrying
+## every number including the round-end breakdown. The
+## judged core is
 ## untouched and stays guarded by the suites: zone-snap grab
 ## + sticky slide (GrabState/Shoe), windowed release sampling
 ## (ThrowMath), the honest rigid-body shoe (zero damping,
@@ -197,10 +202,14 @@ var active_stand_line_ft: int = 40
 var ai_pitcher: AIPitcher
 var ai_rng := RandomNumberGenerator.new()
 var board_root: Node3D
-var board_slab_size := Vector3(3.0, 2.7, 0.05)
+var board_slab_size := Vector3(3.72, 3.62, 0.05) # Fix Pass 39: the fresh-look slab
 var title_label: Label3D
+var score_label: Label3D # Fix Pass 39: the match score, the board's biggest type
 var status_label: Label3D
-var controls_label: Label3D
+var board_breakdown_label: Label3D # Fix Pass 39: the round-end breakdown lives HERE now
+var controls_label: Label3D # the controls list, left column (Fix Pass 39)
+var controls_label_r: Label3D # the controls list, right column
+var board_breakdown_up: bool = false # the rear board is showing the breakdown
 var scenery_root: Node3D
 ## The Stage A beds' planted shrub positions (the origins
 ## the shrub MultiMeshes were built from, recorded at
@@ -434,6 +443,25 @@ var _btn_prev: Dictionary = {"A": false, "B": false}
 # scoreboard carried) on the same triggers and flow as
 # the old insert (settle -> show; A continue / X play
 # again / B practice -> back to the full feed).
+# Fix Pass 39 (Chris's verdict on FP38, 2026-11-11):
+# "billboard is in right spot. Camera isn't doing its
+# job. I could argue that the normal view of the pit is
+# actually bigger than the billboard cam. Needs to be a
+# closeup. If the cam can be a little smart, great.
+# Zooms, pans. a slow mo replay on a ringer that just
+# happens. Also, we have redundancy now with numbers on
+# billboard and numbers on rear board. Side billboard is
+# cam only, no numbers. Billboard in back is the score
+# board, which needs a fresh look." So: the billboard's
+# text and layout switch RETIRE - the panel is the camera
+# feed, full-panel, always - and the camera becomes a
+# CLOSEUP broadcast camera (tight pit framing, a damped
+# follow through each flight, a held closeup of the lie,
+# and an automatic slow-motion replay when a shoe rings).
+# ALL the numbers move to the rear board beyond the pit,
+# which becomes THE scoreboard with a fresh look in the
+# billboard's dark-panel language; the breakdown's
+# show/hide now drives THAT board.
 # PLACEMENT, derived from the yard's records: the lane
 # runs z -0.914 (40 ft line) to -12.192 (stake); halfway
 # is z -6.55. The panel centre stands at x -3.62 - past
@@ -461,18 +489,67 @@ const BILLBOARD_POS := Vector3(-3.62, 1.90, -6.55) # panel centre
 const BILLBOARD_YAW_DEG: float = 24.0 # face back at the throwing end
 const BILLBOARD_TILT_DEG: float = 5.0 # face tipped slightly down
 const BILLBOARD_PANEL_SIZE := Vector2(2.40, 2.00) # the derived size
-const BILLBOARD_FEED_LIVE := Vector2(2.28, 1.14) # feed quad, live mode
-const BILLBOARD_FEED_UP := Vector2(1.80, 0.88) # feed quad, breakdown up
+const BILLBOARD_FEED_LIVE := Vector2(2.28, 1.14) # feed quad (cam only, Fix Pass 39)
 # The pit-cam feed's update policy (Quest budget): the ONE
 # viewport renders at full frame rate while any shoe is in
 # flight or settling, plus PITCAM_BEAT_SEC after the last
-# settle, and for as long as the breakdown is up; while
+# settle, and for as long as a ringer replay runs; while
 # the pit is idle it pulses a single frame every
 # PITCAM_IDLE_SEC (2 Hz) - the picture stays live, the
 # GPU does not spin on a still pit.
 const PITCAM_VIEWPORT_SIZE := Vector2i(1024, 512)
 const PITCAM_IDLE_SEC: float = 0.5
 const PITCAM_BEAT_SEC: float = 2.0
+# Fix Pass 39: THE BROADCAST CAMERA. One camera, three
+# framings, all moves damped (exponential approach at the
+# rates below - no snaps, no whip pans):
+#   BASELINE - a tight closeup of the pit: sand and stake
+#     fill the panel (the FP38 wide shot left the pit a
+#     small centre patch, no bigger than the naked-eye
+#     view Chris already had - his verdict).
+#   FLIGHT - while any shoe flies, the look point rides
+#     halfway between the stake and the shoe, the camera
+#     drifts a little with the shoe, and the lens opens
+#     up (FOLLOW fov) so the arrival stays in frame.
+#   LIE - after a settle, a tighter closeup of the shoe
+#     and stake, held for PITCAM_LIE_SEC, then the camera
+#     eases home to the baseline.
+const PITCAM_BASE_POS := Vector3(1.45, 1.10, -9.80)
+const PITCAM_BASE_LOOK := Vector3(0.0, 0.06, -12.192) # the stake, a breath above the sand
+const PITCAM_BASE_FOV: float = 40.0
+const PITCAM_FOLLOW_FOV: float = 48.0
+const PITCAM_LIE_FOV: float = 33.0
+const PITCAM_POS_RATE: float = 3.5 # 1/s, exponential damp
+const PITCAM_LOOK_RATE: float = 4.0
+const PITCAM_FOV_RATE: float = 3.0
+const PITCAM_LIE_SEC: float = 6.0
+# Fix Pass 39: THE RINGER REPLAY. Every flight is recorded
+# as it happens - the shoe's transform AND the camera's
+# own framing, one sample per physics tick. A shoe that
+# settles as a ringer (either side's, game or practice -
+# a ringer is a ringer) replays on the billboard at
+# REPLAY_RATE, starting REPLAY_DELAY_SEC after the
+# settle: a clone shoe flies the recorded track on the
+# pit-cam's layer while the real shoe is hidden from the
+# pit camera only; the pit otherwise shows its true
+# current state. Live always wins: a new flight, a
+# gather, or a round-end state change cancels it. Two
+# ringers in one round: the most recent replays first,
+# one more may queue behind it (a third replaces the
+# queued one - most recent wins).
+const REPLAY_RATE: float = 0.30 # a ~1.1 s flight replays in ~3.7 s
+const REPLAY_DELAY_SEC: float = 0.9
+const REPLAY_QUEUE_DELAY_SEC: float = 0.35
+const REPLAY_MIN_TICKS: int = 12 # a shorter track is no replay
+# Visual layers for the replay's sleight of hand: the
+# world as both cameras see it (1), the replay clone -
+# pit camera only (2), and a real shoe while its own
+# replay runs - the player's cameras only (4). The XR
+# rig and the fallback camera cull to 1|4; the pit
+# camera culls to 1|2.
+const VIS_LAYER_WORLD: int = 1
+const VIS_LAYER_PITCAM: int = 2
+const VIS_LAYER_MAIN_ONLY: int = 4
 
 
 ## The billboard's one fixed world transform (Fix Pass 38):
@@ -519,15 +596,30 @@ static func billboard_post_xz() -> Array:
 		out.append(Vector2(w.x, w.z))
 	return out
 var tabulate_left: float = -1.0 # TABULATE countdown (<0 idle)
-var round_lines: Array = [] # the billboard's breakdown lines
-var insert_root: Node3D = null # the billboard (the insert cam lives on it)
+var round_lines: Array = [] # the scoreboard's breakdown lines
+var insert_root: Node3D = null # the billboard (the pit cam lives on it)
 var insert_viewport: SubViewport = null
 var insert_cam: Camera3D = null
-var insert_label: Label3D = null
 var insert_screen: MeshInstance3D = null # the feed quad on the panel
-var billboard_up: bool = false # the round-end display is on the panel
 var _pitcam_hot_left: float = 0.0 # feed full-rate time remaining
 var _pitcam_idle_acc: float = 0.0 # idle-pulse accumulator
+# Fix Pass 39: the broadcast camera's damped state, the
+# flight recorder, and the ringer replay (see the
+# PITCAM_* / REPLAY_* constants).
+var pitcam_pos: Vector3 = PITCAM_BASE_POS # the camera's current (damped) pose
+var pitcam_look: Vector3 = PITCAM_BASE_LOOK
+var pitcam_fov: float = PITCAM_BASE_FOV
+var pitcam_subject_pos: Vector3 = Vector3.ZERO # where the last shoe settled - the lie's subject
+var pitcam_lie_left: float = 0.0 # lie-closeup hold time remaining
+var rec_shoe: Shoe = null # the shoe whose flight is being recorded
+var rec_shoe_track: Array = [] # Transform3D per physics tick
+var rec_cam_track: Array = [] # {pos, look, fov} per physics tick
+var replay_state: String = "IDLE" # IDLE | PENDING | PLAYING
+var replay_delay: float = 0.0 # PENDING countdown to the start
+var replay_t: float = 0.0 # PLAYING clock (real seconds)
+var replay_track: Dictionary = {} # {shoe, cam, real, color} on deck / playing
+var replay_queue: Dictionary = {} # one more ringer waiting its turn
+var replay_clone: Shoe = null # the pit-cam-only shoe that flies the replay
 
 # Test hooks (used by the headless suites / render proofs only).
 var test_hand_tf: Dictionary = {}
@@ -867,9 +959,43 @@ func _controls_text() -> String:
 	return "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSQUEEZE FROM YOUR SPOT: SHOE COMES TO YOUR HAND\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nA / X WHILE HOLDING A SHOE: CHANGE GRIP\nDEFAULT GRIP: %s - SET BY CYCLING A HELD SHOE\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON (EMPTY HAND): start game / next round / play again\nB BUTTON: back to practice (in a game)\nTIME: %s - B/Y IN PRACTICE: CHANGE TIME\nRECENTER: menu long-press - seated/standing ok" % [String(pos["name"]), time_of_day]
 
 
+## Fix Pass 39: the controls list stands in TWO columns on
+## the scoreboard's face - the same complete text, split
+## after the THROW line. (The one dense block was the
+## "scribble" of the old look: complete, but it rendered
+## as noise at any distance.)
 func _refresh_controls_label() -> void:
-	if controls_label != null:
-		controls_label.text = _controls_text()
+	if controls_label == null:
+		return
+	var lines: PackedStringArray = _controls_text().split("\n")
+	var half: int = (lines.size() + 1) / 2
+	controls_label.text = "\n".join(lines.slice(0, half))
+	if controls_label_r != null:
+		controls_label_r.text = "\n".join(lines.slice(half))
+
+
+## The full controls text across both columns (the suites
+## read the list through here - one source, two labels).
+func controls_full_text() -> String:
+	var l: String = controls_label.text if controls_label != null else ""
+	var r: String = controls_label_r.text if controls_label_r != null else ""
+	return l + "\n" + r
+
+
+## The board's label zones (Fix Pass 39): each label's
+## allotted rect on the face, width x height in metres.
+## The layout below is built to these numbers and the
+## suites' fit guard measures every label against its own
+## zone - a line that outgrows its zone fails headless,
+## not in the headset.
+static func board_label_zones() -> Dictionary:
+	return {
+		"title": Vector2(3.40, 0.24),
+		"score": Vector2(3.40, 0.52),
+		"status": Vector2(3.40, 1.50),
+		"breakdown": Vector2(3.40, 1.80),
+		"controls": Vector2(1.66, 0.55),
+	}
 
 
 func _mat(c: Color, emission: float = 0.0) -> StandardMaterial3D:
@@ -3122,6 +3248,9 @@ func _build_rig() -> void:
 	origin.name = "Origin"
 	add_child(origin)
 	cam = XRCamera3D.new()
+	# Fix Pass 39: the player's cameras never see the pit
+	# cam's replay clone (layer 2) - see VIS_LAYER_*.
+	cam.cull_mask = VIS_LAYER_WORLD | VIS_LAYER_MAIN_ONLY
 	origin.add_child(cam)
 	var xr_interface: XRInterface = XRServer.find_interface("OpenXR")
 	if xr_interface != null and xr_interface.is_initialized():
@@ -3129,6 +3258,7 @@ func _build_rig() -> void:
 		xr_ok = true
 	else:
 		var fallback := Camera3D.new()
+		fallback.cull_mask = VIS_LAYER_WORLD | VIS_LAYER_MAIN_ONLY
 		fallback.position = Vector3(0.0, 1.55, 1.15)
 		add_child(fallback)
 		fallback.look_at(Vector3(0.0, 0.35, -5.5), Vector3.UP)
@@ -3195,58 +3325,117 @@ func _build_board() -> void:
 	# of the spot after pass 1's yaw sign pointed its face AWAY
 	# from the player (he had been reading its back); the smoke
 	# suite's facing assertion survives from that lesson and now
-	# guards THIS spot. The board is scoreboard-sized (3 m wide,
-	# slab top 3.2 m) because the stat lines must read from
-	# 13-16 m: ~0.21 m capitals, with the controls list in smaller
-	# type below for the one close-up read. Label Y positions are
-	# laid out on the font's TRUE line pitch (get_height = 1.375x
-	# font_size for the fallback font - a first cut that assumed
-	# 1.0x overlapped title into status in the close-up proof).
+	# guards THIS spot.
+	# Fix Pass 39: THE FRESH LOOK. This board is now THE
+	# scoreboard - it carries every number the game has,
+	# including the round-end breakdown (the billboard down
+	# the lane is cam only). The presentation is rebuilt in
+	# the billboard's design language: a dark panel face on
+	# a wooden frame, strong clean type with a clear
+	# hierarchy - the match score biggest at the top under
+	# a brass rule, the state/readout block beneath it, the
+	# breakdown in the same block's place at round end, and
+	# the controls list in two tidy columns at the foot.
+	# The old look (brown slab, one dense small-type block
+	# that rendered as a scribble) is gone. The slab grows
+	# a step (3.72 x 3.62 m) to give the breakdown its room;
+	# placement and yaw do not change. Type is laid out on
+	# the font's TRUE line pitch (get_height = 1.375x
+	# font_size for the fallback font) inside the zones of
+	# board_label_zones(), which the suites measure.
 	board_root.position = BOARD_POS
 	board_root.rotation_degrees = Vector3(0.0, BOARD_YAW_DEG, 0.0)
 	add_child(board_root)
 	var wood := _mat(Color(0.30, 0.21, 0.12))
-	_box(board_root, Vector3(-1.38, 1.75, -0.03), Vector3(0.09, 3.50, 0.09), wood)
-	_box(board_root, Vector3(1.38, 1.75, -0.03), Vector3(0.09, 3.50, 0.09), wood)
-	_box(board_root, Vector3(0.0, 1.85, -0.02), board_slab_size, wood)
+	var post_wood := _mat(Color(0.24, 0.17, 0.10))
+	_box(board_root, Vector3(-1.68, 2.0, -0.05), Vector3(0.10, 4.0, 0.10), post_wood)
+	_box(board_root, Vector3(1.68, 2.0, -0.05), Vector3(0.10, 4.0, 0.10), post_wood)
+	_box(board_root, Vector3(0.0, 2.0, -0.02), board_slab_size, wood)
+	# The dark face plate - the billboard's own face colour.
+	_box(board_root, Vector3(0.0, 2.0, 0.005), Vector3(3.6, 3.5, 0.03),
+		_mat(Color(0.05, 0.05, 0.06)))
+	# A brass rule under the score line.
+	_box(board_root, Vector3(0.0, 2.76, 0.025), Vector3(3.2, 0.03, 0.01),
+		_mat(Color(0.55, 0.45, 0.22)))
 	title_label = Label3D.new()
 	title_label.text = "HORSESHOES - BACKYARD"
-	title_label.font_size = 56
-	title_label.pixel_size = 0.0026
-	title_label.modulate = Color(1.0, 0.93, 0.75)
-	title_label.outline_size = 10
-	title_label.outline_modulate = Color(0.1, 0.07, 0.03)
-	title_label.position = Vector3(0.0, 3.04, 0.01)
+	title_label.font_size = 42
+	title_label.pixel_size = 0.0019
+	title_label.modulate = Color(0.85, 0.80, 0.66)
+	title_label.outline_size = 6
+	title_label.outline_modulate = Color(0.02, 0.02, 0.02)
+	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title_label.position = Vector3(0.0, 3.52, 0.03)
 	board_root.add_child(title_label)
-	# Backyard Game v1: the status block grows to 7 worst-case
-	# lines (game score/turn/result/prompt joins the practice
-	# readouts), so the status font steps down a size (58/0.0029,
-	# ~0.17 m capitals - still distance-legible) and the controls
-	# block steps down with it. The smoke suite's slab-fit guard
-	# measures both blocks at their new worst cases.
+	# The match score: the board's biggest type (~0.23 m
+	# capitals - stadium lettering, read from the line).
+	score_label = Label3D.new()
+	score_label.font_size = 104
+	score_label.pixel_size = 0.0031
+	score_label.modulate = Color(0.98, 0.97, 0.92)
+	score_label.outline_size = 8
+	score_label.outline_modulate = Color(0.02, 0.02, 0.02)
+	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	score_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	score_label.position = Vector3(0.0, 3.06, 0.03)
+	board_root.add_child(score_label)
+	# The running state block: inning/turn, the readouts,
+	# the prompt (~0.105 m capitals).
 	status_label = Label3D.new()
-	status_label.font_size = 58
-	status_label.pixel_size = 0.0029
+	status_label.font_size = 54
+	status_label.pixel_size = 0.0027
 	status_label.modulate = Color(0.95, 0.97, 0.90)
-	status_label.outline_size = 8
-	status_label.outline_modulate = Color(0.1, 0.07, 0.03)
+	status_label.outline_size = 6
+	status_label.outline_modulate = Color(0.02, 0.02, 0.02)
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	status_label.position = Vector3(0.0, 2.06, 0.01)
+	status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	status_label.position = Vector3(0.0, 1.86, 0.03)
 	board_root.add_child(status_label)
-	controls_label = Label3D.new()
-	# Fix Pass 25: the text is built by _controls_text() - it
+	# The round-end breakdown takes the status block's
+	# place (same zone, its own slightly smaller type so
+	# the 12-line compound worst case fits): per-shoe
+	# lines, the arithmetic, the round and the match.
+	board_breakdown_label = Label3D.new()
+	board_breakdown_label.font_size = 46
+	board_breakdown_label.pixel_size = 0.0023
+	board_breakdown_label.modulate = Color(0.95, 0.97, 0.90)
+	board_breakdown_label.outline_size = 5
+	board_breakdown_label.outline_modulate = Color(0.02, 0.02, 0.02)
+	board_breakdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	board_breakdown_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	board_breakdown_label.position = Vector3(0.0, 1.86, 0.03)
+	board_breakdown_label.visible = false
+	board_root.add_child(board_breakdown_label)
+	# The controls list in two columns at the foot (Fix
+	# Pass 25: the text is built by _controls_text() - it
 	# names the long-arm grab and the current default grip,
-	# and is rebuilt the moment the default changes.
-	controls_label.text = _controls_text()
+	# and is rebuilt the moment the default changes). The
+	# left column ends at the centre, the right begins
+	# there - the pair reads as one list with air in it.
+	controls_label = Label3D.new()
 	controls_label.font_size = 30
-	controls_label.pixel_size = 0.00095
+	controls_label.pixel_size = 0.00115
 	controls_label.line_spacing = 1.0
-	controls_label.modulate = Color(0.88, 0.90, 0.82)
-	controls_label.outline_size = 6
-	controls_label.outline_modulate = Color(0.1, 0.07, 0.03)
-	controls_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	controls_label.position = Vector3(0.0, 0.79, 0.01)
+	controls_label.modulate = Color(0.82, 0.84, 0.78)
+	controls_label.outline_size = 4
+	controls_label.outline_modulate = Color(0.02, 0.02, 0.02)
+	controls_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	controls_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	controls_label.position = Vector3(-0.07, 0.60, 0.03)
 	board_root.add_child(controls_label)
+	controls_label_r = Label3D.new()
+	controls_label_r.font_size = 30
+	controls_label_r.pixel_size = 0.00115
+	controls_label_r.line_spacing = 1.0
+	controls_label_r.modulate = Color(0.82, 0.84, 0.78)
+	controls_label_r.outline_size = 4
+	controls_label_r.outline_modulate = Color(0.02, 0.02, 0.02)
+	controls_label_r.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	controls_label_r.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	controls_label_r.position = Vector3(0.07, 0.60, 0.03)
+	board_root.add_child(controls_label_r)
+	_refresh_controls_label()
 
 
 func _update_board() -> void:
@@ -3263,6 +3452,12 @@ func _update_board() -> void:
 		# attempts actually turn (or not) from where he stands.
 		flip_text = "%.2f REV" % last_flip_rev
 		turn_text = "%.2f REV" % last_turn_rev
+	# Fix Pass 39: the score has its own line now - the
+	# board's biggest type, standing in every state (in
+	# practice it simply names the mode).
+	if score_label != null:
+		score_label.text = "PRACTICE" if mode == "PRACTICE" \
+			else "YOU %d - %d OPP" % [score_you, score_opp]
 	var lines: Array = []
 	if mode == "PRACTICE":
 		lines = [
@@ -3277,7 +3472,6 @@ func _update_board() -> void:
 		lines.append("A: START GAME")
 	elif phase == "OVER":
 		lines = [
-			"YOU %d - %d OPP" % [score_you, score_opp],
 			winner_text,
 			"FINAL - %d INNINGS" % inning,
 			"A: PLAY AGAIN",
@@ -3286,9 +3480,8 @@ func _update_board() -> void:
 	elif phase == "TABULATE":
 		# Fix Pass 20: both sides have thrown and all four
 		# shoes are down; the round is posting itself (the
-		# insert cam is about to show the breakdown).
+		# breakdown is about to stand on this board).
 		lines = [
-			"YOU %d - %d OPP" % [score_you, score_opp],
 			"ROUND %d THROWN" % inning,
 			"LAST: %s" % dist_text,
 			"FLIP: %s" % flip_text,
@@ -3297,8 +3490,10 @@ func _update_board() -> void:
 		if last_ringer:
 			lines.append("RINGER!")
 	elif phase == "INSERT":
+		# The breakdown block owns the board in this phase
+		# (board_breakdown_up); these lines are the fallback
+		# the status block would show.
 		lines = [
-			"YOU %d - %d OPP" % [score_you, score_opp],
 			"ROUND %d DONE" % inning,
 			"LAST INNING: %s" % last_inning_text,
 			"A: NEXT ROUND",
@@ -3307,7 +3502,6 @@ func _update_board() -> void:
 		var turn_text2: String = "YOUR THROW %d OF 2" % (3 - turn_throws_left) \
 			if turn_side == "P" else "OPP THROWING"
 		lines = [
-			"YOU %d - %d OPP" % [score_you, score_opp],
 			"INNING %d - %s" % [inning, turn_text2],
 			"LAST: %s" % dist_text,
 			"FLIP: %s" % flip_text,
@@ -3317,6 +3511,12 @@ func _update_board() -> void:
 		if last_ringer:
 			lines.append("RINGER!")
 	status_label.text = "\n".join(PackedStringArray(lines))
+	# Fix Pass 39: at round end the breakdown takes the
+	# status block's place on this board.
+	if board_breakdown_label != null:
+		board_breakdown_label.text = "\n".join(PackedStringArray(round_lines))
+		board_breakdown_label.visible = board_breakdown_up
+		status_label.visible = not board_breakdown_up
 
 
 ## Point one shoe's stake sweep guard at a stake (Fix Pass 9's
@@ -4106,6 +4306,9 @@ func _do_release() -> void:
 ## otherwise the legacy grid read runs unchanged (direct callers -
 ## the suites, the technique audit - take that path).
 func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Dictionary = {}) -> void:
+	# Fix Pass 39: letting go of a shoe is live action - it
+	# cuts any ringer replay still running (live wins).
+	_pitcam_cancel_replay()
 	_plume_flown[shoe] = false # Fix Pass 32: a fresh flight earns a fresh plume
 	var use_sub: bool = false
 	if substep_release_enabled and t_star >= 0.0 and release_samples.size() >= 2:
@@ -4201,6 +4404,7 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 		_pos_anchor = shoe.global_position
 		state = "FLYING"
 		shoe_status[shoe] = "FLYING"
+		_pitcam_begin_record(shoe) # Fix Pass 39: the flight is recorded from here
 		_wire_guard(shoe, target_stake_key())
 		shoe.reset_stake_guard()
 		shoe.freeze = false
@@ -4586,6 +4790,7 @@ func _physics_process(delta: float) -> void:
 	_landscape_flight_watch() # Fix Pass 34: stones knock, plants bend
 	_sand_flight_watch() # Fix Pass 37: skids plow their furrows
 	_pitcam_policy(delta) # Fix Pass 38: the billboard feed's rate
+	_pitcam_update(delta) # Fix Pass 39: the broadcast camera + recorder + replay
 	# Fix Pass 34: the bend spring integrates HERE, at the
 	# fixed physics rate - in _process its explicit-Euler
 	# step went numerically soft at low render rates (the
@@ -4696,6 +4901,9 @@ func _settle_throw() -> void:
 	# depth its arrival earned, before the record is written
 	# (the record keeps the true final rest).
 	_sink_settled_shoe(shoe)
+	# Fix Pass 39: the flight's recording closes on the
+	# sunken rest; a ringer offers itself to the replay.
+	_pitcam_finish_record(shoe, ringer)
 	var vel: Vector3 = release_cache["velocity"]
 	var ang: Vector3 = release_cache["angular_velocity"]
 	var origin_at_release: Vector3 = release_cache["origin_pos"]
@@ -4783,6 +4991,12 @@ func game_line_z() -> float:
 ## Clean reset: every shoe frozen onto its rail slot at the
 ## given stock point, the player's first shoe active.
 func _gather_to_rail(line_ft: int) -> void:
+	# Fix Pass 39: the gather moves every shoe - a replay
+	# still running is cut first, so its real shoe is back
+	# on both cameras before it is picked up, and the lie
+	# hold ends: the camera re-frames on the clean pit.
+	_pitcam_cancel_replay()
+	pitcam_lie_left = 0.0
 	# Impact Dressing: the gather IS the restock - the pit is
 	# raked clean here, so a fresh round starts on clean sand.
 	# Every restock path (round change, new game, back to
@@ -5004,24 +5218,21 @@ func _finish_inning_cycle() -> void:
 	_update_board()
 
 
-## Build the billboard (Fix Pass 38; the display itself is
-## Fix Pass 20's insert cam, the FP34 hanging scoreboard it
-## used to ride on is RETIRED - hangers, hanging panel and
-## the popup machinery are gone). A roadside billboard on
-## two wooden posts at the left bed's line, halfway down
+## Build the billboard (Fix Pass 38; the FP34 hanging
+## scoreboard it replaced is RETIRED). A roadside billboard
+## on two wooden posts at the left bed's line, halfway down
 ## the lane, angled back at the throwing end: a wooden
 ## backing slab + dark face plate carrying the LIVE pit
-## closeup (a SubViewport sharing this world, fed by the
-## insert camera parked above and behind the pit looking
-## down at the stake - framed so all four settled shoes
-## sit in the shot, the suites assert exactly that) over
-## the round's breakdown text. The billboard is PERMANENT:
-## it stands from boot, the feed always on it; only the
-## panel's layout switches (full feed <-> picture +
-## breakdown). It is SOLID: collision bodies on the posts
-## and the panel (group billboard_wood, the FP34 wood
-## knock) - a shoe flying wide left strikes it and bounces
-## off. Nothing collidable reaches into the lane.
+## camera feed (a SubViewport sharing this world). The
+## billboard is PERMANENT: it stands from boot, the feed
+## always on it. It is SOLID: collision bodies on the
+## posts and the panel (group billboard_wood, the FP34
+## wood knock) - a shoe flying wide left strikes it and
+## bounces off. Nothing collidable reaches into the lane.
+## Fix Pass 39: the panel is CAM ONLY - the FP38 layout
+## switch and its text are gone; the feed quad is fixed
+## full-panel, and the camera behind it is the broadcast
+## camera of _pitcam_update.
 func _build_billboard() -> void:
 	insert_root = Node3D.new()
 	insert_root.name = "Billboard"
@@ -5049,12 +5260,14 @@ func _build_billboard() -> void:
 	insert_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	insert_root.add_child(insert_viewport)
 	insert_cam = Camera3D.new()
-	insert_cam.name = "InsertCamera"
+	insert_cam.name = "PitCamera"
+	# The pit camera sees the world AND the replay clone
+	# (layer 2); it never sees a real shoe that is hiding
+	# for its own replay (layer 4). See VIS_LAYER_*.
+	insert_cam.cull_mask = VIS_LAYER_WORLD | VIS_LAYER_PITCAM
 	insert_viewport.add_child(insert_cam)
-	insert_cam.position = Vector3(0.0, 2.4, -10.0)
-	insert_cam.fov = 55.0
-	insert_cam.look_at(Vector3(0.0, 0.05, STAKE_POS.z), Vector3.UP)
 	insert_cam.current = true
+	_pitcam_apply(PITCAM_BASE_POS, PITCAM_BASE_LOOK, PITCAM_BASE_FOV)
 	insert_screen = MeshInstance3D.new()
 	insert_screen.name = "InsertScreen"
 	var qm := QuadMesh.new()
@@ -5064,27 +5277,9 @@ func _build_billboard() -> void:
 	qmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	qmat.albedo_texture = insert_viewport.get_texture()
 	insert_screen.material_override = qmat
+	insert_screen.position = Vector3(0.0, 0.0, 0.012)
 	insert_root.add_child(insert_screen)
-	insert_label = Label3D.new()
-	# Sized on the fallback font's TRUE line pitch
-	# (get_height = 1.375 x font_size, measured): the
-	# breakdown runs 8-10 lines in ordinary rounds and 12
-	# at the compound worst (cancelled ringers + a standing
-	# ringer + a point + closest-only). Ten lines fit the
-	# zone under the shrunken feed; the rare 12-line round
-	# spills a line's width onto the frame/feed edge, drawn
-	# in front, still readable.
-	insert_label.font_size = 58
-	insert_label.pixel_size = 0.00126
-	insert_label.modulate = Color(0.95, 0.97, 0.90)
-	insert_label.outline_size = 5
-	insert_label.outline_modulate = Color(0.1, 0.07, 0.03)
-	insert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	insert_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	insert_label.position = Vector3(0.0, -0.46, 0.013)
-	insert_root.add_child(insert_label)
 	_pitcam_idle_acc = PITCAM_IDLE_SEC # first policy call pulses a frame
-	_billboard_layout()
 
 
 ## One solid body of the billboard (Fix Pass 38): a
@@ -5105,29 +5300,12 @@ func _billboard_body(local_pos: Vector3, size: Vector3) -> StaticBody3D:
 	return body
 
 
-## The panel's two layouts (Fix Pass 38): LIVE - the feed
-## fills the panel, no text. BREAKDOWN UP - the feed
-## shrinks to the panel's top half and the round's text
-## stands under it, the scoreboard's old arrangement at
-## billboard scale.
-func _billboard_layout() -> void:
-	if insert_screen == null:
-		return
-	var qm: QuadMesh = insert_screen.mesh as QuadMesh
-	if billboard_up:
-		qm.size = BILLBOARD_FEED_UP
-		insert_screen.position = Vector3(0.0, 0.545, 0.012)
-	else:
-		qm.size = BILLBOARD_FEED_LIVE
-		insert_screen.position = Vector3(0.0, 0.0, 0.012)
-	insert_label.visible = billboard_up
-
-
-## The pit-cam feed's update policy (Fix Pass 38), run
-## every physics frame: full frame rate while any shoe is
-## in flight (the player's FLYING state or any AI flight),
-## for PITCAM_BEAT_SEC after the last flight ends, and
-## while the breakdown is up; lazy single-frame pulses at
+## The pit-cam feed's update policy (Fix Pass 38, extended
+## by Fix Pass 39), run every physics frame: full frame
+## rate while any shoe is in flight (the player's FLYING
+## state or any AI flight), for PITCAM_BEAT_SEC after the
+## last flight ends, and while a ringer replay is pending
+## or playing; lazy single-frame pulses at
 ## PITCAM_IDLE_SEC while the pit is idle.
 func _pitcam_policy(delta: float) -> void:
 	if insert_viewport == null:
@@ -5137,7 +5315,7 @@ func _pitcam_policy(delta: float) -> void:
 		_pitcam_hot_left = PITCAM_BEAT_SEC
 	elif _pitcam_hot_left > 0.0:
 		_pitcam_hot_left = maxf(0.0, _pitcam_hot_left - delta)
-	if flying or _pitcam_hot_left > 0.0 or billboard_up:
+	if flying or _pitcam_hot_left > 0.0 or replay_state != "IDLE":
 		if insert_viewport.render_target_update_mode != SubViewport.UPDATE_ALWAYS:
 			insert_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 		_pitcam_idle_acc = PITCAM_IDLE_SEC
@@ -5148,28 +5326,281 @@ func _pitcam_policy(delta: float) -> void:
 			insert_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 
 
-## Put the round-end display on the billboard (Fix Pass
-## 20's show, re-homed by Fix Pass 38): the SAME triggers
-## and flow as the old insert - the tabulation calls this
-## when a round settles. The billboard itself never moves;
-## the panel switches layout in place and the feed stays
-## live above the breakdown text.
+## Pose the pit camera (Fix Pass 39). The camera rides in
+## the billboard's SubViewport, so its local transform IS
+## its world transform.
+func _pitcam_apply(pos: Vector3, look: Vector3, fov: float) -> void:
+	if insert_cam == null:
+		return
+	insert_cam.position = pos
+	if pos.distance_squared_to(look) > 0.0001:
+		insert_cam.look_at(look, Vector3.UP)
+	insert_cam.fov = fov
+
+
+## The shoe the broadcast camera is watching (Fix Pass
+## 39): the player's shoe while it flies, else a flying
+## AI shoe, else null.
+func _pitcam_flying_shoe() -> Shoe:
+	if state == "FLYING":
+		return shoe
+	for s: Shoe in ai_flight.keys():
+		return s
+	return null
+
+
+## Is this shoe's flight the one being recorded?
+func _pitcam_recording_live() -> bool:
+	if rec_shoe == null:
+		return false
+	if state == "FLYING" and rec_shoe == shoe:
+		return true
+	return ai_flight.has(rec_shoe)
+
+
+## The broadcast camera (Fix Pass 39), run every physics
+## frame after the feed policy: work out the desired
+## framing (follow / lie / baseline - or the replay's own
+## recorded framing), ease the damped state toward it,
+## pose the camera, and append this tick's sample to the
+## flight recording. All moves are exponential damps at
+## the PITCAM_*_RATE constants - a broadcast camera, not
+## a drone show: no snaps, no whip pans.
+func _pitcam_update(delta: float) -> void:
+	if insert_cam == null:
+		return
+	# A pending replay starts when its delay burns off.
+	if replay_state == "PENDING":
+		replay_delay -= delta
+		if replay_delay <= 0.0:
+			_pitcam_start_replay()
+	# While a replay plays, the recorded camera track
+	# owns the framing outright.
+	if replay_state == "PLAYING":
+		_pitcam_advance_replay(delta)
+		return
+	var d_pos: Vector3 = PITCAM_BASE_POS
+	var d_look: Vector3 = PITCAM_BASE_LOOK
+	var d_fov: float = PITCAM_BASE_FOV
+	var fly: Shoe = _pitcam_flying_shoe()
+	if fly != null:
+		# FLIGHT: the look point rides halfway between the
+		# stake (the destination) and the shoe; the camera
+		# drifts a little with the shoe; the lens opens up.
+		var sp: Vector3 = fly.global_position
+		d_look = Vector3(STAKE_POS.x, 0.05, STAKE_POS.z) * 0.5 \
+			+ Vector3(sp.x, clampf(sp.y, 0.02, 2.5), sp.z) * 0.5
+		d_pos = PITCAM_BASE_POS + Vector3(
+			clampf(sp.x, -1.2, 1.2) * 0.30,
+			clampf(sp.y - 0.5, 0.0, 1.5) * 0.10, 0.0)
+		d_fov = PITCAM_FOLLOW_FOV
+	elif pitcam_lie_left > 0.0:
+		# LIE: a tighter closeup of the settled shoe and
+		# the stake, held a while after each settle. The
+		# subject is the settle POSITION, cached at the
+		# settle - in practice the shoe itself is picked
+		# back up to the stand within a breath, and the
+		# camera keeps framing the lie it left, not the
+		# shoe's ride home.
+		pitcam_lie_left = maxf(0.0, pitcam_lie_left - delta)
+		var lp: Vector3 = pitcam_subject_pos
+		d_look = lp * 0.6 + Vector3(STAKE_POS.x, 0.05, STAKE_POS.z) * 0.4
+		d_pos = PITCAM_BASE_POS + Vector3(lp.x * 0.15, -0.12,
+			(lp.z - STAKE_POS.z) * 0.15)
+		d_fov = PITCAM_LIE_FOV
+	pitcam_pos = pitcam_pos.lerp(d_pos, 1.0 - exp(-PITCAM_POS_RATE * delta))
+	pitcam_look = pitcam_look.lerp(d_look, 1.0 - exp(-PITCAM_LOOK_RATE * delta))
+	pitcam_fov = lerpf(pitcam_fov, d_fov, 1.0 - exp(-PITCAM_FOV_RATE * delta))
+	_pitcam_apply(pitcam_pos, pitcam_look, pitcam_fov)
+	# The flight recorder: one sample per physics tick,
+	# the shoe's transform and the framing it was seen in.
+	if _pitcam_recording_live():
+		rec_shoe_track.append(rec_shoe.global_transform)
+		rec_cam_track.append({"pos": pitcam_pos, "look": pitcam_look,
+			"fov": pitcam_fov})
+
+
+## Start recording a flight (Fix Pass 39): called by both
+## release paths the moment a shoe truly flies. Live
+## always wins - any replay on deck or playing is cut
+## first (a release to a DROPPED shoe cuts it too; see
+## _release_shoe).
+func _pitcam_begin_record(s: Shoe) -> void:
+	_pitcam_cancel_replay()
+	rec_shoe = s
+	rec_shoe_track = []
+	rec_cam_track = []
+
+
+## Finish a flight's recording (Fix Pass 39): called by
+## both settle paths, AFTER the sink, so the track's last
+## sample is the shoe's true final rest. The settled shoe
+## becomes the lie closeup's subject either way; a ringer
+## also offers its track to the replay.
+func _pitcam_finish_record(s: Shoe, ringer: bool) -> void:
+	if rec_shoe != s:
+		return
+	rec_shoe_track.append(s.global_transform)
+	rec_cam_track.append({"pos": pitcam_pos, "look": pitcam_look,
+		"fov": pitcam_fov})
+	pitcam_subject_pos = s.global_position
+	pitcam_lie_left = PITCAM_LIE_SEC
+	var track: Dictionary = {
+		"shoe": rec_shoe_track.duplicate(),
+		"cam": rec_cam_track.duplicate(),
+		"real": s,
+		"color": s.tint,
+	}
+	rec_shoe = null
+	rec_shoe_track = []
+	rec_cam_track = []
+	if not ringer or (track["shoe"] as Array).size() < REPLAY_MIN_TICKS:
+		return
+	if replay_state == "IDLE":
+		replay_track = track
+		replay_state = "PENDING"
+		replay_delay = REPLAY_DELAY_SEC
+	else:
+		# One may queue behind the current replay; a newer
+		# ringer takes the queue slot (most recent wins).
+		replay_queue = track
+
+
+## Set every visual instance under a shoe to one layer
+## mask (Fix Pass 39: the replay's sleight of hand).
+func _set_shoe_visual_layers(s: Shoe, mask: int) -> void:
+	for raw: Node in s.find_children("", "VisualInstance3D", true, false):
+		(raw as VisualInstance3D).layers = mask
+
+
+## Begin the replay (Fix Pass 39): the real shoe hides
+## from the pit camera only (it stays in the player's
+## world, untouched), and a clone in the shoe's own tint
+## appears on the pit-cam layer at the track's first
+## frame. The clone is a frozen Shoe with its collision
+## shapes disabled - it flies the recorded transforms
+## and touches nothing.
+func _pitcam_start_replay() -> void:
+	if replay_track.is_empty():
+		replay_state = "IDLE"
+		return
+	replay_state = "PLAYING"
+	replay_t = 0.0
+	var real: Shoe = replay_track["real"]
+	_set_shoe_visual_layers(real, VIS_LAYER_MAIN_ONLY)
+	if replay_clone == null:
+		replay_clone = Shoe.new()
+		replay_clone.name = "ReplayClone"
+		add_child(replay_clone)
+		replay_clone.freeze = true
+		replay_clone.collision_layer = 0
+		replay_clone.collision_mask = 0
+		for raw_c: Node in replay_clone.find_children("",
+				"CollisionShape3D", true, false):
+			(raw_c as CollisionShape3D).disabled = true
+		_set_shoe_visual_layers(replay_clone, VIS_LAYER_PITCAM)
+	replay_clone.apply_tint(replay_track["color"])
+	replay_clone.visible = true
+	_pitcam_apply_replay_sample(0.0)
+
+
+## Fly the replay one frame (Fix Pass 39): the playback
+## clock runs at REPLAY_RATE, so track time crawls; shoe
+## and camera are interpolated between the recorded
+## per-tick samples (position lerp, rotation slerp).
+func _pitcam_advance_replay(delta: float) -> void:
+	replay_t += delta
+	var n: int = int((replay_track["shoe"] as Array).size())
+	var idx: float = replay_t * REPLAY_RATE * float(Engine.physics_ticks_per_second)
+	if idx >= float(n - 1):
+		_pitcam_end_replay()
+		return
+	_pitcam_apply_replay_sample(idx)
+
+
+func _pitcam_apply_replay_sample(idx: float) -> void:
+	var shoe_track: Array = replay_track["shoe"]
+	var cam_track: Array = replay_track["cam"]
+	var i0: int = int(floor(idx))
+	var i1: int = mini(i0 + 1, shoe_track.size() - 1)
+	var f: float = idx - float(i0)
+	var tf0: Transform3D = shoe_track[i0]
+	var tf1: Transform3D = shoe_track[i1]
+	var q: Quaternion = tf0.basis.get_rotation_quaternion().slerp(
+		tf1.basis.get_rotation_quaternion(), f)
+	replay_clone.global_transform = Transform3D(Basis(q),
+		tf0.origin.lerp(tf1.origin, f))
+	var c0: Dictionary = cam_track[i0]
+	var c1: Dictionary = cam_track[i1]
+	var cpos: Vector3 = (c0["pos"] as Vector3).lerp(c1["pos"] as Vector3, f)
+	var clook: Vector3 = (c0["look"] as Vector3).lerp(c1["look"] as Vector3, f)
+	var cfov: float = lerpf(float(c0["fov"]), float(c1["fov"]), f)
+	# The damped state follows the replay, so when live
+	# control resumes it eases out of the replay's last
+	# framing instead of snapping home.
+	pitcam_pos = cpos
+	pitcam_look = clook
+	pitcam_fov = cfov
+	_pitcam_apply(cpos, clook, cfov)
+
+
+## End the replay (Fix Pass 39): the real shoe returns to
+## both cameras, the clone hides, and a queued ringer -
+## if one is waiting - takes its turn after a breath.
+func _pitcam_end_replay() -> void:
+	var real: Shoe = replay_track.get("real", null)
+	if real != null and is_instance_valid(real):
+		_set_shoe_visual_layers(real, VIS_LAYER_WORLD)
+	if replay_clone != null:
+		replay_clone.visible = false
+	replay_track = {}
+	if not replay_queue.is_empty():
+		replay_track = replay_queue
+		replay_queue = {}
+		replay_state = "PENDING"
+		replay_delay = REPLAY_QUEUE_DELAY_SEC
+	else:
+		replay_state = "IDLE"
+
+
+## Cut any replay, on deck or playing (Fix Pass 39): a
+## new flight, a gather, or a round-end state change.
+## The real shoe is restored to both cameras at once.
+func _pitcam_cancel_replay() -> void:
+	if replay_state == "PLAYING":
+		var real: Shoe = replay_track.get("real", null)
+		if real != null and is_instance_valid(real):
+			_set_shoe_visual_layers(real, VIS_LAYER_WORLD)
+		if replay_clone != null:
+			replay_clone.visible = false
+	replay_state = "IDLE"
+	replay_track = {}
+	replay_queue = {}
+
+
+## Put the round-end breakdown on the REAR BOARD (Fix
+## Pass 20's show; re-homed by Fix Pass 38 to the
+## billboard, and by Fix Pass 39 to the scoreboard it
+## always belonged on): the SAME triggers and flow as the
+## old insert - the tabulation calls this when a round
+## settles. The board swaps its status block for the
+## breakdown block; the billboard keeps showing the pit.
 func _show_breakdown() -> void:
-	if insert_root == null:
+	if board_root == null:
 		return
-	insert_label.text = "\n".join(PackedStringArray(round_lines))
-	billboard_up = true
-	_billboard_layout()
+	board_breakdown_up = true
+	_update_board()
 
 
-## Back to the full live feed (Fix Pass 38): A continue /
-## X play again / B practice land here through the same
-## flow the old insert used.
+## Take the breakdown down (Fix Pass 39): A continue / X
+## play again / B practice land here through the same
+## flow the old insert used. A round-end state change
+## also cancels any ringer replay still running.
 func _hide_breakdown() -> void:
-	if insert_root == null:
+	if board_root == null:
 		return
-	billboard_up = false
-	_billboard_layout()
+	board_breakdown_up = false
+	_pitcam_cancel_replay()
 	_update_board()
 
 
@@ -5263,6 +5694,7 @@ func _ai_release_now() -> void:
 		"release": rel,
 		"line_ft": ThrowMath.line_ft_for_release(rel["pos"], target_stake_pos()),
 	}
+	_pitcam_begin_record(s) # Fix Pass 39: the AI's flights are recorded too
 
 
 func _ai_swing_done() -> void:
@@ -5329,6 +5761,8 @@ func _settle_ai_shoe(s: Shoe) -> void:
 	# scoring read the physics rest above; the record below
 	# keeps the true final (sunken) rest.
 	_sink_settled_shoe(s)
+	# Fix Pass 39: an AI ringer replays just the same.
+	_pitcam_finish_record(s, ringer)
 	shoe_status[s] = "DOWN"
 	throw_count += 1
 	last_hold_text = "FLIP (TOE)"

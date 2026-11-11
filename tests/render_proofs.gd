@@ -35,16 +35,21 @@ extends SceneTree
 ##     one more cycle step to FAR SHANK · HEEL, the LONGEST
 ##     label in the set, at the same camera as grip_far.png -
 ##     the whole string inside the frame at the clamped size.
-##   proofs/insert_view.png - the round-end display UP on the
-##     billboard (Fix Pass 38; the display is Fix Pass 20's
-##     insert cam): the live pit closeup (all four settled
-##     shoes parked around the stake, one dud wide) over the
-##     round's score breakdown, seen from the throwing spot.
-##   proofs/proof_billboard_feed.png - Fix Pass 38: the
-##     billboard from the throwing spot MID-ROUND - the live
-##     pit-cam feed full-panel, a shoe's lie at the stake
-##     identifiable; the suite also samples the feed texture
+##   proofs/board_breakdown.png - Fix Pass 39: the round-end
+##     breakdown UP on the rear SCOREBOARD (the fresh look),
+##     seen from the throwing line; board_from_foul_line.png
+##     is the same board in its running state, same camera.
+##   proofs/proof_billboard_feed.png - Fix Pass 39: the
+##     billboard from the throwing spot at a settled lie -
+##     the broadcast camera's closeup of shoe + stake on the
+##     panel; the suite also samples the feed texture
 ##     across a staged flight and asserts it changes.
+##   proofs/proof_billboard_flight.png - Fix Pass 39: the
+##     billboard from the throwing spot MID-FLIGHT - the
+##     camera's closeup follow, the shoe big in the panel.
+##   proofs/proof_billboard_replay.png - Fix Pass 39: the
+##     billboard mid-REPLAY - a settled ringer's slow-mo
+##     clone flying the recorded track on the panel.
 ##   proofs/proof_billboard_plan.png - Fix Pass 38: the
 ##     billboard's placement from a high oblique - LEFT of
 ##     the lane at halfway, posts at the bed line, face
@@ -780,7 +785,7 @@ func _run() -> void:
 	var face_dir: Vector3 = main.board_root.global_transform.basis.z
 	face_dir.y = 0.0
 	face_dir = face_dir.normalized()
-	var board_center: Vector3 = main.board_root.global_transform * Vector3(0.0, 1.85, 0.0)
+	var board_center: Vector3 = main.board_root.global_transform * Vector3(0.0, 2.0, 0.0)
 	var cam_close := Camera3D.new()
 	cam_close.fov = 55.0
 	cam_close.position = board_center + face_dir * 4.2
@@ -810,15 +815,13 @@ func _run() -> void:
 	await snap(cam_d, "res://proofs/board_from_foul_line.png")
 	cam_d.queue_free()
 
-	# --- Proof E: the round-end display UP on the billboard ---
-	# (Fix Pass 20's insert proof, re-homed by Fix Pass 38.)
-	# A manufactured round ends the way a real one does: the
-	# tabulation puts the display on the billboard - live pit
-	# closeup over the score breakdown. The four shoes are
-	# parked settled around the stake (one dud wide, the
-	# framing stress case), and every one of them must sit
-	# inside the closeup's view: a framed-but-empty closeup
-	# is a fail.
+	# --- Proof E: the round-end breakdown UP on the rear ---
+	# SCOREBOARD (Fix Pass 39; Fix Pass 20's insert proof,
+	# re-homed by FP38 to the billboard, now on the board
+	# it always belonged on). A manufactured round ends the
+	# way a real one does: the tabulation puts the
+	# breakdown on the rear board. The four shoes are
+	# parked settled around the stake.
 	main.start_game()
 	var park_spots: Array = [
 		Vector3(0.10, 0.05, -12.10), Vector3(0.55, 0.05, -11.95),
@@ -837,32 +840,36 @@ func _run() -> void:
 		{"owner": "AI", "dist_in": 90.0, "ringer": false}]
 	main._score_inning()
 	await settle(6)
-	check(main.phase == "INSERT" and main.billboard_up
-		and main.insert_label.visible,
-		"the round-end display is UP on the billboard at the round's end")
-	var framed_e: bool = true
-	for raw_f: Variant in main._all_shoes():
-		var shoe_f: Node3D = raw_f
-		if not main.insert_cam.is_position_in_frustum(shoe_f.global_position):
-			framed_e = false
-	check(framed_e,
-		"insert closeup frames ALL FOUR settled shoes (dud at 2.3 m included)")
+	check(main.phase == "INSERT" and main.board_breakdown_up
+		and main.board_breakdown_label.visible
+		and not main.status_label.visible,
+		"the round-end breakdown is UP on the rear scoreboard at the round's end")
 	var lines_e: String = "\n".join(PackedStringArray(main.round_lines))
-	check(lines_e.contains("YOU 1: 2.0 IN")
+	check(main.board_breakdown_label.text == lines_e
+		and lines_e.contains("YOU 1: 2.0 IN")
 		and lines_e.contains("YOUR CLOSEST SHOE SCORES: +1")
 		and lines_e.contains("MATCH: YOU 1 - 0 OPP"),
-		"the billboard carries the round's breakdown")
-	# The judging frame: from the THROWING SPOT, the way the
-	# player reads it - billboard left at halfway, the
-	# breakdown legible on its face.
+		"the scoreboard carries the round's breakdown")
+	# Fix Pass 39 re-derives the old all-four-shoes framing
+	# audit for the CLOSEUP camera: at baseline the stake
+	# and the shoe lying at it fill the panel - both must
+	# sit inside the closeup's view (the wide dud at 2.3 m
+	# is out of frame BY DESIGN now - the camera is a
+	# closeup, and the lie is its subject).
+	check(main.insert_cam.is_position_in_frustum(main.STAKE_POS + Vector3(0.0, 0.1, 0.0))
+		and main.insert_cam.is_position_in_frustum(park_spots[0]),
+		"the pit closeup frames the stake and the shoe lying at it")
+	# The judging frame: from the THROWING LINE, the way
+	# the player reads it - the fresh-look scoreboard
+	# beyond the pit with the breakdown up.
 	var cam_e := Camera3D.new()
 	cam_e.fov = 55.0
-	cam_e.position = Vector3(0.8, 1.62, -0.914)
+	cam_e.position = Vector3(0.8, 1.62, -0.364)
 	main.add_child(cam_e)
-	cam_e.look_at(main.billboard_transform().origin, Vector3.UP)
+	cam_e.look_at(board_center, Vector3.UP)
 	cam_e.current = true
 	await settle(4)
-	await snap(cam_e, "res://proofs/insert_view.png")
+	await snap(cam_e, "res://proofs/board_breakdown.png")
 	cam_e.queue_free()
 	# Back to practice for the proofs that follow.
 	main._enter_practice()
@@ -1123,23 +1130,23 @@ func _run() -> void:
 	await snap(cam_f36c, "res://proofs/proof_ai_shelf.png")
 	cam_f36c.queue_free()
 
-	# --- Proof F38a: THE BILLBOARD'S LIVE FEED, from the ---
-	# throwing spot (re-derives FP34's proof_scoreboard: the
-	# display's fixed transform + legibility from the spot.
-	# The subjects moved with Chris's design: the board now
-	# stands LEFT at halfway, and what it shows mid-round is
-	# the LIVE FEED - which must actually move: the suite
+	# --- Proof F39a: THE BILLBOARD'S LIVE FEED, from the ---
+	# throwing spot (Fix Pass 38's proof, re-derived by
+	# Fix Pass 39: the panel is CAM ONLY now, and the
+	# camera behind it is the smart closeup - the suite
 	# samples the feed texture across a staged flight and
-	# asserts the pit picture changes. A frozen panel is a
-	# fail.)
+	# asserts the pit picture changes, snaps the follow
+	# mid-flight, and snaps the held lie closeup after the
+	# settle. A frozen panel is a fail.)
 	main._enter_practice()
 	await settle(4)
-	check(main.insert_root.visible and not main.billboard_up
+	check(main.insert_root.visible
+		and (main.insert_screen.mesh as QuadMesh).size == main.BILLBOARD_FEED_LIVE
 		and main.insert_root.global_transform.origin.distance_to(
 			main.billboard_transform().origin) < 0.001
 		and main.insert_root.global_transform.basis.is_equal_approx(
 			main.billboard_transform().basis),
-		"FP38 proofs: the billboard stands at its fixed transform, feed up, no breakdown")
+		"FP39 proofs: the billboard stands at its fixed transform, cam only, feed full-panel")
 	# A subject for the feed: one player shoe parked at the
 	# stake, its lie the thing the feed exists to show.
 	var feed_shoe: Shoe = main.player_pair[0]
@@ -1174,25 +1181,45 @@ func _run() -> void:
 			"vel": fvel, "ang": Vector3(-6.0, 0.0, 0.0)},
 		"line_ft": 40,
 	}
+	# The production release path's recorder call, so the
+	# settle engages the camera's lie hold like a real
+	# throw's (and the flight is on the record).
+	main._pitcam_begin_record(fly_shoe)
+	# The judging camera stands at the throwing spot from
+	# here: it snaps the follow mid-flight and the lie
+	# after the settle.
+	var cam_f39a := Camera3D.new()
+	cam_f39a.fov = 55.0
+	cam_f39a.position = Vector3(0.8, 1.62, -0.914)
+	main.add_child(cam_f39a)
+	cam_f39a.look_at(main.billboard_transform().origin, Vector3.UP)
+	cam_f39a.current = true
 	var feed_mid: Image = null
+	var flight_snapped: bool = false
 	var ft0: int = Time.get_ticks_msec()
 	while Time.get_ticks_msec() - ft0 < 5000:
 		await process_frame
 		if feed_mid == null and Time.get_ticks_msec() - ft0 > 400:
 			feed_mid = main.insert_viewport.get_texture().get_image()
+		# Proof (a): MID-FLIGHT, the shoe closing on the pit
+		# - the panel must show the camera's closeup follow.
+		if not flight_snapped and main.ai_flight.has(fly_shoe) \
+				and fly_shoe.global_position.distance_to(main.STAKE_POS) < 2.6:
+			flight_snapped = true
+			await snap(cam_f39a, "res://proofs/proof_billboard_flight.png")
 		if feed_mid != null and not main.ai_flight.has(fly_shoe):
 			break
+	check(flight_snapped,
+		"FP39 proofs: the mid-flight follow frame was caught (shoe inside 2.6 m of the stake)")
 	await settle(10)
 	var feed_landed: Image = main.insert_viewport.get_texture().get_image()
 	check(feed_mid != null and not main.ai_flight.has(fly_shoe),
 		"FP38 proofs: the staged flight flew and settled in the pit")
 	if feed_mid != null:
-		# A shoe is a small thing in the pit-cam's wide
-		# framing (~50 x 25 px of 1024 x 512), so the diff
-		# runs at stride 2 and the thresholds sit at a
-		# fraction of one shoe's sampled area: idle -> landed
-		# must show the whole arrived shoe, mid -> landed
-		# its fall.
+		# The diff runs at stride 2 over the whole frame:
+		# idle -> landed must show the arrived shoe (and,
+		# Fix Pass 39, the camera's own move to the lie
+		# closeup), mid -> landed its fall.
 		var diff_idle: int = 0
 		var diff_mid: int = 0
 		for gx: int in range(0, 1024, 2):
@@ -1205,19 +1232,21 @@ func _run() -> void:
 				if absf(cm.r - cl.r) + absf(cm.g - cl.g) + absf(cm.b - cl.b) > 0.25:
 					diff_mid += 1
 		check(diff_idle > 60 and diff_mid > 25,
-			"FP38 proofs: the billboard feed texture UPDATES across a shoe's flight (idle->landed %d, mid->landed %d changed samples)" % [diff_idle, diff_mid])
-	# The judging frame: from the throwing spot, mid-round -
-	# the billboard at its bearing, the live feed full-panel
-	# with the pit readable on it.
-	var cam_f38a := Camera3D.new()
-	cam_f38a.fov = 55.0
-	cam_f38a.position = Vector3(0.8, 1.62, -0.914)
-	main.add_child(cam_f38a)
-	cam_f38a.look_at(main.billboard_transform().origin, Vector3.UP)
-	cam_f38a.current = true
-	await settle(6)
-	await snap(cam_f38a, "res://proofs/proof_billboard_feed.png")
-	cam_f38a.queue_free()
+			"FP39 proofs: the billboard feed texture UPDATES across a shoe's flight (idle->landed %d, mid->landed %d changed samples)" % [diff_idle, diff_mid])
+	# Proof (b): the settled LIE - let the camera finish
+	# easing into its lie closeup (the subject is the
+	# staged shoe, down in the pit beside the parked one),
+	# then the judging frame from the throwing spot: the
+	# billboard at its bearing, the closeup of shoe +
+	# stake on its face.
+	await settle(45)
+	check(main.pitcam_subject_pos.distance_to(fly_shoe.global_position) < 0.05
+		and main.insert_cam.is_position_in_frustum(fly_shoe.global_position)
+		and absf(main.insert_cam.fov - main.PITCAM_LIE_FOV) < 4.0,
+		"FP39 proofs: after the settle the camera holds the lie closeup (fov %.1f)"
+		% main.insert_cam.fov)
+	await snap(cam_f39a, "res://proofs/proof_billboard_feed.png")
+	cam_f39a.queue_free()
 
 	# --- Proof F38b: THE BILLBOARD'S PLACEMENT ---
 	# High oblique from the house side: the billboard LEFT
@@ -1291,6 +1320,80 @@ func _run() -> void:
 		"FP38 proofs: the billboard strike played the WOOD KNOCK through the FP34 contact path")
 	check(not main.ai_flight.has(strike_shoe),
 		"FP38 proofs: the struck shoe settled back on the lane side")
+
+	# --- Proof F39b: THE RINGER REPLAY (Fix Pass 39) ---
+	# A production ringer in practice (the smoke suite's
+	# idiom: grab the stocked shoe, pose the hand on the
+	# solved release, let go through _release_shoe): the
+	# settle offers the flight to the replay, and the panel
+	# must show the clone flying it in slow motion. The
+	# outer camera wears the player's own cull mask, so in
+	# this frame the clone exists ONLY on the billboard -
+	# exactly what the headset shows.
+	main._enter_practice()
+	await settle(4)
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
+		main.shoe.zone_world_center("toe"))
+	main.test_grip["R"] = 1.0
+	await settle(6)
+	for i39: int in 2:
+		await physics_frame
+	check(main.state == "HELD", "FP39 proofs: the replay proof's grab holds the shoe")
+	var rp_line_z: float = main.game_line_z()
+	var rp_release := Vector3(0.25, 1.25, rp_line_z + 0.35)
+	var rp_rel: Dictionary = AIPitcher.base_release(
+		rp_release, main.target_stake_pos())
+	var rp_vel: Vector3 = rp_rel["vel"]
+	var rp_ang: Vector3 = rp_rel["ang"]
+	var rp_rel_tf: Transform3D = Shoe.hold_transform("toe", "R")
+	var rp_basis: Basis = (rp_rel["basis"] as Basis) * rp_rel_tf.basis.inverse()
+	main.test_hand_tf["R"] = Transform3D(rp_basis,
+		rp_release - rp_basis * rp_rel_tf.origin)
+	await settle(4)
+	for i39b: int in 2:
+		await physics_frame
+	var rp_samples: Array = []
+	var rp_axis: Vector3 = rp_ang.normalized()
+	var rp_rate: float = rp_ang.length()
+	var rp_now: float = float(Time.get_ticks_msec()) / 1000.0
+	for i39c: int in 28:
+		var rp_t: float = float(i39c - 27) / 90.0
+		rp_samples.append(ThrowMath.make_sample(
+			rp_now + rp_t,
+			rp_release + rp_vel * rp_t,
+			Quaternion(rp_axis, rp_rate * rp_t)))
+	main.samples = rp_samples
+	var rp_gov: bool = main.spin_governor_enabled
+	main.spin_governor_enabled = false
+	main._release_shoe(rp_samples)
+	main.spin_governor_enabled = rp_gov
+	main.grab_state.reset()
+	main.test_grip["R"] = 0.0
+	check(main.state == "FLYING", "FP39 proofs: the replay proof's ringer flies")
+	var rp_wait39: float = 0.0
+	while main.replay_state != "PLAYING" and rp_wait39 < 15.0:
+		await create_timer(0.15).timeout
+		rp_wait39 += 0.15
+	check(main.replay_state == "PLAYING" and main.replay_clone != null
+		and main.replay_clone.visible,
+		"FP39 proofs: the settled ringer's slow-mo replay is playing on the billboard (state %s)"
+		% String(main.replay_state))
+	var cam_f39b := Camera3D.new()
+	cam_f39b.fov = 55.0
+	cam_f39b.cull_mask = main.VIS_LAYER_WORLD | main.VIS_LAYER_MAIN_ONLY
+	cam_f39b.position = Vector3(0.8, 1.62, -0.914)
+	main.add_child(cam_f39b)
+	cam_f39b.look_at(main.billboard_transform().origin, Vector3.UP)
+	cam_f39b.current = true
+	await settle(4)
+	await snap(cam_f39b, "res://proofs/proof_billboard_replay.png")
+	cam_f39b.queue_free()
+	var rp_end39: float = 0.0
+	while main.replay_state != "IDLE" and rp_end39 < 12.0:
+		await create_timer(0.2).timeout
+		rp_end39 += 0.2
+	check(main.replay_state == "IDLE" and not main.replay_clone.visible,
+		"FP39 proofs: the replay ends and the live view is restored")
 
 	# --- Proof F34c: A PLANT BENDS (Fix Pass 34) ---
 	# A staged AI-pair flight straight through a left-bed

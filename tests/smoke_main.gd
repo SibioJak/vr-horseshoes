@@ -860,28 +860,31 @@ func _run() -> void:
 	# Court pieces.
 	check(main.shoe != null, "shoe exists")
 	check(main.state == "STAND", "shoe starts on the stand")
-	check(main.status_label != null and main.controls_label != null, "board labels exist")
-	check(main.controls_label.text.contains("GRAB") and main.controls_label.text.contains("THROW")
-		and main.controls_label.text.contains("SLIDE") and main.controls_label.text.contains("RECENTER"),
+	check(main.status_label != null and main.controls_label != null
+		and main.score_label != null and main.board_breakdown_label != null
+		and main.controls_label_r != null,
+		"board labels exist (score, status, breakdown, two controls columns)")
+	check(main.controls_full_text().contains("GRAB") and main.controls_full_text().contains("THROW")
+		and main.controls_full_text().contains("SLIDE") and main.controls_full_text().contains("RECENTER"),
 		"board lists every control (grab/slide/throw/recenter)")
-	check(main.controls_label.text.contains("Left stick: move")
-		and main.controls_label.text.contains("Right stick: turn"),
+	check(main.controls_full_text().contains("Left stick: move")
+		and main.controls_full_text().contains("Right stick: turn"),
 		"board lists the pass-6 standard stick controls (left moves, right turns)")
-	check(main.controls_label.text.contains("30 FT LINE"),
+	check(main.controls_full_text().contains("30 FT LINE"),
 		"board notes the 30 ft short line (pass 3)")
-	check(main.controls_label.text.contains("A BUTTON")
-		and main.controls_label.text.contains("B BUTTON"),
+	check(main.controls_full_text().contains("A BUTTON")
+		and main.controls_full_text().contains("B BUTTON"),
 		"board lists the game buttons (A start/play again, B practice) - standing rule: every accepted command is listed")
-	check(main.controls_label.text.contains("back to practice"),
+	check(main.controls_full_text().contains("back to practice"),
 		"FP19: the board's B line says what B does now - back to practice (no end-swap exists)")
-	check(main.controls_label.text.contains("CHANGE GRIP"),
+	check(main.controls_full_text().contains("CHANGE GRIP"),
 		"FP22: the board lists the grip cycle (A / X while holding a shoe) - standing rule: every accepted command is listed")
-	check(main.controls_label.text.contains("A / X WHILE HOLDING A SHOE")
-		and main.controls_label.text.contains("A BUTTON (EMPTY HAND)"),
+	check(main.controls_full_text().contains("A / X WHILE HOLDING A SHOE")
+		and main.controls_full_text().contains("A BUTTON (EMPTY HAND)"),
 		"FP22: the board's A/X lines carry their conditions - cycle while holding, game A with an empty hand")
-	check(main.controls_label.text.contains("SQUEEZE FROM YOUR SPOT: SHOE COMES TO YOUR HAND"),
+	check(main.controls_full_text().contains("SQUEEZE FROM YOUR SPOT: SHOE COMES TO YOUR HAND"),
 		"FP25: the board lists the long-arm grab - standing rule: every accepted command is listed")
-	check(main.controls_label.text.contains("DEFAULT GRIP: TOE GRIP - SET BY CYCLING A HELD SHOE"),
+	check(main.controls_full_text().contains("DEFAULT GRIP: TOE GRIP - SET BY CYCLING A HELD SHOE"),
 		"FP25: the board names the default grip (smoke settings start clean: TOE GRIP)")
 	check(main.status_label.text.contains("THROWS: 0"), "board starts at zero throws")
 
@@ -962,11 +965,26 @@ func _run() -> void:
 		"board FACE points back at the pitching spot (dot %.3f)" % face_dir.dot(to_spot))
 	check(main.board_slab_size.x >= 2.8,
 		"board is scoreboard-sized for distance reading (slab %.1f m wide)" % main.board_slab_size.x)
-	# Every label's rendered text block must fit ON the slab
-	# (font metrics, not eyeballs): this is the standing guard
-	# that no line can silently outgrow the board again.
+	# Every label's rendered text block must fit its ZONE on
+	# the face (font metrics, not eyeballs): this is the
+	# standing guard that no line can silently outgrow the
+	# board again. Fix Pass 39 re-derives it per label - the
+	# fresh look gives each block its own zone (the score
+	# its band, the breakdown the status block's place, the
+	# controls two columns), so each is measured against
+	# the zone it actually stands in.
 	var fb_font: Font = ThemeDB.fallback_font
-	for lbl: Label3D in [main.title_label, main.status_label, main.controls_label]:
+	var zones39: Dictionary = main.board_label_zones()
+	var zone_of: Dictionary = {
+		main.title_label: "title",
+		main.score_label: "score",
+		main.status_label: "status",
+		main.board_breakdown_label: "breakdown",
+		main.controls_label: "controls",
+		main.controls_label_r: "controls",
+	}
+	for lbl: Label3D in zone_of.keys():
+		var zone: Vector2 = zones39[String(zone_of[lbl])]
 		var text_lines: PackedStringArray = lbl.text.split("\n")
 		var w_max: float = 0.0
 		for ln: String in text_lines:
@@ -981,32 +999,43 @@ func _run() -> void:
 		# overlapped its own lines (pass-10 close-up proof).
 		var h_tot: float = n_lines * fb_font.get_height(lbl.font_size) * lbl.pixel_size \
 			+ (n_lines - 1.0) * lbl.line_spacing * lbl.pixel_size
-		check(w_max <= main.board_slab_size.x - 0.08 and h_tot <= main.board_slab_size.y - 0.08,
-			"board label '%s...' fits the slab (%.2f x %.2f m on %.1f x %.1f)"
-			% [text_lines[0], w_max, h_tot, main.board_slab_size.x, main.board_slab_size.y])
-	# The boot text never exercises the widest line the board can
-	# show - measure the worst-case status blocks with the label's
-	# own font. Backyard Game v1 re-derived them: the status font
-	# stepped down (58 / 0.0029) because a game status runs to
-	# SEVEN lines where practice ran to six, and the longest
-	# honest lines grew ("LAST INNING: ... (RINGER)").
-	# Fix Pass 20 re-measures the game blocks the settle-posted
-	# flow actually shows (the tabulation beat and the insert
-	# prompt). Both modes are measured.
-	var worst_cases: Array = [
-		"THROWS: 999\nHOLD: TURN (SHANK_RIGHT)\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!\nA: START GAME",
-		"YOU 99 - 99 OPP\nROUND 99 THROWN\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!",
-		"YOU 99 - 99 OPP\nROUND 99 DONE\nLAST INNING: OPP +7 (OPP RINGER)\nA: NEXT ROUND",
+		check(w_max <= zone.x and h_tot <= zone.y,
+			"FP39: board label '%s...' fits its %s zone (%.2f x %.2f m in %.2f x %.2f)"
+			% [text_lines[0], String(zone_of[lbl]), w_max, h_tot, zone.x, zone.y])
+	# The boot text never exercises the widest line the board
+	# can show - measure the worst-case blocks with each
+	# label's own font: every status state the flow shows
+	# (Fix Pass 39: the score line stands on its own label
+	# now, so the status blocks no longer carry it), the
+	# score at two digits, and the breakdown's 12-line
+	# compound worst case composed from Scoring's own line
+	# formats (cancelled ringers + a standing ringer + a
+	# shut-out point shoe).
+	var worst39: Array = [
+		[main.status_label, "status",
+			"THROWS: 999\nHOLD: TURN (SHANK_RIGHT)\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!\nA: START GAME"],
+		[main.status_label, "status",
+			"ROUND 99 THROWN\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!"],
+		[main.status_label, "status",
+			"INNING 99 - YOUR THROW 2 OF 2\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nLAST INNING: OPP +7 (OPP RINGER)"],
+		[main.status_label, "status",
+			"YOU WIN!\nFINAL - 99 INNINGS\nA: PLAY AGAIN\nB: PRACTICE"],
+		[main.score_label, "score", "YOU 99 - 99 OPP"],
+		[main.board_breakdown_label, "breakdown",
+			"FINAL - OPP WINS\nOPP 1: RINGER\nOPP 2: RINGER\nYOU 1: NO SCORE (123.4 IN)\nYOU 2: 5.9 IN\nRINGERS CANCEL IN PAIRS\nOPP RINGER STANDS: +3\nOPP CLOSEST SHOE SCORES: +1\nCLOSEST ONLY SCORES\nROUND: OPP +4\nMATCH: YOU 99 - 99 OPP\nA - PLAY AGAIN"],
 	]
-	for worst: String in worst_cases:
-		var w_lines: PackedStringArray = worst.split("\n")
+	for wc: Array in worst39:
+		var w_lbl: Label3D = wc[0]
+		var w_zone: Vector2 = zones39[String(wc[1])]
+		var w_lines: PackedStringArray = String(wc[2]).split("\n")
 		var w_worst: float = 0.0
 		for ln2: String in w_lines:
-			w_worst = maxf(w_worst, fb_font.get_string_size(ln2, HORIZONTAL_ALIGNMENT_LEFT, -1.0, main.status_label.font_size).x * main.status_label.pixel_size)
-		var h_worst: float = float(w_lines.size()) * fb_font.get_height(main.status_label.font_size) * main.status_label.pixel_size \
-			+ float(w_lines.size() - 1) * main.status_label.line_spacing * main.status_label.pixel_size
-		check(w_worst <= main.board_slab_size.x - 0.08 and h_worst <= main.board_slab_size.y - 0.08,
-			"worst-case status block fits the slab (%.2f x %.2f m)" % [w_worst, h_worst])
+			w_worst = maxf(w_worst, fb_font.get_string_size(ln2, HORIZONTAL_ALIGNMENT_LEFT, -1.0, w_lbl.font_size).x * w_lbl.pixel_size)
+		var h_worst: float = float(w_lines.size()) * fb_font.get_height(w_lbl.font_size) * w_lbl.pixel_size \
+			+ float(w_lines.size() - 1) * w_lbl.line_spacing * w_lbl.pixel_size
+		check(w_worst <= w_zone.x and h_worst <= w_zone.y,
+			"FP39: worst-case %s block fits its zone (%d lines, %.2f x %.2f m in %.2f x %.2f)"
+			% [String(wc[1]), w_lines.size(), w_worst, h_worst, w_zone.x, w_zone.y])
 
 	# --- Scenery dressing (Fix Pass 10 comfort) ---
 	# Static references at several distances against the flat
@@ -1377,7 +1406,7 @@ func _run() -> void:
 	# the selection; the fire is lit exactly at DUSK.
 	check(main.time_of_day == "NOON",
 		"Stage B light: a first run starts at NOON (the accepted look)")
-	check(main.controls_label.text.contains(
+	check(main.controls_full_text().contains(
 		"TIME: NOON - B/Y IN PRACTICE: CHANGE TIME"),
 		"Stage B light: the board names the time and its control - standing rule: every accepted command is listed")
 	check(not main.fire_is_lit() and main.fire_light != null
@@ -1391,7 +1420,7 @@ func _run() -> void:
 		and main.fire_light.light_energy > 1.0,
 		"Stage B light: the fire is LIT at dusk (flickering, energy %.2f)"
 		% main.fire_light.light_energy)
-	check(main.controls_label.text.contains("TIME: DUSK"),
+	check(main.controls_full_text().contains("TIME: DUSK"),
 		"Stage B light: the board re-names the selection at DUSK")
 	var dusk_preset: Dictionary = main.time_of_day_presets()["DUSK"]
 	var dusk_euler: Vector3 = dusk_preset["sun_euler"]
@@ -1405,7 +1434,7 @@ func _run() -> void:
 	await pulse_button("B")
 	check(main.time_of_day == "CLOUDY" and not main.fire_is_lit(),
 		"Stage B light: DUSK -> CLOUDY, and the fire goes cold")
-	check(main.controls_label.text.contains("TIME: CLOUDY"),
+	check(main.controls_full_text().contains("TIME: CLOUDY"),
 		"Stage B light: the board re-names the selection at CLOUDY")
 	await pulse_button("B")
 	check(main.time_of_day == "NOON",
@@ -1605,17 +1634,17 @@ func _run() -> void:
 			waited_d += 0.1
 		dusk_rounds += 1
 		if main.phase == "INSERT":
-			check(main.insert_label != null
-				and main.insert_label.text.contains("OPP +3"),
-				"Stage B light: the billboard carries its breakdown at DUSK (round %d)"
+			check(main.board_breakdown_up
+				and main.board_breakdown_label.text.contains("OPP +3"),
+				"Stage B light: the scoreboard carries its breakdown at DUSK (round %d)"
 				% dusk_rounds)
 			await pulse_button("A")
 	check(main.phase == "OVER" and main.score_opp >= 21,
 		"Stage B light: a full game completes at DUSK (%d rounds, opponent %d)"
 		% [dusk_rounds, main.score_opp])
-	check(main.insert_label != null
-		and main.insert_label.text.contains("FINAL"),
-		"Stage B light: the final breakdown stands on the billboard at DUSK")
+	check(main.board_breakdown_up
+		and main.board_breakdown_label.text.contains("FINAL"),
+		"Stage B light: the final breakdown stands on the scoreboard at DUSK")
 	main.set_time_of_day("NOON")
 	await pulse_button("B") # exit the finished game - spent on the exit
 	check(main.mode == "PRACTICE" and main.time_of_day == "NOON",
@@ -2371,7 +2400,7 @@ func _run() -> void:
 	await pulse_hand_button("L", "A")
 	check(main._grip_index() == 2 and main.default_grip == 2,
 		"FP25: cycling to SHANK · MID makes it the default (got %d)" % main.default_grip)
-	check(main.controls_label.text.contains("DEFAULT GRIP: SHANK · MID"),
+	check(main.controls_full_text().contains("DEFAULT GRIP: SHANK · MID"),
 		"FP25: the board re-names the default the moment it changes")
 	var set_f: FileAccess = FileAccess.open(set_path, FileAccess.READ)
 	var set_parsed: Variant = JSON.parse_string(set_f.get_as_text()) if set_f != null else null
@@ -2439,7 +2468,7 @@ func _run() -> void:
 	await create_timer(0.3).timeout
 	check(int(m2.default_grip) == 2,
 		"FP25: the default survives a restart (read %d)" % int(m2.default_grip))
-	check(m2.controls_label.text.contains("DEFAULT GRIP: SHANK · MID"),
+	check(m2.controls_full_text().contains("DEFAULT GRIP: SHANK · MID"),
 		"FP25: the restarted board names the stored default")
 	check(await long_arm_grab(m2, "R", hand_r40),
 		"FP25: the restarted instance long-arms from the spot")
@@ -2466,7 +2495,7 @@ func _run() -> void:
 	for i25: int in 7:
 		await pulse_hand_button("L", "A")
 	check(main._grip_index() == 0 and main.default_grip == 0
-		and main.controls_label.text.contains("DEFAULT GRIP: TOE GRIP"),
+		and main.controls_full_text().contains("DEFAULT GRIP: TOE GRIP"),
 		"FP25: a full cycle walk sets the default back to TOE GRIP (got %d)" % main.default_grip)
 	var set_f2: FileAccess = FileAccess.open(set_path, FileAccess.READ)
 	var set_parsed2: Variant = JSON.parse_string(set_f2.get_as_text()) if set_f2 != null else null
@@ -2739,7 +2768,7 @@ func _run() -> void:
 	for i26: int in 5:
 		await pulse_hand_button("L", "A")
 	check(main._grip_index() == 5 and main.default_grip == 5
-		and main.controls_label.text.contains("DEFAULT GRIP: FAR SHANK · MID"),
+		and main.controls_full_text().contains("DEFAULT GRIP: FAR SHANK · MID"),
 		"FP26: cycling to FAR · MID makes it the default, and the board names it (got %d)" % main.default_grip)
 	check(await drop_and_restock(main, "R"), "FP26: the far-default shoe drops and restocks")
 	main.test_hand_tf.erase("R")
@@ -3059,8 +3088,8 @@ func _run() -> void:
 	main.start_game()
 	check(main.mode == "GAME" and main.phase == "P_TURN" and main.inning == 1,
 		"game: A starts a game - inning 1, player throws first")
-	check(main.status_label.text.contains("YOU 0 - 0 OPP"),
-		"game: the board shows the score")
+	check(main.score_label.text.contains("YOU 0 - 0 OPP"),
+		"game: the scoreboard shows the score on its own big line")
 	main.score_you = 20
 	main.inning_results = [
 		{"owner": "P", "dist_in": 2.0, "ringer": false},
@@ -3168,13 +3197,15 @@ func _run() -> void:
 		and main.cam.global_position.z > -0.5,
 		"FP20: the manufactured score posted with the player standing at the line (board %d-%d, cam z %.2f)"
 		% [main.score_you, main.score_opp, main.cam.global_position.z])
-	check(main.billboard_up and main.insert_label.visible,
-		"FP20: the round-end display is up on the billboard at the round's end")
+	check(main.board_breakdown_up and main.board_breakdown_label.visible
+		and not main.status_label.visible,
+		"FP39: the round-end breakdown is up on the REAR BOARD at the round's end (the billboard is cam only)")
 	# Fix Pass 38 (re-derives FP34's fixed-transform guard):
-	# the display stands at ONE fixed transform - the
-	# billboard's, left of the lane at halfway - no matter
-	# where the player stands or looks. The hanging
-	# scoreboard and its gaze-spawn ancestors are gone.
+	# the billboard stands at ONE fixed transform, left of
+	# the lane at halfway - no matter where the player
+	# stands or looks. Fix Pass 39 keeps the placement and
+	# the guard verbatim; only the display moved (to the
+	# rear board, checked above).
 	var bb38: Transform3D = main.billboard_transform()
 	check(main.insert_root.visible
 		and main.insert_root.global_transform.origin.distance_to(bb38.origin) < 0.001
@@ -3192,8 +3223,10 @@ func _run() -> void:
 		and lines20.contains("ROUND: OPP +3")
 		and lines20.contains("MATCH: YOU 0 - 3 OPP")
 		and lines20.contains("NEXT ROUND"),
-		"FP20: the billboard carries the breakdown - shoes, arithmetic, totals, continue (%s)"
+		"FP20: the breakdown carries shoes, arithmetic, totals, continue (%s)"
 		% lines20.replace("\n", " | "))
+	check(main.board_breakdown_label.text == lines20,
+		"FP39: the scoreboard's breakdown block shows exactly the round's lines")
 	check(main.ai_pitcher.position.distance_to(
 			AIPitcher.box_root(main.game_line_z())) < 0.05,
 		"FP20: the AI never left its box for the cycle (at %s)"
@@ -3220,8 +3253,9 @@ func _run() -> void:
 		"FP20: the A-continue seated him back behind the line (origin z %.3f, cam z %.3f)"
 		% [main.origin.global_position.z, main.cam.global_position.z])
 	check_origin_level("FP20: the A-continue seat-back leaves the origin level (pitch/roll 0)")
-	check(not main.billboard_up and not main.insert_label.visible,
-		"FP20: the round-end display is dismissed by the continue - the billboard is back to the full live feed")
+	check(not main.board_breakdown_up and not main.board_breakdown_label.visible
+		and main.status_label.visible,
+		"FP39: the continue dismisses the breakdown - the scoreboard is back to its running display")
 	check(all_railed() and max_slot_error() < 0.01,
 		"FP20: the continue stocks both pairs per owner on the stations (worst %.3f m)"
 		% max_slot_error())
@@ -3265,16 +3299,22 @@ func _run() -> void:
 	check(main.mode == "PRACTICE",
 		"FP20: B during the tabulation beat returns to practice")
 
-	# ============ Fix Pass 38: THE BILLBOARD ============
-	# The feed's update policy and the round-end display,
-	# through the production paths only (entry: practice).
+	# ============ Fix Pass 39: THE BROADCAST PASS ============
+	# The billboard is CAM ONLY, the camera is a smart
+	# closeup, a ringer replays itself in slow motion, and
+	# the breakdown lives on the rear scoreboard - through
+	# the production paths only (entry: practice).
 	# (a) THE FEED RUNS HOT IN FLIGHT: a production grab +
 	# constructed release (the scripted_shot idiom) drives
 	# the pit-cam viewport to full frame rate while the
 	# shoe flies.
-	check(main.insert_root.visible and not main.billboard_up
-		and not main.insert_label.visible,
-		"FP38: the billboard stands with the live feed up and no breakdown (it never hides)")
+	var bb_labels: int = 0
+	for ch38: Node in main.insert_root.get_children():
+		if ch38 is Label3D:
+			bb_labels += 1
+	check(main.insert_root.visible and bb_labels == 0
+		and (main.insert_screen.mesh as QuadMesh).size == main.BILLBOARD_FEED_LIVE,
+		"FP39: the billboard stands CAM ONLY - no text on it, the feed full-panel (it never hides)")
 	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
 		main.shoe.zone_world_center("toe"))
 	main.test_grip["R"] = 1.0
@@ -3352,26 +3392,104 @@ func _run() -> void:
 		fp38_idle += 0.25
 	check(main.insert_viewport.render_target_update_mode != SubViewport.UPDATE_ALWAYS,
 		"FP38: the idle pit-cam leaves full rate (lazy pulses only; %.1f s)" % fp38_idle)
-	# (c) THE BREAKDOWN ON THE BILLBOARD: a manufactured
+	# (c) THE BREAKDOWN ON THE SCOREBOARD: a manufactured
 	# round posts itself (the FP20 idiom) - settle -> the
-	# display is up with the breakdown text, the feed
-	# shrunk to the panel's top half.
+	# breakdown stands on the REAR BOARD, and the billboard
+	# stays cam only, full-panel, even at round end.
 	manufacture_round()
 	check(await wait_phase("INSERT", 5.0),
-		"FP38: the manufactured round posts to the billboard")
-	check(main.billboard_up and main.insert_label.visible
-		and main.insert_label.text.contains("OPP +3")
-		and (main.insert_screen.mesh as QuadMesh).size == main.BILLBOARD_FEED_UP,
-		"FP38: the breakdown stands on the billboard - text up, feed shrunk to the panel's top")
-	# (d) CONTINUE returns the full live feed.
+		"FP39: the manufactured round posts its breakdown")
+	check(main.board_breakdown_up and main.board_breakdown_label.visible
+		and main.board_breakdown_label.text.contains("OPP +3")
+		and (main.insert_screen.mesh as QuadMesh).size == main.BILLBOARD_FEED_LIVE,
+		"FP39: the breakdown stands on the scoreboard - and the billboard is still cam only")
+	# (d) CONTINUE returns the board to its running display.
 	await pulse_button("A")
 	await frames(4)
-	check(not main.billboard_up and not main.insert_label.visible
-		and (main.insert_screen.mesh as QuadMesh).size == main.BILLBOARD_FEED_LIVE,
-		"FP38: A-continue returns the billboard to the full live feed")
+	check(not main.board_breakdown_up and not main.board_breakdown_label.visible
+		and main.status_label.visible,
+		"FP39: A-continue returns the scoreboard to its running display")
 	await pulse_button("B")
 	check(main.mode == "PRACTICE",
-		"FP38: B returns to practice for the sections below")
+		"FP39: B returns to practice for the sections below")
+	# (e) THE RINGER REPLAY - through the real path: a
+	# scripted production ringer (the calibrated shot),
+	# settled by the game's own settle path, must offer
+	# itself to the replay, play back on the pit-cam layer
+	# at the slowed rate with the real shoe hidden from
+	# the pit camera only, and restore the live view when
+	# it ends. A dud must never replay.
+	main.start_game()
+	var rp_shoe: Shoe = main.shoe
+	check(await scripted_shot("ringer"),
+		"FP39 replay: the scripted ringer flies and settles")
+	var rp_wait: float = 0.0
+	while main.replay_state != "PLAYING" and rp_wait < 6.0:
+		await create_timer(0.1).timeout
+		rp_wait += 0.1
+	check(main.replay_state == "PLAYING",
+		"FP39 replay: a settled ringer starts its slow-mo replay by itself (state %s after %.1f s)"
+		% [String(main.replay_state), rp_wait])
+	check(main.replay_clone != null and main.replay_clone.visible,
+		"FP39 replay: the clone shoe is on the pit")
+	var clone_part: MeshInstance3D = main.replay_clone.parts["toe"]
+	var real_part: MeshInstance3D = rp_shoe.parts["toe"]
+	check(clone_part.layers == main.VIS_LAYER_PITCAM
+		and real_part.layers == main.VIS_LAYER_MAIN_ONLY,
+		"FP39 replay: the clone rides the pit-cam layer (2) and the real shoe hides from the pit camera only (4)")
+	# The clone flies the RECORDED track at the slowed
+	# rate: at replay clock t, the track position is
+	# t * REPLAY_RATE * ticks, interpolated between the
+	# recorded samples - the clone must sit on that point
+	# (the harness reads both clocks in one breath).
+	await create_timer(0.6).timeout
+	var rp_track: Array = main.replay_track["shoe"]
+	var rp_f: float = main.replay_t * main.REPLAY_RATE \
+		* float(Engine.physics_ticks_per_second)
+	var rp_i0: int = clampi(int(floor(rp_f)), 0, rp_track.size() - 2)
+	var rp_expect_pos: Vector3 = (rp_track[rp_i0] as Transform3D).origin.lerp(
+		(rp_track[rp_i0 + 1] as Transform3D).origin, rp_f - float(rp_i0))
+	check(main.replay_clone.global_position.distance_to(rp_expect_pos) < 0.03,
+		"FP39 replay: the clone sits on the recorded track at the slowed rate (track t %.2f, off by %.3f m)"
+		% [rp_f, main.replay_clone.global_position.distance_to(rp_expect_pos)])
+	check(main.insert_viewport.render_target_update_mode == SubViewport.UPDATE_ALWAYS,
+		"FP39 replay: the feed runs at full rate while the replay plays")
+	var rp_end: float = 0.0
+	while main.replay_state != "IDLE" and rp_end < 12.0:
+		await create_timer(0.2).timeout
+		rp_end += 0.2
+	check(main.replay_state == "IDLE" and not main.replay_clone.visible
+		and real_part.layers == main.VIS_LAYER_WORLD,
+		"FP39 replay: the replay ends and the live view is restored (real shoe back on both cameras)")
+	# A dud settles and NO replay is offered. The dud's
+	# settle passes the turn to the AI - freeze its
+	# sampler NOW, in the same breath, or its own throw
+	# (0.8 s delay) pre-empts the scripted one below.
+	check(await scripted_shot("dud"),
+		"FP39 replay: the follow-up dud flies and settles")
+	main.ai_delay = 100000.0
+	await create_timer(2.0).timeout
+	check(main.replay_state == "IDLE" and main.replay_track.is_empty(),
+		"FP39 replay: a non-ringer never replays")
+	# (f) EITHER SIDE'S RINGER REPLAYS - and live wins: an
+	# AI ringer starts its replay, then B (back to
+	# practice - a round-end state change through the
+	# production input poll) cuts it mid-flight.
+	check(await wait_phase("AI_TURN", 10.0),
+		"FP39 replay: the turn passes to the AI")
+	check(await scripted_ai_throw("ringer"),
+		"FP39 replay: the AI's scripted ringer settles")
+	rp_wait = 0.0
+	while main.replay_state != "PLAYING" and rp_wait < 6.0:
+		await create_timer(0.1).timeout
+		rp_wait += 0.1
+	check(main.replay_state == "PLAYING",
+		"FP39 replay: the AI's ringer replays too (a ringer is a ringer)")
+	await pulse_button("B")
+	await frames(4)
+	check(main.mode == "PRACTICE" and main.replay_state == "IDLE"
+		and not main.replay_clone.visible,
+		"FP39 replay: B to practice cuts the replay - live always wins")
 
 	# ============ Fix Pass 13: the scoring audit ============
 	# Chris played a full game: "it scored all the points, I
@@ -3444,21 +3562,25 @@ func _run() -> void:
 		"FP13 audit (i): player ringer vs two AI duds scores YOU +3, posted by the tabulation (board %d-%d, '%s')"
 		% [main.score_you, main.score_opp, main.last_inning_text])
 	var bb38b: Transform3D = main.billboard_transform()
-	check(main.billboard_up
+	check(main.board_breakdown_up
 		and main.insert_root.global_transform.origin.distance_to(bb38b.origin) < 0.001
 		and main.insert_root.global_transform.basis.is_equal_approx(bb38b.basis),
-		"FP38: with the head facing the house and pitched down at the settle, the round-end display still comes up on the billboard at its fixed transform - not in the player's face")
+		"FP39: with the head facing the house and pitched down at the settle, the breakdown still comes up on the rear board - and the billboard stands at its fixed transform, not in the player's face")
 	main.cam.transform = head_home34
-	# The insert closeup frames ALL FOUR settled shoes - a
-	# framed-but-empty closeup is a fail (the duds sit ~2.5 m
-	# out, the stress case for the framing).
-	var framed20: bool = true
-	for raw20: Variant in main._all_shoes():
-		var s20: Node3D = raw20
-		if not main.insert_cam.is_position_in_frustum(s20.global_position):
-			framed20 = false
-	check(framed20,
-		"FP20 audit (i): every settled shoe is inside the insert closeup's view")
+	# Fix Pass 39 re-derives the old all-four-shoes framing
+	# audit: the broadcast camera is a CLOSEUP now - it
+	# does not promise every dud in frame (the wide ones
+	# sit ~2.5 m out); it promises the settled SUBJECT -
+	# the last shoe down - framed tight with the stake as
+	# its reference. Assert exactly that: the subject is
+	# the camera's lie subject, it sits inside the
+	# closeup's view, and the lens is at the lie fov.
+	check(main.pitcam_lie_left > 0.0
+		and main.insert_cam.is_position_in_frustum(main.pitcam_subject_pos),
+		"FP39 audit (i): the broadcast camera's lie closeup frames the last settled shoe's lie")
+	check(absf(main.insert_cam.fov - main.PITCAM_LIE_FOV) < 4.0,
+		"FP39 audit (i): the camera holds the lie closeup's fov (%.1f, lie %.1f)"
+		% [main.insert_cam.fov, main.PITCAM_LIE_FOV])
 	# (ii) Player point shoe only -> YOU +1.
 	main.start_game()
 	check(await play_scripted_inning(["point", "dud"], ["dud", "dud"]),
@@ -3516,7 +3638,7 @@ func _run() -> void:
 		% [String(main.phase), main.inning])
 	check(main.score_you == 21 and main.score_opp == 0
 		and main.winner_text == "YOU WIN!"
-		and main.status_label.text.contains("YOU 21 - 0 OPP"),
+		and main.score_label.text.contains("YOU 21 - 0 OPP"),
 		"FP13 audit (iii): the scripted full game ends YOU 21 - 0 OPP and the player wins ('%s')"
 		% main.winner_text)
 	main.ai_pitcher.speed_scale = 1.0
