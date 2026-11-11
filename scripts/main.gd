@@ -16,7 +16,7 @@ extends Node3D
 ## + sticky slide (GrabState/Shoe), windowed release sampling
 ## (ThrowMath), the honest rigid-body shoe (zero damping,
 ## stake sweep guard), the JSONL recorder, standard
-## twin-stick movement, and the in-world scoreboard. PRACTICE
+## twin-stick movement, and the in-world billboard. PRACTICE
 ## mode is the old test, exactly: free throwing with
 ## per-throw readouts.
 ##
@@ -412,45 +412,122 @@ var ai_throw_pending: bool = false # an AI swing is animating
 var ai_wait_clear: float = 0.0
 var _btn_prev: Dictionary = {"A": false, "B": false}
 
-# Fix Pass 20: the insert cam - an in-world panel carrying a
-# live closeup of the pit (a SubViewport sharing this world)
-# plus the round's score breakdown, raised when a round
-# tabulates and dismissed with A.
-# Fix Pass 34 (Chris's tweak load, item 2): the panel no
-# longer spawns in front of his face. His words: "the
-# scoring window appears wherever you're looking... it
-# takes up your view no matter if youre looking up down,
-# right left" / "should just sort of hang there like a
-# bowling alley scorboard kind of thing." The panel now
-# hangs at ONE FIXED court transform: centred on the lane
-# axis, partway toward the pit, high above the lane like a
-# bowling-alley scoreboard - facing the throwing end,
-# tilted down at the throwing spot, big enough to read
-# from the line (SCOREBOARD_SCALE x the FP20 panel: the
-# breakdown text keeps the old panel's angular size at
-# ~5.4 m that it had at 2 m). Its bottom edge (y ~1.49)
-# rides ABOVE the throwing spot's sightline to the stake,
-# so the stake is never covered when it is up; it is only
-# ever up between rounds, never during a flight.
+# Fix Pass 20: the insert cam - a live closeup of the pit
+# (a SubViewport sharing this world) plus the round's score
+# breakdown, raised when a round tabulates and dismissed
+# with A. Fix Pass 34 moved the display onto a hanging
+# scoreboard over the lane.
+# Fix Pass 38 (Chris's design, settled by his taps
+# 2026-11-11): the hanging scoreboard RETIRES and the
+# display moves onto a permanent ROADSIDE BILLBOARD on the
+# LEFT side of the lane, halfway down it - his words:
+# "instead of down by pit, im thinking halfway down to
+# pit, but off to either the right or left side, like a
+# billboard on the side of a road, slight angle. That gets
+# it closer to player, allowing for a little more detail."
+# Side, by his tap: LEFT. And his add: "probably not gonna
+# need the score window popup any more, billboard can do
+# it" - confirmed by tap: the billboard does BOTH. The
+# panel carries the live zoomed pit-cam feed PERMANENTLY;
+# at round end it switches to the round-end display (live
+# picture + the breakdown text, the same content the
+# scoreboard carried) on the same triggers and flow as
+# the old insert (settle -> show; A continue / X play
+# again / B practice -> back to the full feed).
+# PLACEMENT, derived from the yard's records: the lane
+# runs z -0.914 (40 ft line) to -12.192 (stake); halfway
+# is z -6.55. The panel centre stands at x -3.62 - past
+# the left berm (ellipsoid centre (-2.05, -6.05), radii
+# (0.55, 0.26, 4.15); outer toe |x| 2.60) and at the left
+# bed's line (bed rect x -4.60..-2.78). Two posts at local
+# x +/-0.95 land at (-4.49, -6.16) and (-2.75, -6.94):
+# both fully clear of the berm ellipsoid (implicit > 1 at
+# each post centre AND face), the east post's face 0.10 m
+# clear of the berm toe at its z; nothing touches ground
+# inside x -2.69, so the lane, the box zone and every
+# walk line are untouched. Yaw 24 deg turns the face back
+# toward the throwing end AND toward the lane, roadside
+# style: from the throwing spot (0.8, -0.914) the panel
+# centre is 7.16 m away and the sightline meets the face
+# ~15 deg off its normal. Tilt 5 deg tips the face
+# slightly down at the spot. Panel 2.40 x 2.00 m (centre
+# y 1.90, spans y 0.90..2.90): at 7.16 m the feed quad
+# (2.28 m in live mode) and the breakdown glyphs (0.083 m)
+# hold the angular size the retired scoreboard's text had
+# - legibility proven from the throwing spot by the
+# render proofs, not assumed.
 const ROUND_BEAT_SEC: float = 0.75 # settle -> tabulation beat
-const SCOREBOARD_POS := Vector3(0.0, 3.10, -6.10) # panel centre, fixed
-const SCOREBOARD_TILT_DEG: float = 14.0 # face tipped down at the throwing end
-const SCOREBOARD_SCALE: float = 2.4 # vs the FP20 2 m spawn panel
+const BILLBOARD_POS := Vector3(-3.62, 1.90, -6.55) # panel centre
+const BILLBOARD_YAW_DEG: float = 24.0 # face back at the throwing end
+const BILLBOARD_TILT_DEG: float = 5.0 # face tipped slightly down
+const BILLBOARD_PANEL_SIZE := Vector2(2.40, 2.00) # the derived size
+const BILLBOARD_FEED_LIVE := Vector2(2.28, 1.14) # feed quad, live mode
+const BILLBOARD_FEED_UP := Vector2(1.90, 0.95) # feed quad, breakdown up
+# The pit-cam feed's update policy (Quest budget): the ONE
+# viewport renders at full frame rate while any shoe is in
+# flight or settling, plus PITCAM_BEAT_SEC after the last
+# settle, and for as long as the breakdown is up; while
+# the pit is idle it pulses a single frame every
+# PITCAM_IDLE_SEC (2 Hz) - the picture stays live, the
+# GPU does not spin on a still pit.
+const PITCAM_VIEWPORT_SIZE := Vector2i(1024, 512)
+const PITCAM_IDLE_SEC: float = 0.5
+const PITCAM_BEAT_SEC: float = 2.0
 
 
-## The scoreboard's one fixed world transform (Fix Pass 34):
-## yaw zero (face square to the throwing end), pitch tilt
-## only - the FP15 discipline, no head pose anywhere in it.
-static func scoreboard_transform() -> Transform3D:
+## The billboard's one fixed world transform (Fix Pass 38):
+## yaw toward the throwing end + slight downward tilt, no
+## head pose anywhere in it (the FP15 discipline).
+static func billboard_transform() -> Transform3D:
 	return Transform3D(
-		Basis.from_euler(Vector3(deg_to_rad(SCOREBOARD_TILT_DEG), 0.0, 0.0)),
-		SCOREBOARD_POS)
+		Basis.from_euler(Vector3(deg_to_rad(BILLBOARD_TILT_DEG),
+			deg_to_rad(BILLBOARD_YAW_DEG), 0.0)),
+		BILLBOARD_POS)
+
+
+## The billboard's ground envelope [x0, z0, x1, z1]: the
+## plan footprint of panel + posts (the rotated panel
+## rect, posts inside it), for the suites' clearance
+## guards. The panel's east corner is ELEVATED (bottom
+## edge y 0.90, 0.64 m above the berm's 0.26 crest where
+## its plan projection crosses the berm's toe) - the
+## ground truth is the posts, both clear of the berm
+## ellipsoid entirely.
+static func billboard_envelope() -> Array:
+	var tf: Transform3D = billboard_transform()
+	var x0: float = 1e9
+	var z0: float = 1e9
+	var x1: float = -1e9
+	var z1: float = -1e9
+	for cx: float in [-1.26, 1.26]:
+		for cz: float in [-0.10, 0.06]:
+			var w: Vector3 = tf * Vector3(cx, 0.0, cz)
+			x0 = minf(x0, w.x)
+			z0 = minf(z0, w.z)
+			x1 = maxf(x1, w.x)
+			z1 = maxf(z1, w.z)
+	return [x0, z0, x1, z1]
+
+
+## The two post positions in world XZ (the billboard's
+## only ground contact), for the suites' berm guards.
+static func billboard_post_xz() -> Array:
+	var tf: Transform3D = billboard_transform()
+	var out: Array = []
+	for px: float in [-0.95, 0.95]:
+		var w: Vector3 = tf * Vector3(px, -BILLBOARD_POS.y, -0.05)
+		out.append(Vector2(w.x, w.z))
+	return out
 var tabulate_left: float = -1.0 # TABULATE countdown (<0 idle)
-var round_lines: Array = [] # the insert's breakdown lines
-var insert_root: Node3D = null
+var round_lines: Array = [] # the billboard's breakdown lines
+var insert_root: Node3D = null # the billboard (the insert cam lives on it)
 var insert_viewport: SubViewport = null
 var insert_cam: Camera3D = null
 var insert_label: Label3D = null
+var insert_screen: MeshInstance3D = null # the feed quad on the panel
+var billboard_up: bool = false # the round-end display is on the panel
+var _pitcam_hot_left: float = 0.0 # feed full-rate time remaining
+var _pitcam_idle_acc: float = 0.0 # idle-pulse accumulator
 
 # Test hooks (used by the headless suites / render proofs only).
 var test_hand_tf: Dictionary = {}
@@ -475,7 +552,7 @@ func _ready() -> void:
 	_build_rig()
 	_build_board()
 	_build_grip_label()
-	_build_insert()
+	_build_billboard()
 	_spawn_shoes()
 	_build_ai()
 	head_tracking_ok = _head_tracking_ok()
@@ -4181,7 +4258,9 @@ func _body_contact_sound(body: Node, shoe_node: Shoe) -> void:
 	var event: String = ""
 	if body is Shoe and body != shoe_node:
 		event = "shoe_clink"
-	elif body.is_in_group("pit_timber"):
+	elif body.is_in_group("pit_timber") or body.is_in_group("billboard_wood"):
+		# Fix Pass 38: the billboard's posts + panel knock
+		# with the same wood voice as the pit timbers.
 		event = "wood_knock"
 	else:
 		for key: String in stakes.keys():
@@ -4506,6 +4585,7 @@ func _physics_process(delta: float) -> void:
 	_restock_to_player_line()
 	_landscape_flight_watch() # Fix Pass 34: stones knock, plants bend
 	_sand_flight_watch() # Fix Pass 37: skids plow their furrows
+	_pitcam_policy(delta) # Fix Pass 38: the billboard feed's rate
 	# Fix Pass 34: the bend spring integrates HERE, at the
 	# fixed physics rate - in _process its explicit-Euler
 	# step went numerically soft at low render rates (the
@@ -4748,7 +4828,7 @@ func _gather_to_rail(line_ft: int) -> void:
 
 
 func start_game() -> void:
-	_hide_insert()
+	_hide_breakdown()
 	# Fix Pass 20: a game can be started from down the lane
 	# (practice is free-form) - the first round is live the
 	# moment it stocks, so seat him behind the line first
@@ -4772,7 +4852,7 @@ func start_game() -> void:
 
 
 func _enter_practice() -> void:
-	_hide_insert()
+	_hide_breakdown()
 	tabulate_left = -1.0
 	mode = "PRACTICE"
 	phase = ""
@@ -4856,7 +4936,7 @@ func _score_inning() -> void:
 	var over: bool = score_you >= WIN_SCORE or score_opp >= WIN_SCORE
 	if over:
 		winner_text = "YOU WIN!" if score_you > score_opp else "OPP WINS"
-	# Fix Pass 20: the insert's breakdown is built HERE, from
+	# Fix Pass 20: the billboard's breakdown is built HERE, from
 	# the same settled results the scorer just read - per-shoe
 	# lines, the cancellation arithmetic in plain words, the
 	# round's points and the running totals (the final
@@ -4866,7 +4946,7 @@ func _score_inning() -> void:
 	grab_armed = false
 	phase = "OVER" if over else "INSERT"
 	_update_board()
-	_show_insert()
+	_show_breakdown()
 
 
 ## The insert's text for one tabulated round (Fix Pass 20):
@@ -4913,7 +4993,7 @@ func _continue_round() -> void:
 func _finish_inning_cycle() -> void:
 	if phase != "INSERT":
 		return
-	_hide_insert()
+	_hide_breakdown()
 	inning += 1
 	if last_scorer != "":
 		inning_first = last_scorer
@@ -4924,38 +5004,47 @@ func _finish_inning_cycle() -> void:
 	_update_board()
 
 
-## Build the insert cam panel (Fix Pass 20): a board-family
-## wooden slab carrying a LIVE pit closeup over the round's
-## breakdown text. The closeup is a SubViewport sharing this
-## world, fed by its own camera parked above and behind the
-## pit looking down at the stake (framed so all four settled
-## shoes sit in the shot - the suites assert exactly that).
-## The viewport renders only while the panel is up. Built
-## once, hidden.
-## Fix Pass 34: the slab, screen and label are built at
-## SCOREBOARD_SCALE and the root is parked at the fixed
-## scoreboard transform FOR GOOD - it hangs there, on two
-## slim steel hangers rising from its top edge up out of
-## the playing view, showing and hiding in place.
-func _build_insert() -> void:
+## Build the billboard (Fix Pass 38; the display itself is
+## Fix Pass 20's insert cam, the FP34 hanging scoreboard it
+## used to ride on is RETIRED - hangers, hanging panel and
+## the popup machinery are gone). A roadside billboard on
+## two wooden posts at the left bed's line, halfway down
+## the lane, angled back at the throwing end: a wooden
+## backing slab + dark face plate carrying the LIVE pit
+## closeup (a SubViewport sharing this world, fed by the
+## insert camera parked above and behind the pit looking
+## down at the stake - framed so all four settled shoes
+## sit in the shot, the suites assert exactly that) over
+## the round's breakdown text. The billboard is PERMANENT:
+## it stands from boot, the feed always on it; only the
+## panel's layout switches (full feed <-> picture +
+## breakdown). It is SOLID: collision bodies on the posts
+## and the panel (group billboard_wood, the FP34 wood
+## knock) - a shoe flying wide left strikes it and bounces
+## off. Nothing collidable reaches into the lane.
+func _build_billboard() -> void:
 	insert_root = Node3D.new()
-	insert_root.name = "InsertCam"
+	insert_root.name = "Billboard"
 	add_child(insert_root)
-	insert_root.global_transform = scoreboard_transform()
+	insert_root.global_transform = billboard_transform()
 	var wood := _mat(Color(0.30, 0.21, 0.12))
-	var sc: float = SCOREBOARD_SCALE
-	_box(insert_root, Vector3(0.0, 0.0, -0.03), Vector3(1.52 * sc, 1.34 * sc, 0.05), wood)
-	# The hangers: two slim steel straps from the top edge
-	# rising 1.5 m - outdoors there is no ceiling; the straps
-	# simply carry the board's weight up out of the frame,
-	# the bowling-alley read.
-	var steel := _mat(Color(0.16, 0.16, 0.18))
-	for hx: float in [-1.25, 1.25]:
-		_box(insert_root, Vector3(hx, 0.67 * sc + 0.75, -0.03),
-			Vector3(0.045, 1.5, 0.045), steel)
+	var post_wood := _mat(Color(0.24, 0.17, 0.10))
+	# Backing slab + face plate (the printed panel area).
+	_box(insert_root, Vector3(0.0, 0.0, -0.05),
+		Vector3(BILLBOARD_PANEL_SIZE.x + 0.12, BILLBOARD_PANEL_SIZE.y + 0.12, 0.05), wood)
+	_box(insert_root, Vector3(0.0, 0.0, -0.02),
+		Vector3(BILLBOARD_PANEL_SIZE.x, BILLBOARD_PANEL_SIZE.y, 0.02),
+		_mat(Color(0.05, 0.05, 0.06)))
+	# Two posts, ground to panel top (sunk 6 cm so the
+	# tilt never floats a foot).
+	for px: float in [-0.95, 0.95]:
+		_box(insert_root, Vector3(px, -0.45, -0.05), Vector3(0.12, 3.02, 0.12), post_wood)
+		_billboard_body(Vector3(px, -0.45, -0.05), Vector3(0.12, 3.02, 0.12))
+	_billboard_body(Vector3(0.0, 0.0, -0.03),
+		Vector3(BILLBOARD_PANEL_SIZE.x + 0.12, BILLBOARD_PANEL_SIZE.y + 0.12, 0.08))
 	insert_viewport = SubViewport.new()
 	insert_viewport.name = "InsertViewport"
-	insert_viewport.size = Vector2i(1024, 512)
+	insert_viewport.size = PITCAM_VIEWPORT_SIZE
 	insert_viewport.world_3d = get_world_3d()
 	insert_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
 	insert_root.add_child(insert_viewport)
@@ -4966,54 +5055,113 @@ func _build_insert() -> void:
 	insert_cam.fov = 55.0
 	insert_cam.look_at(Vector3(0.0, 0.05, STAKE_POS.z), Vector3.UP)
 	insert_cam.current = true
-	var quad := MeshInstance3D.new()
-	quad.name = "InsertScreen"
+	insert_screen = MeshInstance3D.new()
+	insert_screen.name = "InsertScreen"
 	var qm := QuadMesh.new()
-	qm.size = Vector2(1.36 * sc, 0.68 * sc)
-	quad.mesh = qm
+	qm.size = BILLBOARD_FEED_LIVE
+	insert_screen.mesh = qm
 	var qmat := StandardMaterial3D.new()
 	qmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	qmat.albedo_texture = insert_viewport.get_texture()
-	quad.material_override = qmat
-	quad.position = Vector3(0.0, 0.28 * sc, 0.001)
-	insert_root.add_child(quad)
+	insert_screen.material_override = qmat
+	insert_root.add_child(insert_screen)
 	insert_label = Label3D.new()
-	insert_label.font_size = 48
-	insert_label.pixel_size = 0.00062 * sc
+	insert_label.font_size = 64
+	insert_label.pixel_size = 0.0013
 	insert_label.modulate = Color(0.95, 0.97, 0.90)
 	insert_label.outline_size = 5
 	insert_label.outline_modulate = Color(0.1, 0.07, 0.03)
 	insert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	insert_label.position = Vector3(0.0, -0.40 * sc, 0.0025)
+	insert_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	insert_label.position = Vector3(0.0, -0.50, 0.013)
 	insert_root.add_child(insert_label)
-	insert_root.visible = false
+	_pitcam_idle_acc = PITCAM_IDLE_SEC # first policy call pulses a frame
+	_billboard_layout()
 
 
-## Raise the insert (Fix Pass 20; placement re-ruled by Fix
-## Pass 34): the FP20 gaze spawn is DELETED - the panel was
-## planted INSERT_DIST_M ahead of wherever the player
-## happened to be looking when the round settled, so it
-## took up his view looking up, down, right or left. Now
-## showing is only a visibility flip: the panel already
-## hangs at the fixed scoreboard transform (set once in
-## _build_insert), centred over the lane like a bowling-
-## alley scoreboard. If he is looking elsewhere when the
-## round ends, it is not in his face; he turns to centre
-## court and it is there, in the same place every round.
-func _show_insert() -> void:
+## One solid body of the billboard (Fix Pass 38): a
+## StaticBody3D + box shape at a panel-local offset, in
+## the billboard_wood group so a shoe strike plays the
+## wood knock through the FP34 contact path. No mesh -
+## the visuals are the root's own boxes.
+func _billboard_body(local_pos: Vector3, size: Vector3) -> StaticBody3D:
+	var body := StaticBody3D.new()
+	var shape := CollisionShape3D.new()
+	var bs := BoxShape3D.new()
+	bs.size = size
+	shape.shape = bs
+	body.add_child(shape)
+	body.transform = billboard_transform() * Transform3D(Basis.IDENTITY, local_pos)
+	body.add_to_group("billboard_wood")
+	add_child(body)
+	return body
+
+
+## The panel's two layouts (Fix Pass 38): LIVE - the feed
+## fills the panel, no text. BREAKDOWN UP - the feed
+## shrinks to the panel's top half and the round's text
+## stands under it, the scoreboard's old arrangement at
+## billboard scale.
+func _billboard_layout() -> void:
+	if insert_screen == null:
+		return
+	var qm: QuadMesh = insert_screen.mesh as QuadMesh
+	if billboard_up:
+		qm.size = BILLBOARD_FEED_UP
+		insert_screen.position = Vector3(0.0, 0.48, 0.012)
+	else:
+		qm.size = BILLBOARD_FEED_LIVE
+		insert_screen.position = Vector3(0.0, 0.0, 0.012)
+	insert_label.visible = billboard_up
+
+
+## The pit-cam feed's update policy (Fix Pass 38), run
+## every physics frame: full frame rate while any shoe is
+## in flight (the player's FLYING state or any AI flight),
+## for PITCAM_BEAT_SEC after the last flight ends, and
+## while the breakdown is up; lazy single-frame pulses at
+## PITCAM_IDLE_SEC while the pit is idle.
+func _pitcam_policy(delta: float) -> void:
+	if insert_viewport == null:
+		return
+	var flying: bool = state == "FLYING" or not ai_flight.is_empty()
+	if flying:
+		_pitcam_hot_left = PITCAM_BEAT_SEC
+	elif _pitcam_hot_left > 0.0:
+		_pitcam_hot_left = maxf(0.0, _pitcam_hot_left - delta)
+	if flying or _pitcam_hot_left > 0.0 or billboard_up:
+		if insert_viewport.render_target_update_mode != SubViewport.UPDATE_ALWAYS:
+			insert_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		_pitcam_idle_acc = PITCAM_IDLE_SEC
+	else:
+		_pitcam_idle_acc += delta
+		if _pitcam_idle_acc >= PITCAM_IDLE_SEC:
+			_pitcam_idle_acc = 0.0
+			insert_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+
+## Put the round-end display on the billboard (Fix Pass
+## 20's show, re-homed by Fix Pass 38): the SAME triggers
+## and flow as the old insert - the tabulation calls this
+## when a round settles. The billboard itself never moves;
+## the panel switches layout in place and the feed stays
+## live above the breakdown text.
+func _show_breakdown() -> void:
 	if insert_root == null:
 		return
 	insert_label.text = "\n".join(PackedStringArray(round_lines))
-	insert_root.global_transform = scoreboard_transform()
-	insert_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	insert_root.visible = true
+	billboard_up = true
+	_billboard_layout()
 
 
-func _hide_insert() -> void:
+## Back to the full live feed (Fix Pass 38): A continue /
+## X play again / B practice land here through the same
+## flow the old insert used.
+func _hide_breakdown() -> void:
 	if insert_root == null:
 		return
-	insert_root.visible = false
-	insert_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	billboard_up = false
+	_billboard_layout()
 	_update_board()
 
 

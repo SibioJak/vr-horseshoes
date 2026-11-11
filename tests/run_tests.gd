@@ -1422,29 +1422,53 @@ func test_fp36_layout() -> void:
 		and hand_l.distance_to(peg0) > float(main_script.LONG_ARM_RADIUS),
 		"FP36: the 30 ft peg (%.2f m / %.2f m from the 40 ft spot's hands) sits OUTSIDE the radius - the exclusion guards the walked case, not the spot"
 		% [hand_r.distance_to(peg0), hand_l.distance_to(peg0)])
-	# ITEM 2 - THE SCOREBOARD: one fixed court transform,
-	# centred on the lane axis, hanging partway to the pit.
-	var sb: Transform3D = main_script.scoreboard_transform()
-	check(absf(sb.origin.x) < 0.001 and sb.origin.z < -5.0
-		and sb.origin.z > -7.5 and sb.origin.y > 2.5,
-		"FP34: the scoreboard hangs centred over the lane partway to the pit (at %s)" % str(sb.origin))
-	var sn: Vector3 = (sb.basis * Vector3(0.0, 0.0, 1.0)).normalized()
-	check(sn.z > 0.9 and sn.y < -0.10,
-		"FP34: the scoreboard faces the throwing end, tilted down (normal %s)" % str(sn))
-	# It never covers the stake from the throwing spot's
-	# eye line: the panel's bottom edge rides ABOVE the
-	# depression angle to the stake top.
-	var eye := Vector3(0.0, 1.62, float(main_script.FOUL_40_Z))
-	var sb_up: Vector3 = (sb.basis * Vector3.UP).normalized()
-	var bottom: Vector3 = sb.origin - sb_up * (1.34
-		* float(main_script.SCOREBOARD_SCALE) * 0.5)
-	var dep_panel: float = atan2(eye.y - bottom.y,
-		Vector2(eye.x - bottom.x, eye.z - bottom.z).length())
-	var stake_top := Vector3(0.0, 0.36, (main_script.STAKE_POS as Vector3).z)
-	var dep_stake: float = atan2(eye.y - stake_top.y,
-		Vector2(eye.x - stake_top.x, eye.z - stake_top.z).length())
-	check(dep_panel < dep_stake,
-		"FP34: the scoreboard's bottom edge clears the stake sightline (%.3f rad over %.3f)" % [dep_panel, dep_stake])
+	# ITEM 2 - THE BILLBOARD (Fix Pass 38, re-derived from
+	# FP34's scoreboard guards - same subjects: one fixed
+	# court transform, a face turned to the throwing spot,
+	# and clearances that keep it out of the play space.
+	# The hanging scoreboard is RETIRED; Chris's design
+	# puts the display on a roadside billboard at the LEFT
+	# bed's line, halfway down the lane, angled back at
+	# the throwing end.)
+	var bb: Transform3D = main_script.billboard_transform()
+	check(bb.origin.x < -3.3 and bb.origin.z < -6.1
+		and bb.origin.z > -7.0 and bb.origin.y > 1.7
+		and bb.origin.y < 2.1,
+		"FP38: the billboard stands LEFT of the lane, halfway down it (at %s)" % str(bb.origin))
+	var bn: Vector3 = (bb.basis * Vector3(0.0, 0.0, 1.0)).normalized()
+	check(bn.x > 0.30 and bn.z > 0.85 and bn.y < -0.02 and bn.y > -0.15,
+		"FP38: the face angles back toward the throwing end and the lane, tilted slightly down (normal %s)" % str(bn))
+	# The throwing spot's sightline meets the face nearly
+	# square - the roadside angle is a glance, not a skew.
+	var bspot: Vector3 = main_script.spot_pos(40, false)
+	var bb_to_spot := Vector3(bspot.x - bb.origin.x, 0.0,
+		bspot.z - bb.origin.z).normalized()
+	var bn_xz := Vector2(bn.x, bn.z).normalized()
+	check(bn_xz.dot(Vector2(bb_to_spot.x, bb_to_spot.z)) > 0.93,
+		"FP38: from the throwing spot the face is near-square (cos %.3f)"
+		% bn_xz.dot(Vector2(bb_to_spot.x, bb_to_spot.z)))
+	# Clearances: the ground envelope stays in the west
+	# strip - its east edge never reaches the play space
+	# (lane berm crest |x| 2.05, box zone |x| 0.914), its
+	# z stays in the halfway band, and its west edge stays
+	# inside the bed's outer edge + the panel's margin.
+	var benv: Array = main_script.billboard_envelope()
+	check(float(benv[2]) <= -2.40 and float(benv[0]) >= -4.85
+		and float(benv[1]) >= -7.20 and float(benv[3]) <= -5.90,
+		"FP38: the billboard envelope %s stays west of the lane in the halfway band" % str(benv))
+	# The posts are the only ground contact: each stands
+	# fully OUTSIDE the berm ellipsoid (implicit > 1 at
+	# the post centre), so nothing is planted in the berm.
+	var berm_c := Vector2(-2.05, -6.05)
+	for post_v: Variant in main_script.billboard_post_xz():
+		var pv: Vector2 = post_v
+		var imp: float = pow((pv.x - berm_c.x) / 0.55, 2.0) \
+			+ pow((pv.y - berm_c.y) / 4.15, 2.0)
+		check(imp > 1.0,
+			"FP38: billboard post at %s clears the berm ellipsoid (implicit %.2f)" % [str(pv), imp])
+	# The panel itself is the derived legibility size.
+	check(Vector2(main_script.BILLBOARD_PANEL_SIZE) == Vector2(2.40, 2.00),
+		"FP38: the panel is the derived 2.40 x 2.00 m (got %s)" % str(main_script.BILLBOARD_PANEL_SIZE))
 
 
 func test_sand_depth() -> void:
