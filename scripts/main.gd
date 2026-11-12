@@ -507,22 +507,51 @@ const PITCAM_BEAT_SEC: float = 2.0
 #     fill the panel (the FP38 wide shot left the pit a
 #     small centre patch, no bigger than the naked-eye
 #     view Chris already had - his verdict).
-#   FLIGHT - while any shoe flies, the look point rides
-#     halfway between the stake and the shoe, the camera
-#     drifts a little with the shoe, and the lens opens
-#     up (FOLLOW fov) so the arrival stays in frame.
+#   FLIGHT - Fix Pass 40 re-timed it: the camera holds
+#     the baseline until the shoe is well on its way,
+#     then follows the ARRIVAL with the stake as its
+#     anchor (see the PITCAM_GATE_* constants below).
 #   LIE - after a settle, a tighter closeup of the shoe
 #     and stake, held for PITCAM_LIE_SEC, then the camera
 #     eases home to the baseline.
 const PITCAM_BASE_POS := Vector3(1.45, 1.10, -9.80)
 const PITCAM_BASE_LOOK := Vector3(0.0, 0.06, -12.192) # the stake, a breath above the sand
 const PITCAM_BASE_FOV: float = 40.0
-const PITCAM_FOLLOW_FOV: float = 48.0
 const PITCAM_LIE_FOV: float = 33.0
 const PITCAM_POS_RATE: float = 3.5 # 1/s, exponential damp
 const PITCAM_LOOK_RATE: float = 4.0
 const PITCAM_FOV_RATE: float = 3.0
 const PITCAM_LIE_SEC: float = 6.0
+# Fix Pass 40: THE FOLLOW'S TIMING (Chris's FP39 verdict:
+# "it starts tracking shoe too soon, so its swinging way
+# left and going kind of wild trying to get a shot" - at
+# the release the shoe is still beside the pitcher, ~12 m
+# from the pit, and FP39's half-stake/half-shoe look
+# target yanked the camera up-lane after it). THE LAW:
+# the camera stays on the pit until the shoe is well on
+# its way; it follows the ARRIVAL, never the release.
+#   GATE - the follow engages only once the shoe has
+#     covered PITCAM_GATE_FRACTION of its release-to-
+#     stake run (58% of the ~11.3 m court leaves it ~4.7 m
+#     short of the stake - the same gate said as ~5 m
+#     out). Latched for the rest of the flight; a shoe
+#     that never gets there (a dribbler that dies on the
+#     lane) never engages it at all, and its arrival
+#     closeup still comes after the settle, gently.
+#   BLEND - engagement is an influence ramp, not a jump:
+#     the follow's weight eases 0 -> 1 over
+#     PITCAM_GATE_BLEND_SEC, on top of the usual damps.
+#   ANCHOR - once engaged, the look point is the stake
+#     carrying a minority share of the shoe
+#     (PITCAM_SHOE_W), so even a pulled-wide shoe cannot
+#     drag the camera off the pit; the position drift is
+#     FP39's modest one; the lens holds the baseline's
+#     40 and opens only toward PITCAM_WIDE_FOV, and only
+#     as the shoe runs wide of the stake on screen.
+const PITCAM_GATE_FRACTION: float = 0.58
+const PITCAM_GATE_BLEND_SEC: float = 0.3
+const PITCAM_SHOE_W: float = 0.33 # the shoe's share of the follow's look point
+const PITCAM_WIDE_FOV: float = 44.0
 # Fix Pass 39: THE RINGER REPLAY. Every flight is recorded
 # as it happens - the shoe's transform AND the camera's
 # own framing, one sample per physics tick. A shoe that
@@ -611,6 +640,13 @@ var pitcam_look: Vector3 = PITCAM_BASE_LOOK
 var pitcam_fov: float = PITCAM_BASE_FOV
 var pitcam_subject_pos: Vector3 = Vector3.ZERO # where the last shoe settled - the lie's subject
 var pitcam_lie_left: float = 0.0 # lie-closeup hold time remaining
+# Fix Pass 40: the follow gate's per-flight state (see
+# the PITCAM_GATE_* constants and _pitcam_gate_step).
+var pitcam_gate_shoe: Shoe = null # the flight the gate is timing
+var pitcam_gate_from: Vector3 = Vector3.ZERO # that flight's release point
+var pitcam_gate_engaged: bool = false # latched once the shoe is well on its way
+var pitcam_gate_progress: float = 0.0 # 0..1 along release -> stake
+var pitcam_follow_w: float = 0.0 # the follow's influence, eased 0..1
 var rec_shoe: Shoe = null # the shoe whose flight is being recorded
 var rec_shoe_track: Array = [] # Transform3D per physics tick
 var rec_cam_track: Array = [] # {pos, look, fov} per physics tick
@@ -5358,6 +5394,38 @@ func _pitcam_recording_live() -> bool:
 	return ai_flight.has(rec_shoe)
 
 
+## Time the follow's engagement for the flight in the
+## air (Fix Pass 40): progress is the shoe's ground run
+## along its own release -> stake axis, measured from the
+## release point cached at the release (by
+## _pitcam_begin_record; the re-arm below covers a flight
+## that somehow reaches the air unrecorded). At
+## PITCAM_GATE_FRACTION the gate latches for the rest of
+## the flight and the follow's influence ramps in over
+## PITCAM_GATE_BLEND_SEC.
+func _pitcam_gate_step(fly: Shoe, delta: float) -> void:
+	if fly != pitcam_gate_shoe:
+		pitcam_gate_shoe = fly
+		pitcam_gate_from = fly.global_position
+		pitcam_gate_engaged = false
+		pitcam_gate_progress = 0.0
+		pitcam_follow_w = 0.0
+	var axis: Vector3 = STAKE_POS - pitcam_gate_from
+	axis.y = 0.0
+	var total: float = axis.length()
+	if total > 0.5:
+		var run: Vector3 = fly.global_position - pitcam_gate_from
+		run.y = 0.0
+		pitcam_gate_progress = clampf(
+			run.dot(axis) / (total * total), 0.0, 1.0)
+	if not pitcam_gate_engaged \
+			and pitcam_gate_progress >= PITCAM_GATE_FRACTION:
+		pitcam_gate_engaged = true
+	if pitcam_gate_engaged:
+		pitcam_follow_w = minf(1.0, pitcam_follow_w
+			+ delta / PITCAM_GATE_BLEND_SEC)
+
+
 ## The broadcast camera (Fix Pass 39), run every physics
 ## frame after the feed policy: work out the desired
 ## framing (follow / lie / baseline - or the replay's own
@@ -5384,16 +5452,37 @@ func _pitcam_update(delta: float) -> void:
 	var d_fov: float = PITCAM_BASE_FOV
 	var fly: Shoe = _pitcam_flying_shoe()
 	if fly != null:
-		# FLIGHT: the look point rides halfway between the
-		# stake (the destination) and the shoe; the camera
-		# drifts a little with the shoe; the lens opens up.
-		var sp: Vector3 = fly.global_position
-		d_look = Vector3(STAKE_POS.x, 0.05, STAKE_POS.z) * 0.5 \
-			+ Vector3(sp.x, clampf(sp.y, 0.02, 2.5), sp.z) * 0.5
-		d_pos = PITCAM_BASE_POS + Vector3(
-			clampf(sp.x, -1.2, 1.2) * 0.30,
-			clampf(sp.y - 0.5, 0.0, 1.5) * 0.10, 0.0)
-		d_fov = PITCAM_FOLLOW_FOV
+		# FLIGHT (Fix Pass 40): until the gate the targets
+		# stay the baseline's - the camera holds the pit
+		# while the shoe travels. Past the gate the follow
+		# fades in on its ramp: the look point anchored on
+		# the stake with a minority share of the shoe,
+		# FP39's modest drift, and a lens that opens a
+		# little only as the shoe runs wide of the stake
+		# on screen. A flight that never reaches the gate
+		# keeps the baseline framing all the way to its
+		# settle (and the lie closeup below still follows).
+		_pitcam_gate_step(fly, delta)
+		if pitcam_follow_w > 0.0:
+			var sp: Vector3 = fly.global_position
+			var stake_pt := Vector3(STAKE_POS.x, 0.05, STAKE_POS.z)
+			var f_look: Vector3 = stake_pt.lerp(
+				Vector3(sp.x, clampf(sp.y, 0.02, 2.5), sp.z),
+				PITCAM_SHOE_W)
+			var f_pos: Vector3 = PITCAM_BASE_POS + Vector3(
+				clampf(sp.x, -1.2, 1.2) * 0.30,
+				clampf(sp.y - 0.5, 0.0, 1.5) * 0.10, 0.0)
+			var cam2 := Vector2(pitcam_pos.x, pitcam_pos.z)
+			var a_stake: float = (Vector2(STAKE_POS.x, STAKE_POS.z)
+				- cam2).angle()
+			var a_shoe: float = (Vector2(sp.x, sp.z) - cam2).angle()
+			var off_axis: float = absf(rad_to_deg(wrapf(
+				a_shoe - a_stake, -PI, PI)))
+			var wide: float = clampf((off_axis - 6.0) / 12.0, 0.0, 1.0)
+			var f_fov: float = lerpf(PITCAM_BASE_FOV, PITCAM_WIDE_FOV, wide)
+			d_look = PITCAM_BASE_LOOK.lerp(f_look, pitcam_follow_w)
+			d_pos = PITCAM_BASE_POS.lerp(f_pos, pitcam_follow_w)
+			d_fov = lerpf(PITCAM_BASE_FOV, f_fov, pitcam_follow_w)
 	elif pitcam_lie_left > 0.0:
 		# LIE: a tighter closeup of the settled shoe and
 		# the stake, held a while after each settle. The
@@ -5427,6 +5516,19 @@ func _pitcam_update(delta: float) -> void:
 ## _release_shoe).
 func _pitcam_begin_record(s: Shoe) -> void:
 	_pitcam_cancel_replay()
+	# Fix Pass 40: every true release re-arms the follow
+	# gate from its own release point. The gate cannot key
+	# on the shoe's identity alone - in practice the SAME
+	# shoe flies every throw, and a latch left over from
+	# its last flight would leave the follow wide awake at
+	# the next release (the exact wild swing this pass
+	# exists to kill; the FP40 section's second throw
+	# caught the first cut of the gate doing it).
+	pitcam_gate_shoe = s
+	pitcam_gate_from = s.global_position
+	pitcam_gate_engaged = false
+	pitcam_gate_progress = 0.0
+	pitcam_follow_w = 0.0
 	rec_shoe = s
 	rec_shoe_track = []
 	rec_cam_track = []
@@ -5445,6 +5547,11 @@ func _pitcam_finish_record(s: Shoe, ringer: bool) -> void:
 		"fov": pitcam_fov})
 	pitcam_subject_pos = s.global_position
 	pitcam_lie_left = PITCAM_LIE_SEC
+	# Fix Pass 40: the flight is over - release the gate's
+	# key (its final progress/engagement stay readable
+	# until the next release re-arms it).
+	if pitcam_gate_shoe == s:
+		pitcam_gate_shoe = null
 	var track: Dictionary = {
 		"shoe": rec_shoe_track.duplicate(),
 		"cam": rec_cam_track.duplicate(),

@@ -578,6 +578,86 @@ func scripted_shot(kind: String) -> bool:
 	return false
 
 
+## Fix Pass 40: release the player's shoe with
+## scripted_shot's exact construction (the calibrated
+## AIPitcher.base_release profile through the production
+## release path), but return the moment it flies so the
+## caller can sample the flight frame by frame. Kinds:
+##   "line": aimed at the stake - a straight line drive.
+##   "pull": aimed 3.0 m LEFT of the stake - the hard
+##     pulled throw that sent FP39's camera swinging.
+func fp40_release(kind: String) -> bool:
+	if String(main.state) != "STAND":
+		return false
+	var thrown_shoe: Shoe = main.shoe
+	var line_z: float = main.game_line_z()
+	var travel: float = -1.0
+	var target: Vector3 = main.target_stake_pos()
+	var aim: Vector3 = target
+	if kind == "pull":
+		aim = target + Vector3(-3.0, 0.0, 0.0)
+	var release_pos := Vector3(0.25, 1.25, line_z - 0.35 * travel)
+	var rel: Dictionary = AIPitcher.base_release(release_pos, aim)
+	var vel: Vector3 = rel["vel"]
+	var ang: Vector3 = rel["ang"]
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
+		thrown_shoe.zone_world_center("toe"))
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	for i: int in 2:
+		await physics_frame
+	if String(main.state) != "HELD":
+		return false
+	var rel_tf: Transform3D = Shoe.hold_transform("toe", "R")
+	var hand_basis: Basis = (rel["basis"] as Basis) * rel_tf.basis.inverse()
+	var hand_pos: Vector3 = release_pos - hand_basis * rel_tf.origin
+	main.test_hand_tf["R"] = Transform3D(hand_basis, hand_pos)
+	await frames(4)
+	for i: int in 2:
+		await physics_frame
+	var dur: float = 0.30
+	var hz: float = 90.0
+	var steps: int = int(dur * hz)
+	var now: float = float(Time.get_ticks_msec()) / 1000.0
+	var axis: Vector3 = ang.normalized()
+	var rate: float = ang.length()
+	var samples: Array = []
+	for i: int in steps + 1:
+		var t_rel: float = float(i - steps) / hz
+		samples.append(ThrowMath.make_sample(now + t_rel,
+			release_pos + vel * t_rel, Quaternion(axis, rate * t_rel)))
+	main.samples = samples
+	var gov_was: bool = main.spin_governor_enabled
+	main.spin_governor_enabled = false
+	main._release_shoe(samples)
+	main.spin_governor_enabled = gov_was
+	main.grab_state.reset()
+	main.test_grip["R"] = 0.0
+	return String(main.state) == "FLYING"
+
+
+## Fix Pass 40: the pit camera's yaw in degrees, read off
+## its damped state - the number Chris's eyes judge.
+func fp40_cam_yaw() -> float:
+	var d: Vector3 = main.pitcam_look - main.pitcam_pos
+	return rad_to_deg(atan2(-d.x, -d.z))
+
+
+## Fix Pass 40: the yaw FP39's follow ASKED for at a given
+## shoe position - its desired look (the stake and the
+## shoe half-and-half) from its drifted desired position,
+## recomputed from FP39's own formulas, so one flight
+## yields both passes' excursions.
+func fp40_legacy_yaw(sp: Vector3) -> float:
+	var look: Vector3 = Vector3(main.STAKE_POS.x, 0.05, main.STAKE_POS.z) * 0.5 \
+		+ Vector3(sp.x, clampf(sp.y, 0.02, 2.5), sp.z) * 0.5
+	var pos: Vector3 = main.PITCAM_BASE_POS + Vector3(
+		clampf(sp.x, -1.2, 1.2) * 0.30,
+		clampf(sp.y - 0.5, 0.0, 1.5) * 0.10, 0.0)
+	var d: Vector3 = look - pos
+	return rad_to_deg(atan2(-d.x, -d.z))
+
+
 ## Fix Pass 13: wait for a game phase, holding the AI's own
 ## sampler off meanwhile (ai_delay frozen) so a scripted AI
 ## throw is never pre-empted by the game's sampled one.
@@ -3490,6 +3570,101 @@ func _run() -> void:
 	check(main.mode == "PRACTICE" and main.replay_state == "IDLE"
 		and not main.replay_clone.visible,
 		"FP39 replay: B to practice cuts the replay - live always wins")
+
+	# ============ Fix Pass 40: the camera follows the ARRIVAL ============
+	# Chris's FP39 verdict: the cam is smooth with a high
+	# frame rate - but it starts tracking the shoe too
+	# soon, "swinging way left and going kind of wild
+	# trying to get a shot". His law: the camera stays on
+	# the pit until the shoe is well on its way; it
+	# follows the ARRIVAL, never the release. Two scripted
+	# production throws in practice - a straight line
+	# drive and a hard pulled-LEFT throw - with the
+	# camera's yaw sampled every physics frame against
+	# the baseline: before the gate the drift must stay
+	# within 1 degree (the targets ARE the baseline's);
+	# across the whole flight the excursion stays in a
+	# bounded arc - 8 deg for the line drive, 20 for the
+	# pull (a stake-anchored look can lean toward a shoe
+	# 3 m wide, but the stake never leaves the frame it
+	# fills); after the gate the shoe must be inside the
+	# frustum for the arrival. FP39's own desired yaw is
+	# recomputed per sample from its formulas, so the
+	# same flights report both passes' numbers.
+	var f40_base_yaw: float = rad_to_deg(atan2(
+		-(main.PITCAM_BASE_LOOK.x - main.PITCAM_BASE_POS.x),
+		-(main.PITCAM_BASE_LOOK.z - main.PITCAM_BASE_POS.z)))
+	for f40_kind in ["line", "pull"]:
+		var f40_kind_s: String = String(f40_kind)
+		# Start from a camera at home on the baseline and
+		# a player at STAND (the previous lie hold burns
+		# off, the camera eases home, the shoe restocks).
+		var f40_home: float = 0.0
+		while f40_home < 25.0:
+			if String(main.state) == "STAND" \
+					and main.pitcam_lie_left <= 0.0 \
+					and absf(fp40_cam_yaw() - f40_base_yaw) < 0.5 \
+					and absf(main.pitcam_fov - main.PITCAM_BASE_FOV) < 1.5:
+				break
+			await create_timer(0.25).timeout
+			f40_home += 0.25
+		check(String(main.state) == "STAND"
+			and main.pitcam_lie_left <= 0.0
+			and absf(fp40_cam_yaw() - f40_base_yaw) < 0.5,
+			"FP40 (%s): the camera is home on the baseline before the throw (yaw %.2f, base %.2f)"
+			% [f40_kind_s, fp40_cam_yaw(), f40_base_yaw])
+		check(await fp40_release(f40_kind_s),
+			"FP40 (%s): the scripted throw flies" % f40_kind_s)
+		var f40_pre_max: float = 0.0
+		var f40_pre_frames: int = 0
+		var f40_yaw_min: float = fp40_cam_yaw()
+		var f40_yaw_max: float = f40_yaw_min
+		var f40_leg_min: float = fp40_legacy_yaw(main.shoe.global_position)
+		var f40_leg_max: float = f40_leg_min
+		var f40_engaged: bool = false
+		var f40_framed: bool = false
+		var f40_guard: float = 0.0
+		while String(main.state) == "FLYING" and f40_guard < 20.0:
+			await physics_frame
+			f40_guard += 1.0 / 60.0
+			var f40_yaw: float = fp40_cam_yaw()
+			if not main.pitcam_gate_engaged:
+				f40_pre_frames += 1
+				f40_pre_max = maxf(f40_pre_max,
+					absf(f40_yaw - f40_base_yaw))
+			else:
+				f40_engaged = true
+			f40_yaw_min = minf(f40_yaw_min, f40_yaw)
+			f40_yaw_max = maxf(f40_yaw_max, f40_yaw)
+			var f40_leg: float = fp40_legacy_yaw(main.shoe.global_position)
+			f40_leg_min = minf(f40_leg_min, f40_leg)
+			f40_leg_max = maxf(f40_leg_max, f40_leg)
+			if main.pitcam_gate_progress >= 0.85 \
+					and main.insert_cam.is_position_in_frustum(
+						main.shoe.global_position):
+				f40_framed = true
+		var f40_down: float = 0.0
+		while String(main.shoe_status[main.shoe]) != "DOWN" \
+				and f40_down < 15.0:
+			await create_timer(0.2).timeout
+			f40_down += 0.2
+		check(f40_engaged,
+			"FP40 (%s): the follow engaged once the shoe was well on its way (gate at %.2f of the run)"
+			% [f40_kind_s, main.PITCAM_GATE_FRACTION])
+		check(f40_pre_frames >= 20,
+			"FP40 (%s): the gate had a real pre-gate phase to hold through (%d frames before engagement - a gate left latched by the shoe's last flight would show 0)"
+			% [f40_kind_s, f40_pre_frames])
+		check(f40_pre_max <= 1.0,
+			"FP40 (%s): before the gate the camera HELD the pit (worst yaw drift %.2f deg of 1.0 allowed)"
+			% [f40_kind_s, f40_pre_max])
+		var f40_exc: float = f40_yaw_max - f40_yaw_min
+		var f40_bound: float = 8.0 if f40_kind_s == "line" else 20.0
+		check(f40_exc <= f40_bound,
+			"FP40 (%s): the flight's yaw excursion stayed in its arc (%.2f deg of %.0f allowed; FP39's follow asked %.2f on the same flight)"
+			% [f40_kind_s, f40_exc, f40_bound, f40_leg_max - f40_leg_min])
+		check(f40_framed,
+			"FP40 (%s): after the gate the shoe is in the frame for the arrival"
+			% f40_kind_s)
 
 	# ============ Fix Pass 13: the scoring audit ============
 	# Chris played a full game: "it scored all the points, I

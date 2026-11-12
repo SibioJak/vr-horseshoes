@@ -50,6 +50,10 @@ extends SceneTree
 ##   proofs/proof_billboard_replay.png - Fix Pass 39: the
 ##     billboard mid-REPLAY - a settled ringer's slow-mo
 ##     clone flying the recorded track on the panel.
+##   proofs/proof_billboard_pull.png - Fix Pass 40: a hard
+##     pulled-LEFT throw's ARRIVAL closeup on the panel -
+##     the shoe framed WITH the stake, the camera composed
+##     on the pit instead of swung off after the shoe.
 ##   proofs/proof_billboard_plan.png - Fix Pass 38: the
 ##     billboard's placement from a high oblique - LEFT of
 ##     the lane at halfway, posts at the bed line, face
@@ -1247,6 +1251,66 @@ func _run() -> void:
 		% main.insert_cam.fov)
 	await snap(cam_f39a, "res://proofs/proof_billboard_feed.png")
 	cam_f39a.queue_free()
+
+	# --- Proof F40: THE PULLED-LEFT ARRIVAL (Fix Pass 40) ---
+	# A full-court throw from the production release point,
+	# aimed 3.0 m LEFT of the stake through the calibrated
+	# profile (the F39a staging idiom with base_release):
+	# the throw that sent FP39's camera swinging way left.
+	# Under the gate the camera holds the pit until the
+	# shoe is well on its way, and the arrival closeup
+	# frames the wide lie WITH the stake - composed, not
+	# swung off. The judging frame is the billboard from
+	# the throwing spot once the lie hold has eased in.
+	var pull_shoe: Shoe = main.ai_pair[0]
+	var pstart := Vector3(0.25, 1.25, -0.564)
+	var prel: Dictionary = AIPitcher.base_release(
+		pstart, main.STAKE_POS + Vector3(-3.0, 0.0, 0.0))
+	var pvel: Vector3 = prel["vel"]
+	var pang: Vector3 = prel["ang"]
+	pull_shoe.freeze = false
+	pull_shoe.sleeping = false
+	pull_shoe.global_transform = Transform3D(prel["basis"] as Basis, pstart)
+	pull_shoe.linear_velocity = pvel
+	pull_shoe.angular_velocity = pang
+	main.shoe_status[pull_shoe] = "FLYING"
+	main.ai_flight[pull_shoe] = {
+		"fly_time": 0.0, "still_time": 0.0,
+		"pos_still": 0.0, "pos_anchor": pstart,
+		"flip": 0.0, "turn": 0.0,
+		"has_contact": false, "first_contact_pos": Vector3.ZERO,
+		"release": {"basis": prel["basis"], "pos": pstart,
+			"vel": pvel, "ang": pang},
+		"line_ft": 40,
+	}
+	main._pitcam_begin_record(pull_shoe)
+	var pull_gated: bool = false
+	var pt0: int = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - pt0 < 9000:
+		await process_frame
+		if main.pitcam_gate_engaged:
+			pull_gated = true
+		if not main.ai_flight.has(pull_shoe):
+			break
+	check(pull_gated and not main.ai_flight.has(pull_shoe),
+		"FP40 proofs: the pulled-left throw flew, settled, and the follow's gate engaged on the way (engaged %s, still flying %s)"
+		% [str(pull_gated), str(main.ai_flight.has(pull_shoe))])
+	await settle(45)
+	check(main.pitcam_subject_pos.distance_to(pull_shoe.global_position) < 0.05
+		and main.insert_cam.is_position_in_frustum(pull_shoe.global_position)
+		and main.insert_cam.is_position_in_frustum(main.STAKE_POS + Vector3(0.0, 0.3, 0.0))
+		and absf(main.insert_cam.fov - main.PITCAM_LIE_FOV) < 4.0,
+		"FP40 proofs: the pulled shoe's arrival closeup frames the lie WITH the stake (fov %.1f, lie at %s)"
+		% [main.insert_cam.fov, str(pull_shoe.global_position)])
+	var cam_f40 := Camera3D.new()
+	cam_f40.fov = 55.0
+	cam_f40.position = Vector3(0.8, 1.62, -0.914)
+	main.add_child(cam_f40)
+	cam_f40.look_at(main.billboard_transform().origin, Vector3.UP)
+	cam_f40.current = true
+	await settle(4)
+	await snap(cam_f40, "res://proofs/proof_billboard_pull.png")
+	cam_f40.queue_free()
 
 	# --- Proof F38b: THE BILLBOARD'S PLACEMENT ---
 	# High oblique from the house side: the billboard LEFT
