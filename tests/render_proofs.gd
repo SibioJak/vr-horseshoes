@@ -907,10 +907,18 @@ func _run() -> void:
 	await settle(3)
 	var marker: MeshInstance3D = main.shoe.zone_markers["toe"]
 	check(marker.visible, "grab-zone markers visible for the held proof")
+	# The hands pass carries the held shoe out into open space
+	# for this frame (the same move Proof B2 makes for its own
+	# shot): at the station the hand now occludes the shoe from
+	# the old close offset, and from farther back the station
+	# top slab occludes both. The subject is unchanged - the
+	# held shoe, in the hand, markers up.
+	move_tracker(&"right_hand", Transform3D(Basis.IDENTITY, Vector3(0.25, 1.25, -0.55)))
+	await settle(6)
 	var shoe_pos: Vector3 = main.shoe.global_position
 	var cam_b := Camera3D.new()
 	cam_b.fov = 70.0
-	cam_b.position = shoe_pos + Vector3(0.42, 0.30, 0.48)
+	cam_b.position = shoe_pos + Vector3(0.30, 0.22, 0.44)
 	main.add_child(cam_b)
 	cam_b.look_at(shoe_pos, Vector3.UP)
 	cam_b.current = true
@@ -1012,6 +1020,73 @@ func _run() -> void:
 	await settle(4)
 	await snap(cam_b4, "res://proofs/grip_far_heel.png")
 	cam_b4.queue_free()
+
+	# --- Proof H: THE HANDS (the hands pass) ---
+	# BASIC hands where the placeholder blocks stood, judged
+	# from the PLAYER'S OWN EYE - a camera at the head's spot
+	# looking down at the hands, the view Chris gets. Three
+	# frames: both hands OPEN at rest; the right hand CLOSED
+	# on a held shoe at the TOE grip; the same hand closed at
+	# the SHANK grip. The wrap must read on both holds, and
+	# the thumbs must sit on the correct sides (R thumb on
+	# the frame-left of the right hand, palm down).
+	set_grip(&"right_hand", 0.0)
+	var rest_wait: float = 0.0
+	while main.state != "STAND" and rest_wait < 20.0:
+		await create_timer(0.25).timeout
+		rest_wait += 0.25
+	check(main.state == "STAND", "hands proofs: the dropped shoe restocked for the hand frames")
+	var open_basis := Basis.from_euler(Vector3(deg_to_rad(-18.0), 0.0, 0.0))
+	move_tracker(&"right_hand", Transform3D(open_basis, Vector3(0.23, 1.04, -0.34)))
+	move_tracker(&"left_hand", Transform3D(open_basis, Vector3(-0.23, 1.04, -0.34)))
+	set_grip(&"left_hand", 0.0)
+	await settle(8)
+	check(float(main.hand_curl_t["R"]) < 0.02 and float(main.hand_curl_t["L"]) < 0.02,
+		"hands proofs: both hands stand OPEN at rest")
+	var cam_h := Camera3D.new()
+	cam_h.fov = 60.0
+	cam_h.position = Vector3(0.0, 1.54, -0.02)
+	main.add_child(cam_h)
+	cam_h.look_at(Vector3(0.0, 1.01, -0.36), Vector3.UP)
+	cam_h.current = true
+	await settle(4)
+	await snap(cam_h, "res://proofs/hands_open.png")
+	cam_h.queue_free()
+	# The toe grab through the tracker path (Proof B's idiom),
+	# then the hand carried out to the open-lawn spot Proof B2
+	# composed for, and the eye put where the player's head
+	# rides relative to a held hand: above and behind it.
+	move_tracker(&"right_hand", Transform3D(Basis.IDENTITY, main.shoe.zone_world_center("toe")))
+	await settle(6)
+	check(main.candidate_zone == "toe", "hands proofs: the right hand acquires the toe zone")
+	set_grip(&"right_hand", 1.0)
+	await settle(8)
+	check(main.state == "HELD" and main.held_zone == "toe",
+		"hands proofs: the toe grab holds through the tracker input")
+	move_tracker(&"right_hand", Transform3D(Basis.IDENTITY, Vector3(0.25, 1.25, -0.55)))
+	await settle(8)
+	var hand_pos_h: Vector3 = main.hand_ctrl["R"].global_position
+	var cam_h2 := Camera3D.new()
+	cam_h2.fov = 62.0
+	cam_h2.position = hand_pos_h + Vector3(0.16, 0.33, 0.42)
+	main.add_child(cam_h2)
+	cam_h2.look_at(hand_pos_h + Vector3(0.0, -0.03, -0.02), Vector3.UP)
+	cam_h2.current = true
+	await settle(4)
+	await snap(cam_h2, "res://proofs/hands_toe.png")
+	# One X press cycles TOE -> SHANK - TOE (the home shank);
+	# the same closed hand, the same eye.
+	set_button(&"left_hand", &"ax_button", true)
+	await settle(5)
+	set_button(&"left_hand", &"ax_button", false)
+	await settle(5)
+	check(main.held_zone == "shank_right",
+		"hands proofs: the grip cycles to the home shank (got '%s')" % main.held_zone)
+	await settle(4)
+	await snap(cam_h2, "res://proofs/hands_shank.png")
+	cam_h2.queue_free()
+	set_grip(&"right_hand", 0.0)
+	await settle(8)
 
 	# --- Proof C: locomotion through the REAL tracker stick inputs ---
 	# (the same "primary" action the headset's thumbsticks feed).

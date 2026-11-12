@@ -180,10 +180,52 @@ const SAMPLE_KEEP_SEC: float = 0.40
 const SETTLE_STILL_SEC: float = 0.25
 const RETURN_WAIT_SEC: float = 0.20
 
+# --- The hands pass (BASIC hands, Chris's scope word) ---
+# The controller rep is a low-poly hand built from primitives
+# in controller space: fingers point along -Z, palm faces -Y,
+# and the held shoe's bar passes through the grip anchor
+# (0, -0.018, 0) along X - Shoe.hold_transform seats every
+# zone's centre exactly there, so ONE closed pose wraps the
+# bar at the toe hold and at the shank holds alike; the shoe
+# itself carries the difference. Two poses, OPEN and CLOSED,
+# blended on the grip analog (see _update_hands): the hand
+# closes as he squeezes and OPENS as he un-squeezes - the
+# release is an un-squeeze, and the hand shows it.
+# Joint tables are curl degrees per joint (proximal, middle,
+# distal); applied as negative rotation.x (tips travel from
+# -Z down toward the palm). Finger lengths are per finger
+# (index, middle, ring, pinky), metres per segment.
+const HAND_FINGER_OPEN: Array = [6.0, 10.0, 8.0]
+const HAND_FINGER_CLOSED: Array = [17.0, 73.0, 65.0]
+const HAND_FINGER_LENS: Array = [
+	[0.043, 0.020, 0.018], # index
+	[0.046, 0.022, 0.019], # middle
+	[0.043, 0.020, 0.018], # ring
+	[0.034, 0.016, 0.014], # pinky
+]
+const HAND_THUMB_OPEN: Array = [8.0, 12.0]
+const HAND_THUMB_CLOSED: Array = [26.0, 38.0]
+const HAND_THUMB_LENS: Array = [0.034, 0.026]
+# Thumb root aim as (pitch, yaw) degrees - yaw is applied
+# toward the palm's midline (sign from the hand's side);
+# closed, the root also pitches down so the thumb presses
+# the bar's front face.
+const HAND_THUMB_ROOT_OPEN := Vector2(4.0, 26.0)
+const HAND_THUMB_ROOT_CLOSED := Vector2(-16.0, 34.0)
+# Grip analog -> curl blend: starts closing just off rest,
+# fully closed a touch past the latch threshold (0.72), so
+# the hand reads shut the moment the shoe is his - and reads
+# OPENING through the un-squeeze before the release fires
+# at GRIP_OFF (0.30).
+const HAND_CURL_GRIP_LO: float = 0.10
+const HAND_CURL_GRIP_HI: float = 0.75
+
 var origin: XROrigin3D
 var cam: XRCamera3D
 var hand_ctrl: Dictionary = {} # "L"/"R" -> XRController3D
 var ctrl_rep: Dictionary = {}
+var hand_joints: Dictionary = {} # "L"/"R" -> {"fingers": Array[Array[Node3D]], "thumb_root": Node3D, "thumb": Array[Node3D]}
+var hand_curl_t: Dictionary = {"L": 0.0, "R": 0.0} # pose blend per hand, 0 = OPEN .. 1 = CLOSED
 var xr_ok: bool = false
 var head_tracking_ok: bool = false
 
@@ -3396,36 +3438,115 @@ func _build_rig() -> void:
 
 
 func _build_controller_rep(ctrl: XRController3D, hand: String) -> void:
+	# The hands pass: the toss-test placeholder (a grey block
+	# with an accent band and a billboard L/R tag) is retired;
+	# in its place, a BASIC low-poly hand built from
+	# primitives in controller space - palm, four 3-segment
+	# fingers, a 2-segment thumb, a wrist stub, and the old
+	# accent kept as a slim wrist band (his orientation cue;
+	# the tags retire with the blocks). Controller space:
+	# fingers along -Z, palm facing -Y, and the held shoe's
+	# bar crossing the grip anchor (0, -0.018, 0) along X -
+	# the hand is built true around that anchor, no cosmetic
+	# tilt, so the CLOSED pose wraps the bar at every grip
+	# stop. s = the thumb's side: -1 for R (thumb toward -X),
+	# +1 for L (thumb toward +X), palms down.
 	var rep := Node3D.new()
 	rep.name = "ControllerRep" + hand
 	ctrl.add_child(rep)
 	ctrl_rep[hand] = rep
 	var accent: Color = Color(0.25, 0.85, 1.0) if hand == "L" else Color(1.0, 0.55, 0.2)
-	var body := MeshInstance3D.new()
-	var body_mesh := BoxMesh.new()
-	body_mesh.size = Vector3(0.038, 0.026, 0.105)
-	body.mesh = body_mesh
-	body.material_override = _mat(Color(0.72, 0.74, 0.78))
-	body.position = Vector3(0.0, -0.005, 0.005)
-	body.rotation_degrees = Vector3(-18.0, 0.0, 0.0)
-	rep.add_child(body)
-	var band := MeshInstance3D.new()
-	var band_mesh := BoxMesh.new()
-	band_mesh.size = Vector3(0.040, 0.010, 0.024)
-	band.mesh = band_mesh
-	band.material_override = _mat(accent, 1.2)
-	band.position = Vector3(0.0, 0.006, -0.018)
-	band.rotation_degrees = Vector3(-18.0, 0.0, 0.0)
-	rep.add_child(band)
-	var tag := Label3D.new()
-	tag.text = hand
-	tag.font_size = 64
-	tag.pixel_size = 0.0009
-	tag.modulate = accent
-	tag.outline_size = 8
-	tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	tag.position = Vector3(0.0, 0.045, 0.0)
-	rep.add_child(tag)
+	var s: float = 1.0 if hand == "L" else -1.0
+	var skin: Material = _mat(Color(0.80, 0.57, 0.44))
+	# Palm: its underside rests on the held bar's top face,
+	# its front edge at the knuckle line.
+	_box(rep, Vector3(0.0, 0.005, 0.057), Vector3(0.080, 0.024, 0.074), skin)
+	# Wrist stub behind the palm, and the accent band over it.
+	_box(rep, Vector3(0.0, 0.002, 0.100), Vector3(0.064, 0.028, 0.026), skin)
+	_box(rep, Vector3(0.0, 0.004, 0.082), Vector3(0.070, 0.030, 0.018), _mat(accent, 1.2))
+	# Fingers: knuckle pivots on the palm's front edge; each
+	# segment is a box extending -Z from its pivot, the next
+	# pivot riding at the segment's tip. Index sits nearest
+	# the thumb.
+	var widths: Array = [0.016, 0.017, 0.016, 0.014]
+	var knuckle_x: Array = [s * 0.030, s * 0.010, -s * 0.010, -s * 0.030]
+	var fingers: Array = []
+	for fi: int in 4:
+		var lens: Array = HAND_FINGER_LENS[fi]
+		var w: float = float(widths[fi])
+		var chain: Array = []
+		var parent: Node3D = rep
+		for ji: int in 3:
+			var pivot := Node3D.new()
+			if ji == 0:
+				pivot.position = Vector3(float(knuckle_x[fi]), 0.002, 0.022)
+			else:
+				pivot.position = Vector3(0.0, 0.0, -float(lens[ji - 1]))
+			parent.add_child(pivot)
+			var seg_len: float = float(lens[ji])
+			_box(pivot, Vector3(0.0, 0.0, -seg_len * 0.5),
+				Vector3(w * (1.0 - 0.08 * float(ji)), 0.015 - 0.001 * float(ji), seg_len), skin)
+			chain.append(pivot)
+			parent = pivot
+		fingers.append(chain)
+	# Thumb: a root pivot on the palm's thumb-side front
+	# corner; the root's yaw/pitch (posed by the blend) aims
+	# it forward, inward and - closed - down onto the bar's
+	# front face; two curling segments ride it.
+	var thumb_root := Node3D.new()
+	thumb_root.position = Vector3(s * 0.040, -0.002, 0.040)
+	rep.add_child(thumb_root)
+	var thumb: Array = []
+	var tparent: Node3D = thumb_root
+	for ji: int in 2:
+		var jpivot := Node3D.new()
+		if ji > 0:
+			jpivot.position = Vector3(0.0, 0.0, -float(HAND_THUMB_LENS[0]))
+		tparent.add_child(jpivot)
+		var tlen: float = float(HAND_THUMB_LENS[ji])
+		_box(jpivot, Vector3(0.0, 0.0, -tlen * 0.5),
+			Vector3(0.017 - 0.002 * float(ji), 0.015 - 0.001 * float(ji), tlen), skin)
+		thumb.append(jpivot)
+		tparent = jpivot
+	hand_joints[hand] = {"fingers": fingers, "thumb_root": thumb_root, "thumb": thumb}
+	_apply_hand_curl(hand, 0.0)
+
+
+## Pose one hand at blend t (0 = OPEN, 1 = CLOSED): every
+## joint's rotation.x is the lerp of its table entry, negated
+## (curl travels from -Z down toward the palm); the thumb
+## root aims by its own lerped yaw/pitch.
+func _apply_hand_curl(hand: String, t: float) -> void:
+	if not hand_joints.has(hand):
+		return
+	var j: Dictionary = hand_joints[hand]
+	var fingers: Array = j["fingers"]
+	for fi: int in fingers.size():
+		var chain: Array = fingers[fi]
+		for ji: int in 3:
+			var deg: float = lerpf(float(HAND_FINGER_OPEN[ji]), float(HAND_FINGER_CLOSED[ji]), t)
+			(chain[ji] as Node3D).rotation.x = deg_to_rad(-deg)
+	var thumb: Array = j["thumb"]
+	for ji: int in 2:
+		var tdeg: float = lerpf(float(HAND_THUMB_OPEN[ji]), float(HAND_THUMB_CLOSED[ji]), t)
+		(thumb[ji] as Node3D).rotation.x = deg_to_rad(-tdeg)
+	var s: float = 1.0 if hand == "L" else -1.0
+	var pitch: float = lerpf(HAND_THUMB_ROOT_OPEN.x, HAND_THUMB_ROOT_CLOSED.x, t)
+	var yaw: float = lerpf(HAND_THUMB_ROOT_OPEN.y, HAND_THUMB_ROOT_CLOSED.y, t)
+	(j["thumb_root"] as Node3D).rotation = Vector3(deg_to_rad(pitch), s * deg_to_rad(yaw), 0.0)
+
+
+## Per frame: both hands take their pose straight from the
+## grip analog - the same signal the grab logic reads - so
+## the squeeze, the hold and the un-squeeze release all
+## show on the hand the moment they happen.
+func _update_hands() -> void:
+	for hand: String in ["L", "R"]:
+		var g: float = _grip_value(hand)
+		var t: float = clampf((g - HAND_CURL_GRIP_LO) / (HAND_CURL_GRIP_HI - HAND_CURL_GRIP_LO), 0.0, 1.0)
+		t = t * t * (3.0 - 2.0 * t)
+		hand_curl_t[hand] = t
+		_apply_hand_curl(hand, t)
 
 
 func _head_tracking_ok() -> bool:
@@ -4070,6 +4191,7 @@ func _process(_delta: float) -> void:
 	if state == "HELD":
 		_add_sample()
 	_process_grab(_delta)
+	_update_hands() # the hands pass: pose follows the grip analog
 	# Fix Pass 22: the follow is unconditional while held -
 	# the carried slide (see _update_carried_slide) means
 	# even mid-slide the shoe rides the hand.

@@ -4242,6 +4242,93 @@ func _run() -> void:
 				false, main._pair_index_of(main.shoe)).origin) < 0.01,
 		"game: practice after the game stocks the shoe on the rail as before")
 
+	# ============ The hands pass: BASIC hands on the grip analog ============
+	# The controller rep is a hand now, and its pose is the
+	# grip analog made visible: open at rest, closing through
+	# the squeeze, shut on the held shoe, opening again
+	# through the un-squeeze that fires the release - Chris's
+	# law of his own throwing ("the release is an
+	# un-squeeze"). Driven through the production paths: the
+	# test transports feed the same _grip_value / _hand_tf
+	# the grab logic reads, and the wrap is asserted in hand
+	# space, where Shoe.hold_transform seats every zone's
+	# centre at the one grip anchor.
+	var rep_r: Node3D = main.ctrl_rep["R"]
+	var rep_l: Node3D = main.ctrl_rep["L"]
+	check(rep_r.find_children("*", "Label3D", true, false).is_empty()
+		and rep_l.find_children("*", "Label3D", true, false).is_empty(),
+		"hands: the billboard L/R tags retired with the blocks")
+	var joints_r: Dictionary = main.hand_joints["R"]
+	var joints_l: Dictionary = main.hand_joints["L"]
+	var fingers_r: Array = joints_r["fingers"]
+	var fingers_l: Array = joints_l["fingers"]
+	var mid_chain_r: Array = fingers_r[1]
+	check(absf((fingers_r[0][0] as Node3D).position.x + 0.030) < 0.001
+		and absf((fingers_l[0][0] as Node3D).position.x - 0.030) < 0.001,
+		"hands: mirrored pair - the R index knuckle sits thumb-side at -X, the L at +X")
+	# The analog alone, no grab: rest open, half squeeze half shut.
+	main.test_grip["R"] = 0.0
+	await frames(3)
+	check(float(main.hand_curl_t["R"]) < 0.02
+		and absf((mid_chain_r[0] as Node3D).rotation.x - deg_to_rad(-6.0)) < 0.01,
+		"hands: at rest the hand stands OPEN (proximal at the open table's -6 deg)")
+	main.test_grip["R"] = 0.5
+	await frames(3)
+	var t_mid: float = float(main.hand_curl_t["R"])
+	check(t_mid > 0.4 and t_mid < 0.9,
+		"hands: a half squeeze half closes the hand (blend %.2f)" % t_mid)
+	# A production grab at the toe, through the test transport.
+	for i: int in 120:
+		await physics_frame
+		if String(main.state) == "STAND":
+			var home_tf2: Transform3D = main.stand_tfs[int(main.active_stand_line_ft)]
+			if main.shoe.global_position.distance_to(home_tf2.origin) < 0.01:
+				break
+	main.origin.global_transform = Transform3D(Basis.IDENTITY,
+		Vector3(0.0, 0.0, main.line_z_for_ft(int(main.active_stand_line_ft))))
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, main.shoe.zone_world_center("toe"))
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	check(main.state == "HELD" and main.held_zone == "toe",
+		"hands: the production grab holds the shoe at the TOE grip")
+	check(float(main.hand_curl_t["R"]) > 0.95,
+		"hands: the hand is shut on the held shoe (blend %.2f)" % float(main.hand_curl_t["R"]))
+	var rep_inv: Transform3D = rep_r.global_transform.affine_inverse()
+	var anchor := Vector3(0.0, -0.018, 0.0)
+	var bar_toe: Vector3 = main.test_hand_tf["R"].affine_inverse() * main.shoe.zone_world_center("toe")
+	check(bar_toe.distance_to(anchor) < 0.002,
+		"hands: the toe bar sits at the grip anchor in hand space")
+	var mid_piv: Vector3 = rep_inv * (mid_chain_r[1] as Node3D).global_position
+	var dist_piv: Vector3 = rep_inv * (mid_chain_r[2] as Node3D).global_position
+	check(mid_piv.distance_to(bar_toe) < 0.032 and dist_piv.distance_to(bar_toe) < 0.032
+		and dist_piv.y < bar_toe.y,
+		"hands: the middle finger WRAPS the toe bar (mid joint %.1f mm, tip joint %.1f mm from the bar centre, tip joint under it)"
+		% [mid_piv.distance_to(bar_toe) * 1000.0, dist_piv.distance_to(bar_toe) * 1000.0])
+	# Cycle to the shank: the same closed hand must wrap the
+	# shank bar at the same anchor.
+	await pulse_button("A")
+	check(main.held_zone == "shank_right",
+		"hands: the grip cycles to the home shank (got '%s')" % main.held_zone)
+	var bar_shank: Vector3 = main.test_hand_tf["R"].affine_inverse() * main.shoe.zone_world_center("shank_right")
+	var mid_piv2: Vector3 = rep_inv * (mid_chain_r[1] as Node3D).global_position
+	var dist_piv2: Vector3 = rep_inv * (mid_chain_r[2] as Node3D).global_position
+	check(bar_shank.distance_to(anchor) < 0.002
+		and mid_piv2.distance_to(bar_shank) < 0.032 and dist_piv2.distance_to(bar_shank) < 0.032
+		and dist_piv2.y < bar_shank.y,
+		"hands: the same closed hand WRAPS the shank bar at the anchor")
+	# The un-squeeze shows BEFORE the release fires, then the
+	# release fires and the hand rests open.
+	main.test_grip["R"] = 0.45
+	await frames(3)
+	var t_open: float = float(main.hand_curl_t["R"])
+	check(main.state == "HELD" and t_open > 0.15 and t_open < 0.65,
+		"hands: the un-squeeze opens the hand while the shoe is still held (blend %.2f)" % t_open)
+	main.test_grip["R"] = 0.0
+	await frames(6)
+	check(main.state != "HELD", "hands: the release fires as the grip lets go")
+	check(float(main.hand_curl_t["R"]) < 0.02,
+		"hands: the hand rests open after the release")
+
 	main.origin.global_transform = Transform3D.IDENTITY
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))
 
