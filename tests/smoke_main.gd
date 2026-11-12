@@ -658,6 +658,58 @@ func fp40_legacy_yaw(sp: Vector3) -> float:
 	return rad_to_deg(atan2(-d.x, -d.z))
 
 
+## Fix Pass 41: release the player's shoe with the skid
+## profile the design probe measured - a low, flat toss
+## from 4 m out (a practice toss at the pit, through the
+## production grab / estimator / release path): it lands
+## at the pit's front and PLOWS - 0.250 m of ground
+## travel after its first sand contact, where dead
+## arrivals run 0.12 m or less. The construction is
+## fp40_release's, with the probe's exact initial state
+## (identity basis, -9 rad/s flip).
+func fp41_release_skid() -> bool:
+	if String(main.state) != "STAND":
+		return false
+	var thrown_shoe: Shoe = main.shoe
+	var release_pos := Vector3(0.10, 0.80, -8.20)
+	var vel := Vector3(0.20, 0.80, -6.80)
+	var ang := Vector3(-9.0, 0.0, 0.0)
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY,
+		thrown_shoe.zone_world_center("toe"))
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	for i: int in 2:
+		await physics_frame
+	if String(main.state) != "HELD":
+		return false
+	var rel_tf: Transform3D = Shoe.hold_transform("toe", "R")
+	var hand_basis: Basis = rel_tf.basis.inverse()
+	main.test_hand_tf["R"] = Transform3D(hand_basis,
+		release_pos - hand_basis * rel_tf.origin)
+	await frames(4)
+	for i: int in 2:
+		await physics_frame
+	var dur: float = 0.30
+	var hz: float = 90.0
+	var steps: int = int(dur * hz)
+	var now: float = float(Time.get_ticks_msec()) / 1000.0
+	var axis: Vector3 = ang.normalized()
+	var rate: float = ang.length()
+	var samples: Array = []
+	for i: int in steps + 1:
+		var t_rel: float = float(i - steps) / hz
+		samples.append(ThrowMath.make_sample(now + t_rel,
+			release_pos + vel * t_rel, Quaternion(axis, rate * t_rel)))
+	main.samples = samples
+	var gov_was: bool = main.spin_governor_enabled
+	main.spin_governor_enabled = false
+	main._release_shoe(samples)
+	main.spin_governor_enabled = gov_was
+	main.grab_state.reset()
+	main.test_grip["R"] = 0.0
+	return String(main.state) == "FLYING"
+
+
 ## Fix Pass 13: wait for a game phase, holding the AI's own
 ## sampler off meanwhile (ai_delay frozen) so a scripted AI
 ## throw is never pre-empted by the game's sampled one.
@@ -3665,6 +3717,163 @@ func _run() -> void:
 		check(f40_framed,
 			"FP40 (%s): after the gate the shoe is in the frame for the arrival"
 			% f40_kind_s)
+
+	# ============ Fix Pass 41: MULTI-CAM SMART CUTS ============
+	# Chris: "there could be multiple cams that it smart
+	# cuts, depending. a cam right behind the pin, for
+	# example." Three fixed cameras, one director: MAIN
+	# holds until FP40's gate; at the gate the landing is
+	# projected - on line cuts to PIN for the arrival,
+	# wide stays on MAIN; a skid or a leaner cuts to SIDE
+	# at the settle; the ringer replay runs the same
+	# director over its recording. Asserted on the ACTIVE
+	# CAMERA (main.pitcam_shot, the director's word, plus
+	# the camera nodes' own current flags) through
+	# scripted production throws in practice.
+	# (a) ON LINE: the straight drive projects at the
+	# stake - MAIN before the gate, PIN for the arrival.
+	var f41_home: float = 0.0
+	while f41_home < 25.0:
+		if String(main.state) == "STAND" and main.pitcam_lie_left <= 0.0:
+			break
+		await create_timer(0.25).timeout
+		f41_home += 0.25
+	check(await fp40_release("line"),
+		"FP41 (line): the scripted drive flies")
+	var f41a_pin_early: bool = false
+	var f41a_saw_pin: bool = false
+	var f41a_pin_current: bool = false
+	var f41a_last_fly: String = "MAIN"
+	var f41a_guard: float = 0.0
+	while String(main.state) == "FLYING" and f41a_guard < 20.0:
+		await physics_frame
+		f41a_guard += 1.0 / 60.0
+		if not main.pitcam_gate_engaged:
+			if main.pitcam_shot != "MAIN":
+				f41a_pin_early = true
+		elif main.pitcam_shot == "PIN":
+			f41a_saw_pin = true
+			if main.pin_cam.current and not main.insert_cam.current:
+				f41a_pin_current = true
+		f41a_last_fly = main.pitcam_shot
+	check(not f41a_pin_early,
+		"FP41 (line): no cut before the gate - MAIN holds the pit through the release")
+	check(f41a_saw_pin and f41a_last_fly == "PIN",
+		"FP41 (line): the director cut to the PIN cam for the on-line arrival (last flight shot %s)" % f41a_last_fly)
+	check(f41a_pin_current,
+		"FP41 (line): the pin camera node is the viewport's live camera during the arrival")
+	var f41a_set: float = 0.0
+	while String(main.state) == "FLYING" and f41a_set < 15.0:
+		await create_timer(0.2).timeout
+		f41a_set += 0.2
+	check(main.dir_last_online,
+		"FP41 (line): the gate projection called the drive ON LINE")
+	# (b) WIDE: the hard pull projects 3 m left of the
+	# pit - the director never leaves MAIN.
+	var f41b_home: float = 0.0
+	while f41b_home < 25.0:
+		if String(main.state) == "STAND" and main.pitcam_lie_left <= 0.0:
+			break
+		await create_timer(0.25).timeout
+		f41b_home += 0.25
+	check(await fp40_release("pull"),
+		"FP41 (pull): the scripted pull flies")
+	var f41b_left_main: bool = false
+	var f41b_guard: float = 0.0
+	while String(main.state) == "FLYING" and f41b_guard < 20.0:
+		await physics_frame
+		f41b_guard += 1.0 / 60.0
+		if main.pitcam_shot != "MAIN":
+			f41b_left_main = true
+	var f41b_set: float = 0.0
+	while String(main.state) == "FLYING" and f41b_set < 15.0:
+		await create_timer(0.2).timeout
+		f41b_set += 0.2
+	check(not f41b_left_main and main.pitcam_shot == "MAIN",
+		"FP41 (pull): a wide throw stays on MAIN throughout (shot %s)" % main.pitcam_shot)
+	check(not main.dir_last_online,
+		"FP41 (pull): the gate projection called the pull WIDE")
+	# (c) THE GROUND GAME: the plowing toss skids a
+	# quarter metre through the sand - SIDE at the
+	# settle, held for the lie.
+	var f41c_home: float = 0.0
+	while f41c_home < 25.0:
+		if String(main.state) == "STAND" and main.pitcam_lie_left <= 0.0:
+			break
+		await create_timer(0.25).timeout
+		f41c_home += 0.25
+	check(await fp41_release_skid(),
+		"FP41 (skid): the plowing toss flies")
+	var f41c_set: float = 0.0
+	while String(main.state) == "FLYING" and f41c_set < 15.0:
+		await create_timer(0.2).timeout
+		f41c_set += 0.2
+	var f41c_side: bool = false
+	var f41c_poll: float = 0.0
+	while f41c_poll < 3.0:
+		if main.pitcam_shot == "SIDE" and main.side_cam.current:
+			f41c_side = true
+			break
+		await create_timer(0.1).timeout
+		f41c_poll += 0.1
+	check(main.dir_last_skid_m >= main.DIRECTOR_SKID_M,
+		"FP41 (skid): the toss plowed - %.3f m after first sand contact (threshold %.2f)"
+		% [main.dir_last_skid_m, main.DIRECTOR_SKID_M])
+	check(f41c_side,
+		"FP41 (skid): the director cut to the SIDE cam at the settle and holds it for the lie")
+	# (d) THE REPLAY CUTS TOO: a production ringer's
+	# slow-mo runs the director over its recording -
+	# MAIN for the flight, PIN from the recorded gate.
+	main.start_game()
+	check(await scripted_shot("ringer"),
+		"FP41 (replay): the scripted ringer flies and settles")
+	var f41d_wait: float = 0.0
+	while main.replay_state != "PLAYING" and f41d_wait < 6.0:
+		await create_timer(0.1).timeout
+		f41d_wait += 0.1
+	check(main.replay_state == "PLAYING",
+		"FP41 (replay): the ringer's replay is playing")
+	var f41d_first: String = main.pitcam_shot
+	var f41d_saw_pin: bool = false
+	var f41d_guard: float = 0.0
+	while main.replay_state == "PLAYING" and f41d_guard < 20.0:
+		await physics_frame
+		f41d_guard += 1.0 / 60.0
+		if main.pitcam_shot == "PIN":
+			f41d_saw_pin = true
+	check(f41d_first == "MAIN",
+		"FP41 (replay): the replay opens on MAIN (got %s)" % f41d_first)
+	check(f41d_saw_pin,
+		"FP41 (replay): the replay cut to PIN at the recorded gate for the arrival")
+	var f41d_end: float = 0.0
+	while main.replay_state != "IDLE" and f41d_end < 12.0:
+		await create_timer(0.2).timeout
+		f41d_end += 0.2
+	check(main.replay_state == "IDLE" and main.pitcam_shot == "MAIN",
+		"FP41 (replay): the replay ends back on MAIN (shot %s)" % main.pitcam_shot)
+	await pulse_button("B")
+	check(main.mode == "PRACTICE",
+		"FP41: B returns to practice for the sections below")
+	# (e) RESET: after the cuts above, a fresh flight
+	# starts on MAIN and holds it to the gate - the
+	# director re-arms with every release.
+	var f41e_home: float = 0.0
+	while f41e_home < 25.0:
+		if String(main.state) == "STAND" and main.pitcam_lie_left <= 0.0:
+			break
+		await create_timer(0.25).timeout
+		f41e_home += 0.25
+	check(await fp40_release("line"),
+		"FP41 (reset): the follow-up drive flies")
+	var f41e_early: bool = false
+	var f41e_guard: float = 0.0
+	while String(main.state) == "FLYING" and f41e_guard < 20.0:
+		await physics_frame
+		f41e_guard += 1.0 / 60.0
+		if not main.pitcam_gate_engaged and main.pitcam_shot != "MAIN":
+			f41e_early = true
+	check(not f41e_early,
+		"FP41 (reset): a new flight re-arms the director on MAIN")
 
 	# ============ Fix Pass 13: the scoring audit ============
 	# Chris played a full game: "it scored all the points, I

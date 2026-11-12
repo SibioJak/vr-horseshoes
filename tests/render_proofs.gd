@@ -54,6 +54,17 @@ extends SceneTree
 ##     pulled-LEFT throw's ARRIVAL closeup on the panel -
 ##     the shoe framed WITH the stake, the camera composed
 ##     on the pit instead of swung off after the shoe.
+##   proofs/proof_pincam_arrival.png - Fix Pass 41: the
+##     PIN CAM's own frame at an on-line arrival - the
+##     shoe in the air coming at the lens, the stake big
+##     in the foreground (the billboard feed itself,
+##     saved from the pit viewport's texture).
+##   proofs/proof_sidecam_skid.png - Fix Pass 41: the
+##     SIDE CAM's frame of a plowing arrival's lie - the
+##     furrow read in profile across the pit.
+##   proofs/proof_sidecam_leaner.png - Fix Pass 41: the
+##     SIDE CAM's frame of a leaner at rest against the
+##     stake, in profile.
 ##   proofs/proof_billboard_plan.png - Fix Pass 38: the
 ##     billboard's placement from a high oblique - LEFT of
 ##     the lane at halfway, posts at the bed line, face
@@ -1311,6 +1322,158 @@ func _run() -> void:
 	await settle(4)
 	await snap(cam_f40, "res://proofs/proof_billboard_pull.png")
 	cam_f40.queue_free()
+
+	# --- Proof F41a: THE PIN CAM ARRIVAL (Fix Pass 41) ---
+	# A full-court drive at the stake through the
+	# calibrated profile (the F40 staging idiom): the
+	# director holds MAIN to the gate, projects the
+	# landing on line, and cuts to the fixed camera
+	# behind the stake. The committed frame is the feed
+	# itself at the arrival, grabbed from the viewport
+	# texture the moment the shoe closes inside 3.4 m -
+	# the texture lags the physics by a render frame at
+	# most, so the shoe reads in the air, coming at the
+	# lens, the stake big in the foreground.
+	var pin_shoe: Shoe = main.ai_pair[0]
+	var pin_start := Vector3(0.25, 1.25, -0.564)
+	# Aimed 0.35 m right of the stake: still dead on line
+	# for the director (0.85 m band), but the shoe crosses
+	# the pin frame BESIDE the post instead of hiding
+	# behind its silhouette on the way in.
+	var pin_rel: Dictionary = AIPitcher.base_release(
+		pin_start, main.target_stake_pos() + Vector3(0.35, 0.0, 0.0))
+	var pin_vel: Vector3 = pin_rel["vel"]
+	var pin_ang: Vector3 = pin_rel["ang"]
+	pin_shoe.freeze = false
+	pin_shoe.sleeping = false
+	pin_shoe.global_transform = Transform3D(pin_rel["basis"] as Basis, pin_start)
+	pin_shoe.linear_velocity = pin_vel
+	pin_shoe.angular_velocity = pin_ang
+	main.shoe_status[pin_shoe] = "FLYING"
+	main.ai_flight[pin_shoe] = {
+		"fly_time": 0.0, "still_time": 0.0,
+		"pos_still": 0.0, "pos_anchor": pin_start,
+		"flip": 0.0, "turn": 0.0,
+		"has_contact": false, "first_contact_pos": Vector3.ZERO,
+		"release": {"basis": pin_rel["basis"], "pos": pin_start,
+			"vel": pin_vel, "ang": pin_ang},
+		"line_ft": 40,
+	}
+	main._pitcam_begin_record(pin_shoe)
+	var pin_saw: bool = false
+	var pin_grabbed: bool = false
+	var pt41: int = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - pt41 < 9000:
+		await physics_frame
+		if main.pitcam_shot == "PIN":
+			pin_saw = true
+			if main.ai_flight.has(pin_shoe) \
+					and pin_shoe.global_position.distance_to(main.STAKE_POS) < 3.4:
+				# Sync to a completed render before reading
+				# the texture back: under box load the last
+				# physics frame's render can lag the shoe
+				# by metres, and the earlier unsynced grabs
+				# caught the feed well behind the flight.
+				await RenderingServer.frame_post_draw
+				var pimg: Image = main.insert_viewport.get_texture().get_image()
+				pimg.save_png("res://proofs/proof_pincam_arrival.png")
+				pin_grabbed = true
+				break
+		if not main.ai_flight.has(pin_shoe):
+			break
+	check(pin_saw and pin_grabbed,
+		"FP41 proofs: the director cut to the PIN cam and the arrival frame was grabbed (cut %s, frame %s)"
+		% [str(pin_saw), str(pin_grabbed)])
+	var pt41b: int = Time.get_ticks_msec()
+	while main.ai_flight.has(pin_shoe) and Time.get_ticks_msec() - pt41b < 9000:
+		await physics_frame
+	check(not main.ai_flight.has(pin_shoe),
+		"FP41 proofs: the pin-cam drive settled in the pit")
+
+	# --- Proof F41b: THE SIDE CAM SKID (Fix Pass 41) ---
+	# The design probe's plowing toss (staged at the
+	# pit, the F39a idiom): it lands at the pit's front
+	# and plows a quarter metre through the sand. The
+	# director cuts to the SIDE cam at the settle; the
+	# committed frame is the feed during the lie hold -
+	# the furrow read in profile.
+	var skid_shoe: Shoe = main.ai_pair[1]
+	var sk_start := Vector3(0.10, 0.80, -8.20)
+	var sk_vel := Vector3(0.20, 0.80, -6.80)
+	var sk_ang := Vector3(-9.0, 0.0, 0.0)
+	skid_shoe.freeze = false
+	skid_shoe.sleeping = false
+	skid_shoe.global_transform = Transform3D(Basis.IDENTITY, sk_start)
+	skid_shoe.linear_velocity = sk_vel
+	skid_shoe.angular_velocity = sk_ang
+	main.shoe_status[skid_shoe] = "FLYING"
+	main.ai_flight[skid_shoe] = {
+		"fly_time": 0.0, "still_time": 0.0,
+		"pos_still": 0.0, "pos_anchor": sk_start,
+		"flip": 0.0, "turn": 0.0,
+		"has_contact": false, "first_contact_pos": Vector3.ZERO,
+		"release": {"basis": Basis.IDENTITY, "pos": sk_start,
+			"vel": sk_vel, "ang": sk_ang},
+		"line_ft": 40,
+	}
+	main._pitcam_begin_record(skid_shoe)
+	var st41: int = Time.get_ticks_msec()
+	while main.ai_flight.has(skid_shoe) and Time.get_ticks_msec() - st41 < 9000:
+		await physics_frame
+	await settle(30)
+	check(not main.ai_flight.has(skid_shoe)
+		and main.dir_last_skid_m >= main.DIRECTOR_SKID_M
+		and main.pitcam_shot == "SIDE",
+		"FP41 proofs: the plow settled as a skid (%.3f m) and the SIDE cam holds its lie (shot %s)"
+		% [main.dir_last_skid_m, main.pitcam_shot])
+	var simg: Image = main.insert_viewport.get_texture().get_image()
+	simg.save_png("res://proofs/proof_sidecam_skid.png")
+	check(mean_luminance(simg) > 0.02,
+		"FP41 proofs: the side-cam skid frame is a real picture (mean luminance %.3f)" % mean_luminance(simg))
+
+	# --- Proof F41c: THE LEANER (Fix Pass 41) ---
+	# The probe's staged leaner: a shoe tipped in against
+	# the stake from a short drop beside it (the parked
+	# shoes from the earlier proofs are moved off the
+	# stake first). It settles through the production AI
+	# settle path; the director names it a leaner and
+	# cuts to SIDE for the profile read.
+	feed_shoe.global_position = Vector3(1.9, 0.06, -10.4)
+	pin_shoe.freeze = true
+	pin_shoe.global_position = Vector3(2.2, 0.06, -10.8)
+	main.shoe_status[pin_shoe] = "DOWN"
+	var lean_shoe: Shoe = main.ai_pair[0]
+	var ln_start := Vector3(0.13, 0.50, -12.19)
+	var ln_vel := Vector3(-0.30, -0.20, 0.0)
+	var ln_ang := Vector3(0.0, 0.0, 2.0)
+	lean_shoe.freeze = false
+	lean_shoe.sleeping = false
+	lean_shoe.global_transform = Transform3D(Basis.IDENTITY, ln_start)
+	lean_shoe.linear_velocity = ln_vel
+	lean_shoe.angular_velocity = ln_ang
+	main.shoe_status[lean_shoe] = "FLYING"
+	main.ai_flight[lean_shoe] = {
+		"fly_time": 0.0, "still_time": 0.0,
+		"pos_still": 0.0, "pos_anchor": ln_start,
+		"flip": 0.0, "turn": 0.0,
+		"has_contact": false, "first_contact_pos": Vector3.ZERO,
+		"release": {"basis": Basis.IDENTITY, "pos": ln_start,
+			"vel": ln_vel, "ang": ln_ang},
+		"line_ft": 40,
+	}
+	main._pitcam_begin_record(lean_shoe)
+	var lt41: int = Time.get_ticks_msec()
+	while main.ai_flight.has(lean_shoe) and Time.get_ticks_msec() - lt41 < 9000:
+		await physics_frame
+	await settle(30)
+	check(not main.ai_flight.has(lean_shoe)
+		and main.dir_last_leaner and main.pitcam_shot == "SIDE",
+		"FP41 proofs: the dropped shoe settled as a LEANER and the SIDE cam holds it (shot %s)"
+		% main.pitcam_shot)
+	var limg: Image = main.insert_viewport.get_texture().get_image()
+	limg.save_png("res://proofs/proof_sidecam_leaner.png")
+	check(mean_luminance(limg) > 0.02,
+		"FP41 proofs: the side-cam leaner frame is a real picture (mean luminance %.3f)" % mean_luminance(limg))
 
 	# --- Proof F38b: THE BILLBOARD'S PLACEMENT ---
 	# High oblique from the house side: the billboard LEFT

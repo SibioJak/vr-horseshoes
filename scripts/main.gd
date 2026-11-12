@@ -552,6 +552,69 @@ const PITCAM_GATE_FRACTION: float = 0.58
 const PITCAM_GATE_BLEND_SEC: float = 0.3
 const PITCAM_SHOE_W: float = 0.33 # the shoe's share of the follow's look point
 const PITCAM_WIDE_FOV: float = 44.0
+# Fix Pass 41: MULTI-CAM SMART CUTS (Chris: "there could
+# be multiple cams that it smart cuts, depending. a cam
+# right behind the pin, for example"). Three FIXED
+# viewpoints share the billboard's ONE viewport; a small
+# director cuts between them by situation. MAIN is the
+# FP39/40 camera untouched (baseline closeup, gated
+# stake-anchored drift, lie closeup). The two new
+# cameras never move - a fixed camera cannot swing
+# wild, which is the other half of Chris's complaint.
+#   PIN CAM - right behind the stake, low, looking back
+#     up the lane: the incoming shoe flies at the lens
+#     and wraps the stake in front of it. The arrival
+#     shot for a throw coming in on line.
+#   SIDE CAM - low at the pit's WEST side, profile
+#     across the stake: the ground-game shot (skids,
+#     furrows, the sink, leaners read side-on). West
+#     because MAIN already sits on the east shoulder -
+#     this is the one genuinely new angle - and at dusk
+#     the low sun rakes across the profile instead of
+#     into the lens.
+const PINCAM_POS := Vector3(0.0, 0.46, -13.20) # just beyond the pit's back edge, low
+const PINCAM_LOOK := Vector3(0.0, 0.30, -12.19) # square on the stake, 1.0 m off
+const PINCAM_FOV: float = 50.0
+const SIDECAM_POS := Vector3(-1.50, 0.44, -12.19)
+const SIDECAM_LOOK := Vector3(0.0, 0.13, -12.192) # the stake's base, across the pit
+const SIDECAM_FOV: float = 40.0
+# THE DIRECTOR - few rules, legible:
+#   * Nothing leaves MAIN before FP40's gate (the pit
+#     holds through the release and the early flight).
+#   * FINAL APPROACH: at the gate the landing is
+#     projected from the shoe's own state (ballistic -
+#     a shoe in flight carries no drag; measured error
+#     0.03-0.14 m on scripted arrivals). A landing
+#     inside the pit and within DIRECTOR_ONLINE_M of
+#     the stake is ON LINE - a throw the pin cam can
+#     actually frame (its frame at the stake plane
+#     spans the pit's width and more) - and the
+#     director cuts to PIN for the arrival, held
+#     through the settle and the lie window. A wide
+#     projection STAYS on MAIN: its drift keeps a wide
+#     lie composed, and the pin cam would lose the
+#     shoe entirely. One decision, made once, at the
+#     gate.
+#   * GROUND GAME: a shoe that lands in the pit and
+#     SKIDS (ground travel after its first sand
+#     contact >= DIRECTOR_SKID_M - measured: a plowing
+#     arrival runs 0.25 m, dead arrivals 0.12 m or
+#     less) or settles as a LEANER (resting against
+#     the stake: nearest distance <= DIRECTOR_LEANER_IN
+#     and not a ringer) cuts to SIDE at the settle,
+#     from whichever camera held the arrival - the
+#     broadcast rhythm: arrival shot, then the ground
+#     shot.
+#   * NO FLICKER: at most one cut per phase (approach,
+#     settle); a cut shot is held for its whole window
+#     (the lie hold); the director never cuts back
+#     inside DIRECTOR_MIN_HOLD_SEC on its own. A new
+#     flight or a gather resets to MAIN.
+const DIRECTOR_ONLINE_M: float = 0.85
+const DIRECTOR_SKID_M: float = 0.20
+const DIRECTOR_LEANER_IN: float = 1.0
+const DIRECTOR_MIN_HOLD_SEC: float = 1.0
+const REPLAY_SETTLE_HOLD_SEC: float = 1.6 # the replay's ground shot, held
 # Fix Pass 39: THE RINGER REPLAY. Every flight is recorded
 # as it happens - the shoe's transform AND the camera's
 # own framing, one sample per physics tick. A shoe that
@@ -629,6 +692,8 @@ var round_lines: Array = [] # the scoreboard's breakdown lines
 var insert_root: Node3D = null # the billboard (the pit cam lives on it)
 var insert_viewport: SubViewport = null
 var insert_cam: Camera3D = null
+var pin_cam: Camera3D = null # Fix Pass 41: fixed, behind the stake
+var side_cam: Camera3D = null # Fix Pass 41: fixed, the pit's west profile
 var insert_screen: MeshInstance3D = null # the feed quad on the panel
 var _pitcam_hot_left: float = 0.0 # feed full-rate time remaining
 var _pitcam_idle_acc: float = 0.0 # idle-pulse accumulator
@@ -650,6 +715,28 @@ var pitcam_follow_w: float = 0.0 # the follow's influence, eased 0..1
 var rec_shoe: Shoe = null # the shoe whose flight is being recorded
 var rec_shoe_track: Array = [] # Transform3D per physics tick
 var rec_cam_track: Array = [] # {pos, look, fov} per physics tick
+# Fix Pass 41: the multi-cam director's state (see the
+# DIRECTOR_* constants). pitcam_shot names the ACTIVE
+# camera - the suites read it as the director's word.
+var pitcam_shot: String = "MAIN"
+var dir_flight_shoe: Shoe = null # the flight the director is calling
+var dir_gate_was: bool = false # the gate's latch, last frame (edge detect)
+var dir_gate_idx: int = -1 # the recorded track's index at the latch
+var dir_online: bool = false # this flight's approach decision
+var dir_approach_cut: bool = false # the approach decision is spent
+var dir_settle_cut: bool = false # the settle cut is spent
+var dir_shot_t: float = 0.0 # seconds the active shot has been held
+var dir_has_sand: bool = false # this flight has touched sand
+var dir_first_sand := Vector3.ZERO # where it first touched
+var dir_last_skid_m: float = 0.0 # the last settle's facts (suites/report)
+var dir_last_leaner: bool = false
+var dir_last_online: bool = false
+# Fix Pass 41: the replay's own director facts, read off
+# the recording when the playback starts.
+var replay_gate_idx: int = -1
+var replay_online: bool = false
+var replay_ground: bool = false # skid or leaner on the recorded settle
+var replay_hold_left: float = 0.0 # the SIDE settle hold remaining
 var replay_state: String = "IDLE" # IDLE | PENDING | PLAYING
 var replay_delay: float = 0.0 # PENDING countdown to the start
 var replay_t: float = 0.0 # PLAYING clock (real seconds)
@@ -5033,6 +5120,8 @@ func _gather_to_rail(line_ft: int) -> void:
 	# hold ends: the camera re-frames on the clean pit.
 	_pitcam_cancel_replay()
 	pitcam_lie_left = 0.0
+	# Fix Pass 41: a gather resets the director to MAIN.
+	_pitcam_director_reset()
 	# Impact Dressing: the gather IS the restock - the pit is
 	# raked clean here, so a fresh round starts on clean sand.
 	# Every restock path (round change, new game, back to
@@ -5304,6 +5393,26 @@ func _build_billboard() -> void:
 	insert_viewport.add_child(insert_cam)
 	insert_cam.current = true
 	_pitcam_apply(PITCAM_BASE_POS, PITCAM_BASE_LOOK, PITCAM_BASE_FOV)
+	# Fix Pass 41: the two fixed cameras of the multi-cam
+	# rig - same viewport, same cull mask, posed once and
+	# never moved. The director picks which one is
+	# current; the viewport still renders only one.
+	pin_cam = Camera3D.new()
+	pin_cam.name = "PinCamera"
+	pin_cam.cull_mask = VIS_LAYER_WORLD | VIS_LAYER_PITCAM
+	insert_viewport.add_child(pin_cam)
+	pin_cam.position = PINCAM_POS
+	pin_cam.look_at(PINCAM_LOOK, Vector3.UP)
+	pin_cam.fov = PINCAM_FOV
+	pin_cam.current = false
+	side_cam = Camera3D.new()
+	side_cam.name = "SideCamera"
+	side_cam.cull_mask = VIS_LAYER_WORLD | VIS_LAYER_PITCAM
+	insert_viewport.add_child(side_cam)
+	side_cam.position = SIDECAM_POS
+	side_cam.look_at(SIDECAM_LOOK, Vector3.UP)
+	side_cam.fov = SIDECAM_FOV
+	side_cam.current = false
 	insert_screen = MeshInstance3D.new()
 	insert_screen.name = "InsertScreen"
 	var qm := QuadMesh.new()
@@ -5426,6 +5535,60 @@ func _pitcam_gate_step(fly: Shoe, delta: float) -> void:
 			+ delta / PITCAM_GATE_BLEND_SEC)
 
 
+## Fix Pass 41: make one of the billboard's three
+## cameras the viewport's eye. All three flags are set
+## explicitly, so exactly one is ever live.
+func _pitcam_set_shot(shot: String) -> void:
+	if shot != pitcam_shot:
+		pitcam_shot = shot
+		dir_shot_t = 0.0
+	if insert_cam != null:
+		insert_cam.current = pitcam_shot == "MAIN"
+	if pin_cam != null:
+		pin_cam.current = pitcam_shot == "PIN"
+	if side_cam != null:
+		side_cam.current = pitcam_shot == "SIDE"
+
+
+## Fix Pass 41: a new flight (or a gather) hands the
+## billboard back to MAIN and re-arms the director.
+func _pitcam_director_reset() -> void:
+	_pitcam_set_shot("MAIN")
+	dir_flight_shoe = null
+	dir_gate_was = false
+	dir_gate_idx = -1
+	dir_online = false
+	dir_approach_cut = false
+	dir_settle_cut = false
+	dir_has_sand = false
+	dir_first_sand = Vector3.ZERO
+
+
+## Fix Pass 41: where a flying shoe lands, projected
+## ballistically from its current state (a shoe in
+## flight carries no drag - damping is pinned to zero,
+## Fix Pass 9). The fall solves to the sand plane (the
+## shoe's rest centre height, y 0.03). Measured against
+## scripted arrivals: 0.03-0.14 m of error - far inside
+## the director's band.
+func _pitcam_project_landing(pos: Vector3, vel: Vector3, grav: float) -> Vector3:
+	var g: float = grav if grav > 1.0 else 9.8
+	var disc: float = vel.y * vel.y + 2.0 * g * (pos.y - 0.03)
+	var t: float = (vel.y + sqrt(maxf(disc, 0.0))) / g
+	return pos + Vector3(vel.x, 0.0, vel.z) * maxf(t, 0.0)
+
+
+## Fix Pass 41: is a projected landing one the pin cam
+## can frame - inside the pit and within the stake band?
+func _pitcam_landing_online(land: Vector3) -> bool:
+	if absf(land.x - STAKE_POS.x) > PIT_SIZE.x * 0.5:
+		return false
+	if absf(land.z - STAKE_POS.z) > PIT_SIZE.z * 0.5:
+		return false
+	return Vector2(land.x - STAKE_POS.x,
+		land.z - STAKE_POS.z).length() <= DIRECTOR_ONLINE_M
+
+
 ## The broadcast camera (Fix Pass 39), run every physics
 ## frame after the feed policy: work out the desired
 ## framing (follow / lie / baseline - or the replay's own
@@ -5463,6 +5626,29 @@ func _pitcam_update(delta: float) -> void:
 		# keeps the baseline framing all the way to its
 		# settle (and the lie closeup below still follows).
 		_pitcam_gate_step(fly, delta)
+		# Fix Pass 41: the director watches the same
+		# flight. It notes the first sand contact (the
+		# skid measure's start), and at the gate's latch
+		# it makes its ONE approach decision: project the
+		# landing from the shoe's own state - on line
+		# cuts to the PIN cam for the arrival, wide stays
+		# on MAIN.
+		if fly.sand_touching and not dir_has_sand:
+			dir_has_sand = true
+			dir_first_sand = fly.sand_touch_pos
+		if pitcam_gate_engaged and not dir_gate_was:
+			dir_gate_was = true
+			if rec_shoe == fly:
+				dir_gate_idx = rec_shoe_track.size()
+			if not dir_approach_cut:
+				dir_approach_cut = true
+				dir_online = _pitcam_landing_online(
+					_pitcam_project_landing(fly.global_position,
+						fly.linear_velocity,
+						fly.get_gravity().length()))
+				dir_last_online = dir_online
+				if dir_online:
+					_pitcam_set_shot("PIN")
 		if pitcam_follow_w > 0.0:
 			var sp: Vector3 = fly.global_position
 			var stake_pt := Vector3(STAKE_POS.x, 0.05, STAKE_POS.z)
@@ -5497,6 +5683,16 @@ func _pitcam_update(delta: float) -> void:
 		d_pos = PITCAM_BASE_POS + Vector3(lp.x * 0.15, -0.12,
 			(lp.z - STAKE_POS.z) * 0.15)
 		d_fov = PITCAM_LIE_FOV
+	# Fix Pass 41: a cut shot is held for its whole
+	# window (the lie hold above); once the window
+	# closes and the pit is quiet, the director hands
+	# the billboard back to MAIN on its own - and never
+	# inside the minimum hold, so a shot never flickers.
+	dir_shot_t += delta
+	if pitcam_shot != "MAIN" and fly == null \
+			and pitcam_lie_left <= 0.0 \
+			and dir_shot_t >= DIRECTOR_MIN_HOLD_SEC:
+		_pitcam_set_shot("MAIN")
 	pitcam_pos = pitcam_pos.lerp(d_pos, 1.0 - exp(-PITCAM_POS_RATE * delta))
 	pitcam_look = pitcam_look.lerp(d_look, 1.0 - exp(-PITCAM_LOOK_RATE * delta))
 	pitcam_fov = lerpf(pitcam_fov, d_fov, 1.0 - exp(-PITCAM_FOV_RATE * delta))
@@ -5516,6 +5712,10 @@ func _pitcam_update(delta: float) -> void:
 ## _release_shoe).
 func _pitcam_begin_record(s: Shoe) -> void:
 	_pitcam_cancel_replay()
+	# Fix Pass 41: the director starts every flight on
+	# MAIN, its decisions unspent, watching this shoe.
+	_pitcam_director_reset()
+	dir_flight_shoe = s
 	# Fix Pass 40: every true release re-arms the follow
 	# gate from its own release point. The gate cannot key
 	# on the shoe's identity alone - in practice the SAME
@@ -5552,11 +5752,47 @@ func _pitcam_finish_record(s: Shoe, ringer: bool) -> void:
 	# until the next release re-arms it).
 	if pitcam_gate_shoe == s:
 		pitcam_gate_shoe = null
+	# Fix Pass 41: the settle's ground facts - for the
+	# director's settle cut now, and for the replay's
+	# own director off the recording later: how far the
+	# shoe travelled after its first sand contact (a
+	# skid), and whether it came to rest against the
+	# stake (a leaner). The cut fires only for a settle
+	# in (or at the lip of) the pit, the ground the SIDE
+	# cam frames.
+	var skid_m: float = 0.0
+	if dir_has_sand and dir_flight_shoe == s:
+		skid_m = Vector2(s.global_position.x - dir_first_sand.x,
+			s.global_position.z - dir_first_sand.z).length()
+	var in_pit: bool = absf(s.global_position.x - STAKE_POS.x) \
+			<= PIT_SIZE.x * 0.5 + 0.35 \
+		and absf(s.global_position.z - STAKE_POS.z) \
+			<= PIT_SIZE.z * 0.5 + 0.35
+	var leaner: bool = false
+	if not ringer and in_pit:
+		var tsp2: Vector3 = target_stake_pos()
+		var din: float = ThrowMath.nearest_distance_inches(
+			s.global_transform,
+			Vector3(tsp2.x, s.global_position.y, tsp2.z),
+			Shoe.WIDTH * 0.5, Shoe.LENGTH * 0.5)
+		leaner = din <= DIRECTOR_LEANER_IN
+	dir_last_skid_m = skid_m
+	dir_last_leaner = leaner
+	if in_pit and not dir_settle_cut \
+			and (skid_m >= DIRECTOR_SKID_M or leaner):
+		dir_settle_cut = true
+		_pitcam_set_shot("SIDE")
 	var track: Dictionary = {
 		"shoe": rec_shoe_track.duplicate(),
 		"cam": rec_cam_track.duplicate(),
 		"real": s,
 		"color": s.tint,
+		# Fix Pass 41: the flight's director record - the
+		# replay's director reads its calls off these.
+		"gate_idx": dir_gate_idx,
+		"online": dir_online,
+		"skid_m": skid_m,
+		"leaner": leaner,
 	}
 	rec_shoe = null
 	rec_shoe_track = []
@@ -5593,6 +5829,16 @@ func _pitcam_start_replay() -> void:
 		return
 	replay_state = "PLAYING"
 	replay_t = 0.0
+	# Fix Pass 41: the replay's director facts come off
+	# the recording - the gate's track index and the
+	# approach decision made live at the gate, plus the
+	# settle's ground facts. The playback starts on MAIN.
+	replay_gate_idx = int(replay_track.get("gate_idx", -1))
+	replay_online = bool(replay_track.get("online", false))
+	replay_ground = float(replay_track.get("skid_m", 0.0)) >= DIRECTOR_SKID_M \
+		or bool(replay_track.get("leaner", false))
+	replay_hold_left = REPLAY_SETTLE_HOLD_SEC if replay_ground else 0.0
+	_pitcam_set_shot("MAIN")
 	var real: Shoe = replay_track["real"]
 	_set_shoe_visual_layers(real, VIS_LAYER_MAIN_ONLY)
 	if replay_clone == null:
@@ -5620,8 +5866,28 @@ func _pitcam_advance_replay(delta: float) -> void:
 	var n: int = int((replay_track["shoe"] as Array).size())
 	var idx: float = replay_t * REPLAY_RATE * float(Engine.physics_ticks_per_second)
 	if idx >= float(n - 1):
+		# Fix Pass 41: a ground-game settle (skid or
+		# leaner) earns its profile shot at the end of
+		# the replay too - the clone holds its rest on
+		# the SIDE cam for a beat before the live view
+		# returns. A plain ringer ends as it always did.
+		if replay_ground and replay_hold_left > 0.0:
+			replay_hold_left -= delta
+			_pitcam_set_shot("SIDE")
+			_pitcam_apply_replay_sample(float(n - 1))
+			if replay_hold_left <= 0.0:
+				_pitcam_end_replay()
+			return
 		_pitcam_end_replay()
 		return
+	# Fix Pass 41: the director runs over the replay as
+	# it did live - MAIN for the flight, PIN from the
+	# recorded gate for an on-line arrival.
+	if replay_online and replay_gate_idx >= 0 \
+			and idx >= float(replay_gate_idx):
+		_pitcam_set_shot("PIN")
+	else:
+		_pitcam_set_shot("MAIN")
 	_pitcam_apply_replay_sample(idx)
 
 
@@ -5655,6 +5921,8 @@ func _pitcam_apply_replay_sample(idx: float) -> void:
 ## both cameras, the clone hides, and a queued ringer -
 ## if one is waiting - takes its turn after a breath.
 func _pitcam_end_replay() -> void:
+	# Fix Pass 41: the live director resumes on MAIN.
+	_pitcam_set_shot("MAIN")
 	var real: Shoe = replay_track.get("real", null)
 	if real != null and is_instance_valid(real):
 		_set_shoe_visual_layers(real, VIS_LAYER_WORLD)
@@ -5683,6 +5951,9 @@ func _pitcam_cancel_replay() -> void:
 	replay_state = "IDLE"
 	replay_track = {}
 	replay_queue = {}
+	# Fix Pass 41: a cut replay hands the billboard back
+	# to MAIN with the live view.
+	_pitcam_set_shot("MAIN")
 
 
 ## Put the round-end breakdown on the REAR BOARD (Fix
