@@ -459,6 +459,84 @@ static func velocity_origin_relative_at_time(samples: Array, release_basis: Basi
 	return release_basis * v_frame
 
 
+# ============================================================
+# Fix Pass 43 (THROW TEST): the windowed release read and the
+# distance-gain compression, player path only.
+#
+# The windowed read: the AVERAGE of the hand's tracked
+# velocity over the trailing window_sec of real recorded
+# motion ending at t_eval - by the mean value theorem that
+# is exactly (position(t_eval) - position(t_eval - window))
+# / window, read off the same fitted motion as every other
+# read here, in the same origin-relative frame. A constant-
+# velocity hand reads identically to the instantaneous read;
+# an accelerating hand reads the velocity it HAD at the
+# window's midpoint, trailing the instantaneous read by half
+# the window's worth of acceleration. The window clamps to
+# the buffer's first sample: only real recorded motion is
+# averaged, never an extrapolation before the buffer starts.
+# ============================================================
+
+static func average_velocity_origin_relative_at_time(samples: Array, release_basis: Basis, t_eval: float, window_sec: float) -> Vector3:
+	if samples.is_empty():
+		return Vector3.ZERO
+	var rel: Array = _origin_relative_samples(samples, release_basis)
+	var first_smp: Dictionary = rel[0]
+	var t_lo: float = maxf(t_eval - window_sec, float(first_smp["t"]))
+	var span: float = t_eval - t_lo
+	if span < 0.004:
+		# Degenerate: almost no recorded motion behind the
+		# instant - the instantaneous read is all there is.
+		return velocity_origin_relative_at_time(samples, release_basis, t_eval)
+	var p_hi: Vector3 = position_at_time(rel, t_eval)
+	var p_lo: Vector3 = position_at_time(rel, t_lo)
+	return release_basis * ((p_hi - p_lo) / span)
+
+
+## The centre speed for the compression: the launch speed
+## that, at elevation elev_rad from release_pos, ballistically
+## carries exactly to stake_pos (landing at the stake's own
+## height) under SPIN_GRAVITY - the range equation solved for
+## v^2: v^2 = g d^2 / (d sin 2e + 2 h cos^2 e), with d the
+## horizontal release-to-stake distance and h the release
+## height above the stake. Clamped to [6.0, 13.0] m/s.
+## Returns -1.0 when the solve is ill-conditioned - a
+## point-blank release, a near-flat or near-vertical
+## elevation, a non-positive denominator - and the caller
+## falls back to the unmodified speed for that throw.
+static func centre_speed(elev_rad: float, release_pos: Vector3, stake_pos: Vector3) -> float:
+	var d: float = Vector2(stake_pos.x - release_pos.x, stake_pos.z - release_pos.z).length()
+	if d < 0.3:
+		return -1.0
+	if elev_rad < deg_to_rad(3.0) or elev_rad > deg_to_rad(80.0):
+		return -1.0
+	var h: float = release_pos.y - stake_pos.y
+	var ce: float = cos(elev_rad)
+	var denom: float = d * sin(2.0 * elev_rad) + 2.0 * h * ce * ce
+	if denom <= 0.0001:
+		return -1.0
+	return clampf(sqrt(SPIN_GRAVITY * d * d / denom), 6.0, 13.0)
+
+
+## The compression itself: the speed moves toward the centre
+## speed by the soften fraction (0.5 = deviations land at
+## half strength); the DIRECTION is preserved exactly - the
+## result is the input vector rescaled. An ill-conditioned
+## centre (centre_speed's -1.0) returns the input untouched.
+static func soften_velocity(vel: Vector3, release_pos: Vector3, stake_pos: Vector3, soften: float) -> Vector3:
+	var speed: float = vel.length()
+	if speed < 0.0001:
+		return vel
+	var horiz: float = Vector2(vel.x, vel.z).length()
+	if horiz < 0.0001:
+		return vel
+	var centre: float = centre_speed(atan2(vel.y, horiz), release_pos, stake_pos)
+	if centre < 0.0:
+		return vel
+	var eff: float = centre + soften * (speed - centre)
+	return vel * (eff / speed)
+
+
 ## Hand orientation at an arbitrary instant: slerp between the
 ## bracketing samples (clamped to the buffer's ends).
 static func orientation_at_time(samples: Array, t_eval: float) -> Quaternion:

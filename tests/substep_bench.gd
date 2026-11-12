@@ -442,6 +442,11 @@ func test_production_path() -> void:
 		{"t": t_prev, "g": grip_lin(t_prev - base, t_star - base)},
 		{"t": t_now, "g": grip_lin(t_now - base, t_star - base)},
 	]
+	# Fix Pass 43: this bench pins the FP14 read in isolation;
+	# the throw test's window + soften ride the same production
+	# path and are pinned by their own bench
+	# (tests/throw_test_bench.gd).
+	main.throw_test_enabled = false
 	main._do_release()
 	main.grab_state.reset()
 	main.test_grip["R"] = 0.0
@@ -497,6 +502,7 @@ func test_production_path() -> void:
 	check(grid_vel.distance_to(legacy_vel) < 0.0001,
 		"production NEGATIVE CONTROL: flag off reproduces the legacy velocity (err %.5f)" % grid_vel.distance_to(legacy_vel))
 	main.substep_release_enabled = true
+	main.throw_test_enabled = true
 	await wait_state("STAND", 25.0)
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))
 

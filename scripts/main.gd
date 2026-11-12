@@ -177,6 +177,30 @@ const BOARD_POS := Vector3(-2.4, 0.0, -16.2) # Fix Pass 10: beyond the pit, left
 const BOARD_YAW_DEG: float = 10.0 # face turned back at the pitching end
 const THROW_MIN_SPEED: float = 0.9
 const SAMPLE_KEEP_SEC: float = 0.40
+# Fix Pass 43 (THROW TEST - a feel experiment, Chris's verdict
+# pending): the player-path release read. Field data
+# (throws-19): outcomes faithfully follow the RECORDED release
+# (near-identical recorded releases land within ~10-14 in of
+# each other), but the FP14 read samples the fitted velocity
+# at the single instant the un-squeeze crosses - while the
+# hand is still accelerating at a median ~19 m/s per second,
+# so one frame of let-go timing jitter is worth ~0.32 m/s,
+# ~27 in of carry. Two changes, player sub-step path only:
+# (1) the launch velocity is the AVERAGE of the hand's
+# tracked velocity over the trailing RELEASE_WINDOW_MS of
+# real motion ending at the same FP14 instant (the instant
+# itself, the position, the orientation and the spin read do
+# not move); (2) its SPEED is compressed toward the centre
+# speed - the speed that carries to the stake at this
+# release's own elevation and height - by THROW_SOFTEN, the
+# direction preserved exactly: deliberate long/short still
+# works, at half gain. Nothing target-aware beyond that
+# centre: no aiming assist, no magnetising. The grid read
+# (suites, the degenerate fallback), the AI's computed
+# release, and every direct-velocity bench are byte-for-byte
+# FP42; throw_test_enabled is the bench's off switch.
+const RELEASE_WINDOW_MS: float = 60.0
+const THROW_SOFTEN: float = 0.5
 const SETTLE_STILL_SEC: float = 0.25
 const RETURN_WAIT_SEC: float = 0.20
 
@@ -399,6 +423,10 @@ var sample_hand: String = ""
 # section) - the flag exists so the bench can run the legacy grid
 # read as the negative control.
 var substep_release_enabled: bool = true
+# Fix Pass 43: the throw test's window + soften on the player
+# sub-step path (see the constants); the flag is the benches'
+# negative control, as with the two flags around it.
+var throw_test_enabled: bool = true
 # Fix Pass 16: the finger-drag term (see ThrowMath.govern_spin)
 # meters the release spin on the style axis toward the hold's
 # regulation total; the flag is the bench's negative control.
@@ -4575,6 +4603,22 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 		var hand_pos: Vector3 = ThrowMath.position_at_time(release_samples, t_star)
 		var hand_quat: Quaternion = ThrowMath.orientation_at_time(release_samples, t_star)
 		release_tf = Transform3D(Basis(hand_quat), hand_pos) * rel_tf
+	# Fix Pass 43: on the player sub-step path, the launch
+	# velocity is the trailing-window average of the hand's
+	# motion ending at the same let-go instant, its speed
+	# compressed toward the stake's centre speed (see the
+	# constants at THROW_SOFTEN). raw_vel keeps the raw
+	# windowed read for the throw record; the governor below
+	# consumes the final vel, the very velocity the shoe
+	# flies with. Grid reads never enter here.
+	var raw_vel: Vector3 = vel
+	if use_sub and throw_test_enabled:
+		raw_vel = ThrowMath.average_velocity_origin_relative_at_time(
+			release_samples, origin.global_transform.basis, t_star,
+			RELEASE_WINDOW_MS / 1000.0)
+		vel = ThrowMath.soften_velocity(
+			raw_vel, release_tf.origin, target_stake_pos(), THROW_SOFTEN)
+		speed = vel.length()
 	var hand_was: String = held_hand
 	var zone_was: String = held_zone
 	var hold_was: String = held_hold
@@ -4622,6 +4666,10 @@ func _release_shoe(release_samples: Array, t_star: float = -1.0, timing: Diction
 			"release_pos": release_tf.origin,
 			"release_quat": release_tf.basis.get_rotation_quaternion(),
 			"velocity": vel, "angular_velocity": ang,
+			# Fix Pass 43: the raw windowed read beside the
+			# launched velocity (equal to it off the player
+			# sub-step path, and whenever the soften falls back).
+			"raw_velocity": raw_vel,
 			# Fix Pass 16 evidence: the estimator's raw spin and
 			# the drag term's account of itself (signed totals
 			# about the style axis, in revolutions). Fix Pass 17:
@@ -5150,6 +5198,7 @@ func _settle_throw() -> void:
 	# sunken rest; a ringer offers itself to the replay.
 	_pitcam_finish_record(shoe, ringer)
 	var vel: Vector3 = release_cache["velocity"]
+	var raw_vel: Vector3 = release_cache.get("raw_velocity", vel)
 	var ang: Vector3 = release_cache["angular_velocity"]
 	var origin_at_release: Vector3 = release_cache["origin_pos"]
 	var rp: Vector3 = release_cache["release_pos"]
@@ -5176,6 +5225,12 @@ func _settle_throw() -> void:
 		"release_pos": ThrowRecorder.vec3_arr(rp),
 		"release_quat": ThrowRecorder.quat_arr(rq),
 		"release_velocity": ThrowRecorder.vec3_arr(vel),
+		# Fix Pass 43: the raw windowed read the hand produced,
+		# beside the effective velocity the shoe actually flew
+		# with (release_velocity stays the launched truth the
+		# analysis pipeline reads).
+		"raw_release_velocity": ThrowRecorder.vec3_arr(raw_vel),
+		"raw_release_speed": raw_vel.length(),
 		"release_angular_velocity": ThrowRecorder.vec3_arr(ang),
 		"release_timing": String(release_cache.get("release_timing", "grid")),
 		"substep_offset_ms": float(release_cache.get("substep_offset_ms", 0.0)),
