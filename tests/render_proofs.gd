@@ -39,6 +39,10 @@ extends SceneTree
 ##     breakdown UP on the rear SCOREBOARD (the fresh look),
 ##     seen from the throwing line; board_from_foul_line.png
 ##     is the same board in its running state, same camera.
+##   proofs/board_proximity.png - Fix Pass 44: the same
+##     board and camera with a PROXIMITY round's breakdown
+##     up - the mode line and every shoe's distance = band
+##     points for both sides.
 ##   proofs/proof_billboard_feed.png - Fix Pass 39: the
 ##     billboard from the throwing spot at a settled lie -
 ##     the broadcast camera's closeup of shoe + stake on the
@@ -887,6 +891,48 @@ func _run() -> void:
 	await snap(cam_e, "res://proofs/board_breakdown.png")
 	cam_e.queue_free()
 	# Back to practice for the proofs that follow.
+	main._enter_practice()
+	await settle(4)
+
+	# --- Proof E2: the PROXIMITY round-end breakdown on the
+	# rear SCOREBOARD (Fix Pass 44) - the same manufactured
+	# round as Proof E, tabulated under the proximity mode:
+	# the breakdown names the mode on its own face and shows
+	# every shoe's distance and band points for both sides.
+	# Same board, same judging camera as Proof E.
+	main.set_scoring_mode("PROXIMITY")
+	main.start_game()
+	main.inning_results = [
+		{"owner": "P", "dist_in": 2.0, "ringer": false},
+		{"owner": "P", "dist_in": 9.0, "ringer": false},
+		{"owner": "AI", "dist_in": 4.0, "ringer": false},
+		{"owner": "AI", "dist_in": 90.0, "ringer": false}]
+	main._score_inning()
+	await settle(6)
+	check(main.phase == "INSERT" and main.board_breakdown_up
+		and main.board_breakdown_label.visible
+		and not main.status_label.visible,
+		"FP44: the proximity breakdown is UP on the rear scoreboard at the round's end")
+	var lines_e2: String = "\n".join(PackedStringArray(main.round_lines))
+	check(main.board_breakdown_label.text == lines_e2
+		and lines_e2.contains("SCORING: PROXIMITY")
+		and lines_e2.contains("YOU 1: 2.0 IN = 4 PTS")
+		and lines_e2.contains("YOU 2: 9.0 IN = 3 PTS")
+		and lines_e2.contains("OPP 1: 4.0 IN = 4 PTS")
+		and lines_e2.contains("OPP 2: 90.0 IN = 0 PTS")
+		and lines_e2.contains("ROUND: YOU +7 - OPP +4"),
+		"FP44: the scoreboard carries the proximity round's breakdown")
+	var cam_e2 := Camera3D.new()
+	cam_e2.fov = 55.0
+	cam_e2.position = Vector3(0.8, 1.62, -0.364)
+	main.add_child(cam_e2)
+	cam_e2.look_at(board_center, Vector3.UP)
+	cam_e2.current = true
+	await settle(4)
+	await snap(cam_e2, "res://proofs/board_proximity.png")
+	cam_e2.queue_free()
+	# Back to CLASSIC practice for the proofs that follow.
+	main.set_scoring_mode("CLASSIC")
 	main._enter_practice()
 	await settle(4)
 

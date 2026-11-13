@@ -1143,15 +1143,19 @@ func _run() -> void:
 	# compound worst case composed from Scoring's own line
 	# formats (cancelled ringers + a standing ringer + a
 	# shut-out point shoe).
+	# Fix Pass 44: every status block below carries the
+	# SCORING mode line the board now appends - the worst
+	# cases stay the REAL worst cases, mode line included
+	# (PROXIMITY is the longer word).
 	var worst39: Array = [
 		[main.status_label, "status",
-			"THROWS: 999\nHOLD: TURN (SHANK_RIGHT)\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!\nA: START GAME"],
+			"THROWS: 999\nHOLD: TURN (SHANK_RIGHT)\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!\nA: START GAME\nSCORING: PROXIMITY"],
 		[main.status_label, "status",
-			"ROUND 99 THROWN\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!"],
+			"ROUND 99 THROWN\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nRINGER!\nSCORING: PROXIMITY"],
 		[main.status_label, "status",
-			"INNING 99 - YOUR THROW 2 OF 2\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nLAST INNING: OPP +7 (OPP RINGER)"],
+			"INNING 99 - YOUR THROW 2 OF 2\nLAST: 123.4 IN\nFLIP: -1.24 REV\nTURN: -1.24 REV\nLAST INNING: OPP +7 (OPP RINGER)\nSCORING: PROXIMITY"],
 		[main.status_label, "status",
-			"YOU WIN!\nFINAL - 99 INNINGS\nA: PLAY AGAIN\nB: PRACTICE"],
+			"YOU WIN!\nFINAL - 99 INNINGS\nA: PLAY AGAIN\nB: PRACTICE\nSCORING: PROXIMITY"],
 		[main.score_label, "score", "YOU 99 - 99 OPP"],
 		[main.board_breakdown_label, "breakdown",
 			"FINAL - OPP WINS\nOPP 1: RINGER\nOPP 2: RINGER\nYOU 1: NO SCORE (123.4 IN)\nYOU 2: 5.9 IN\nRINGERS CANCEL IN PAIRS\nOPP RINGER STANDS: +3\nOPP CLOSEST SHOE SCORES: +1\nCLOSEST ONLY SCORES\nROUND: OPP +4\nMATCH: YOU 99 - 99 OPP\nA - PLAY AGAIN"],
@@ -4346,6 +4350,141 @@ func _run() -> void:
 	check(main.state != "HELD", "hands: the release fires as the grip lets go")
 	check(float(main.hand_curl_t["R"]) < 0.02,
 		"hands: the hand rests open after the release")
+
+	# ============ Fix Pass 44: PROXIMITY scoring mode ============
+	# The second scoring mode, designed 2026-11-07 and pulled
+	# forward 2026-11-13 (Chris: "real horseshoe scoring with
+	# fake horseshoe physics" is the mismatch - the loosened
+	# throw needs the scoring that pays by distance). Probes:
+	# the board and controls name the mode and its switch;
+	# X alone in practice (empty hand) toggles, and ONLY that;
+	# a game played in PROXIMITY end to end on staged results;
+	# the mode persists across a restart. CLASSIC's own probes
+	# all ran earlier in this suite, on the untouched path.
+	check(await wait_state("STAND", 12.0),
+		"FP44: the yard is at rest before the mode probes")
+	if main.mode != "PRACTICE":
+		main._enter_practice()
+		await frames(4)
+	check(main.scoring_mode == "CLASSIC"
+		and main.status_label.text.contains("SCORING: CLASSIC"),
+		"FP44: a first run is CLASSIC and the board's status block names it")
+	check(main.controls_full_text().contains(
+		"X BUTTON (EMPTY HAND) IN PRACTICE: CHANGE SCORING MODE"),
+		"FP44: the controls list names the X scoring toggle")
+	# X alone in practice, empty hand: the toggle.
+	await pulse_hand_button("L", "A")
+	check(main.scoring_mode == "PROXIMITY"
+		and main.status_label.text.contains("SCORING: PROXIMITY"),
+		"FP44: X in practice (empty hand) switches to PROXIMITY and the board names it")
+	var set_f44: FileAccess = FileAccess.open(set_path, FileAccess.READ)
+	var set_p44: Variant = JSON.parse_string(set_f44.get_as_text()) \
+		if set_f44 != null else null
+	check(set_p44 is Dictionary
+		and String(set_p44.get("scoring_mode", "")) == "PROXIMITY",
+		"FP44: PROXIMITY is persisted to the settings file")
+	await pulse_hand_button("L", "A")
+	check(main.scoring_mode == "CLASSIC",
+		"FP44: X again switches back to CLASSIC")
+	await pulse_hand_button("L", "A")
+	check(main.scoring_mode == "PROXIMITY",
+		"FP44: and X once more returns to PROXIMITY for the game probes")
+	# The merged game A is intact: A (both channels read it)
+	# starts the game, in the selected mode, without toggling.
+	await pulse_button("A")
+	check(main.mode == "GAME" and main.scoring_mode == "PROXIMITY",
+		"FP44: A still starts the game, in the selected mode")
+	# Both sides across 21 in one inning: the higher total wins.
+	main.score_you = 18
+	main.score_opp = 17
+	main.inning_results = [
+		{"owner": "P", "dist_in": 0.0, "ringer": true},
+		{"owner": "P", "dist_in": 30.0, "ringer": false},
+		{"owner": "AI", "dist_in": 10.0, "ringer": false},
+		{"owner": "AI", "dist_in": 50.0, "ringer": false}]
+	main._score_inning()
+	check(main.score_you == 23 and main.score_opp == 20
+		and main.phase == "OVER" and main.winner_text == "YOU WIN!",
+		"FP44 game: both across 21, the higher total wins (got %d-%d, %s)"
+		% [main.score_you, main.score_opp, main.phase])
+	var rl44: String = "\n".join(PackedStringArray(main.round_lines))
+	check(rl44.contains("SCORING: PROXIMITY")
+		and rl44.contains("YOU 1: 0.0 IN = 4 PTS")
+		and rl44.contains("YOU 2: 30.0 IN = 1 PTS")
+		and rl44.contains("OPP 1: 10.0 IN = 3 PTS")
+		and rl44.contains("OPP 2: 50.0 IN = 0 PTS")
+		and rl44.contains("ROUND: YOU +5 - OPP +3")
+		and rl44.contains("MATCH: YOU 23 - 20 OPP"),
+		"FP44 game: the breakdown shows every shoe's distance and band points for both sides (%s)" % rl44)
+	# Both across 21 LEVEL: another inning, and the tied
+	# inning keeps the first-throw order.
+	main.start_game()
+	main.score_you = 20
+	main.score_opp = 20
+	main.inning_results = [
+		{"owner": "P", "dist_in": 4.0, "ringer": false},
+		{"owner": "AI", "dist_in": 4.0, "ringer": false}]
+	main._score_inning()
+	check(main.score_you == 24 and main.score_opp == 24
+		and main.phase == "INSERT",
+		"FP44 game: level totals across 21 play another inning (got %d-%d, %s)"
+		% [main.score_you, main.score_opp, main.phase])
+	main._finish_inning_cycle()
+	check(main.inning == 2 and main.inning_first == "P",
+		"FP44 game: a tied inning keeps the first-throw order (first %s)"
+		% main.inning_first)
+	# A decisive inning: the side that scored more throws
+	# first next.
+	main.start_game()
+	main.inning_results = [
+		{"owner": "P", "dist_in": 30.0, "ringer": false},
+		{"owner": "P", "dist_in": 40.0, "ringer": false},
+		{"owner": "AI", "dist_in": 4.0, "ringer": false},
+		{"owner": "AI", "dist_in": 90.0, "ringer": false}]
+	main._score_inning()
+	check(main.phase == "INSERT" and main.last_scorer == "AI",
+		"FP44 game: the AI outscored the inning 4-2 (scorer %s)" % main.last_scorer)
+	main._finish_inning_cycle()
+	check(main.inning_first == "AI",
+		"FP44 game: the side that scored more throws first next (first %s)"
+		% main.inning_first)
+	# The toggle guard: X while HOLDING cycles the grip and
+	# does NOT touch the mode.
+	main._enter_practice()
+	check(await wait_state("STAND", 12.0),
+		"FP44: back at rest in practice for the guard probe")
+	var toe_c44: Vector3 = main.shoe.zone_world_center("toe")
+	main.test_hand_tf["R"] = Transform3D(Basis.IDENTITY, toe_c44)
+	main.test_grip["R"] = 1.0
+	await frames(6)
+	check(main.state == "HELD" and main.held_zone == "toe",
+		"FP44: the near grab latches for the toggle guard probe")
+	await pulse_hand_button("L", "A")
+	check(main.held_zone == "shank_right"
+		and main.scoring_mode == "PROXIMITY",
+		"FP44: X while holding cycles the grip and does NOT toggle (zone %s, mode %s)"
+		% [main.held_zone, main.scoring_mode])
+	check(await drop_and_restock(main, "R"),
+		"FP44: the guard-probe shoe drops and restocks")
+	main.test_hand_tf.erase("R")
+	# Persistence round trip: a fresh instance boots in the
+	# stored mode, board naming it.
+	var rec44: String = "user://smoke44_throws.jsonl"
+	if FileAccess.file_exists(rec44):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(rec44))
+	var m44: Node = spawn_fresh_main(rec44, set_path)
+	await create_timer(0.3).timeout
+	check(m44.scoring_mode == "PROXIMITY"
+		and m44.status_label.text.contains("SCORING: PROXIMITY"),
+		"FP44: a restart boots in the stored mode and its board names it (mode %s)"
+		% m44.scoring_mode)
+	root.remove_child(m44)
+	m44.free()
+	await frames(3)
+	# Leave the yard as the run found it: CLASSIC, persisted.
+	main.set_scoring_mode("CLASSIC")
+	check(main.scoring_mode == "CLASSIC",
+		"FP44: the mode is restored to CLASSIC")
 
 	main.origin.global_transform = Transform3D.IDENTITY
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(rec_path))

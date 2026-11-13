@@ -1243,7 +1243,14 @@ static func board_label_zones() -> Dictionary:
 	return {
 		"title": Vector2(3.40, 0.24),
 		"score": Vector2(3.40, 0.52),
-		"status": Vector2(3.40, 1.50),
+		# Fix Pass 44: the status block grows one line (the
+		# SCORING mode line) to an 8-line worst case, 1.60 m.
+		# Its allotment is the breakdown's: the two blocks
+		# time-share the same anchor on the face (one is
+		# always hidden), and Fix Pass 39 already allots
+		# that anchor 1.80 m - the status zone takes the
+		# same, no label moves.
+		"status": Vector2(3.40, 1.80),
 		"breakdown": Vector2(3.40, 1.80),
 		"controls": Vector2(1.66, 0.55),
 	}
