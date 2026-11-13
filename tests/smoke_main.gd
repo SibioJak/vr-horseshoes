@@ -4309,13 +4309,31 @@ func _run() -> void:
 	await pulse_button("A")
 	check(main.held_zone == "shank_right",
 		"hands: the grip cycles to the home shank (got '%s')" % main.held_zone)
-	var bar_shank: Vector3 = main.test_hand_tf["R"].affine_inverse() * main.shoe.zone_world_center("shank_right")
+	# The reference is the bar point the seat puts AT the
+	# anchor: hold_transform seats the zone centre SHIFTED by
+	# the stop's slide offset (the shank stops ride the slide
+	# axis, Fix Pass 21), so at SHANK·TOE the zone's nominal
+	# centre sits one slide offset (45 mm) down the bar from
+	# the fingers. Measuring the joints against the nominal
+	# centre failed this check deterministically (probe,
+	# FP43 fix: bar-to-anchor 45.0 mm immediate AND after a
+	# 30-frame settle - no race; the joints sit 25.0/28.7 mm
+	# from the anchor itself, identical to the toe). The
+	# standard is unchanged: the seated bar point within
+	# 2 mm of the anchor, both joints within 32 mm of it,
+	# tip joint under it.
+	var z_shank: Dictionary = Shoe.zones()["shank_right"]
+	var slid_centre: Vector3 = Vector3(z_shank["center"]) \
+		+ Vector3(z_shank["slide_axis"]) * main.slide_offset
+	var bar_shank: Vector3 = main.test_hand_tf["R"].affine_inverse() \
+		* (main.shoe.global_transform * slid_centre)
 	var mid_piv2: Vector3 = rep_inv * (mid_chain_r[1] as Node3D).global_position
 	var dist_piv2: Vector3 = rep_inv * (mid_chain_r[2] as Node3D).global_position
 	check(bar_shank.distance_to(anchor) < 0.002
 		and mid_piv2.distance_to(bar_shank) < 0.032 and dist_piv2.distance_to(bar_shank) < 0.032
 		and dist_piv2.y < bar_shank.y,
-		"hands: the same closed hand WRAPS the shank bar at the anchor")
+		"hands: the same closed hand WRAPS the shank bar at the anchor (mid joint %.1f mm, tip joint %.1f mm from the bar centre, tip joint under it)"
+		% [mid_piv2.distance_to(bar_shank) * 1000.0, dist_piv2.distance_to(bar_shank) * 1000.0])
 	# The un-squeeze shows BEFORE the release fires, then the
 	# release fires and the hand rests open.
 	main.test_grip["R"] = 0.45
