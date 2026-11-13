@@ -816,6 +816,95 @@ func test_scoring() -> void:
 		"FP20 breakdown: a scoreless round says so plainly (%s)" % str(ex3))
 
 
+func test_scoring_proximity() -> void:
+	# Fix Pass 44: PROXIMITY scoring - every shoe scores its
+	# distance band for its own side (<=6 in = 4, <=12 = 3,
+	# <=24 = 2, <=48 = 1, beyond = 0); band edges inclusive;
+	# a ringer measures ~0 and simply pays 4; no cancellation,
+	# both sides score. Hand-computed cases.
+	check(Scoring.proximity_points(0.0) == 4, "proximity: a ringer's ~0 in pays 4")
+	check(Scoring.proximity_points(6.0) == 4, "proximity: exactly 6 in pays 4")
+	check(Scoring.proximity_points(6.01) == 3, "proximity: just outside 6 in pays 3")
+	check(Scoring.proximity_points(12.0) == 3, "proximity: exactly 12 in pays 3")
+	check(Scoring.proximity_points(12.01) == 2, "proximity: just outside 12 in pays 2")
+	check(Scoring.proximity_points(24.0) == 2, "proximity: exactly 24 in pays 2")
+	check(Scoring.proximity_points(24.01) == 1, "proximity: just outside 24 in pays 1")
+	check(Scoring.proximity_points(48.0) == 1, "proximity: exactly 48 in pays 1")
+	check(Scoring.proximity_points(48.01) == 0, "proximity: just outside 48 in pays 0")
+	check(Scoring.proximity_points(120.0) == 0, "proximity: a far shoe pays 0")
+	var res: Dictionary = Scoring.score_inning_proximity([
+		{"owner": "P", "dist_in": 4.0, "ringer": false},
+		{"owner": "P", "dist_in": 20.0, "ringer": false},
+		{"owner": "AI", "dist_in": 10.0, "ringer": false},
+		{"owner": "AI", "dist_in": 30.0, "ringer": false}])
+	check(int(res["points_p"]) == 6 and int(res["points_ai"]) == 4
+		and String(res["scorer"]) == "P",
+		"proximity: BOTH sides score the same inning (6-4, got %d-%d)"
+		% [int(res["points_p"]), int(res["points_ai"])])
+	res = Scoring.score_inning_proximity([
+		{"owner": "P", "dist_in": 0.0, "ringer": true},
+		{"owner": "AI", "dist_in": 90.0, "ringer": false}])
+	check(int(res["points_p"]) == 4 and int(res["points_ai"]) == 0,
+		"proximity: a ringer pays 4, no separate ringer rule")
+	res = Scoring.score_inning_proximity([
+		{"owner": "P", "dist_in": 0.0, "ringer": true},
+		{"owner": "AI", "dist_in": 0.0, "ringer": true}])
+	check(int(res["points_p"]) == 4 and int(res["points_ai"]) == 4
+		and String(res["scorer"]) == "",
+		"proximity: ringers do NOT cancel - both pay 4, inning tied")
+	res = Scoring.score_inning_proximity([
+		{"owner": "P", "dist_in": 10.0, "ringer": false},
+		{"owner": "AI", "dist_in": 20.0, "ringer": false}])
+	check(int(res["points_p"]) == 3 and int(res["points_ai"]) == 2
+		and String(res["scorer"]) == "P"
+		and String(res["summary"]) == "YOU +3 - OPP +2",
+		"proximity: the summary carries both sides (%s)" % String(res["summary"]))
+	res = Scoring.score_inning_proximity([
+		{"owner": "P", "dist_in": 60.0, "ringer": false},
+		{"owner": "AI", "dist_in": 70.0, "ringer": false}])
+	check(int(res["points_p"]) == 0 and int(res["points_ai"]) == 0
+		and String(res["scorer"]) == ""
+		and String(res["summary"]) == "NO SCORE",
+		"proximity: an all-far inning scores nothing")
+	var psl: Array = Scoring.proximity_shoe_lines([
+		{"owner": "P", "dist_in": 2.0, "ringer": false},
+		{"owner": "P", "dist_in": 90.0, "ringer": false},
+		{"owner": "AI", "dist_in": 4.0, "ringer": false},
+		{"owner": "AI", "dist_in": 30.0, "ringer": false}])
+	check(psl.size() == 4 and String(psl[0]) == "YOU 1: 2.0 IN = 4 PTS"
+		and String(psl[1]) == "YOU 2: 90.0 IN = 0 PTS"
+		and String(psl[2]) == "OPP 1: 4.0 IN = 4 PTS"
+		and String(psl[3]) == "OPP 2: 30.0 IN = 1 PTS",
+		"proximity breakdown: every shoe's line names its distance and band points (%s)" % str(psl))
+	# The mode's pure decisions on Main (statics, no scene):
+	# the settings mapping, the match resolution, the
+	# first-throw rule.
+	var main_script: GDScript = load("res://scripts/main.gd")
+	check(main_script.scoring_mode_or_default("PROXIMITY") == "PROXIMITY",
+		"proximity settings: PROXIMITY reads back PROXIMITY")
+	check(main_script.scoring_mode_or_default("CLASSIC") == "CLASSIC",
+		"proximity settings: CLASSIC reads back CLASSIC")
+	check(main_script.scoring_mode_or_default("junk") == "CLASSIC"
+		and main_script.scoring_mode_or_default("") == "CLASSIC",
+		"proximity settings: an unknown value falls back to CLASSIC")
+	check(main_script.proximity_match_over(21, 20)
+		and main_script.proximity_match_over(20, 21)
+		and main_script.proximity_match_over(25, 22),
+		"proximity match: a side across 21 with the higher total wins")
+	check(not main_script.proximity_match_over(21, 21)
+		and not main_script.proximity_match_over(24, 24),
+		"proximity match: both across 21 LEVEL plays another inning")
+	check(not main_script.proximity_match_over(20, 19)
+		and not main_script.proximity_match_over(0, 0),
+		"proximity match: nobody across 21 plays on")
+	check(main_script.proximity_next_first(5, 3, "AI") == "P"
+		and main_script.proximity_next_first(3, 5, "P") == "AI",
+		"proximity order: the side that scored more throws first next")
+	check(main_script.proximity_next_first(4, 4, "AI") == "AI"
+		and main_script.proximity_next_first(0, 0, "P") == "P",
+		"proximity order: a tied inning keeps the previous order")
+
+
 func test_ai_release() -> void:
 	# The AI's constructed release: a ballistic flip that crosses
 	# the target stake's plane at scoring height, spinning about
@@ -1700,6 +1789,7 @@ func _run() -> void:
 	test_grip_positions()
 	test_api_guard()
 	test_scoring()
+	test_scoring_proximity()
 	test_ai_release()
 	test_stage_a_layout()
 	test_stage_b_layout()

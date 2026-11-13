@@ -27,6 +27,16 @@ extends RefCounted
 const POINT_RANGE_IN: float = 6.0
 const RINGER_POINTS: int = 3
 
+# Fix Pass 44 (PROXIMITY scoring): the band edges, in inches.
+# Every settled shoe scores by its distance to the stake:
+# inside the first edge pays 4, then 3, 2, 1, and beyond the
+# last edge nothing. A ringer measures ~0 in, so it simply
+# lands in the 4 band - there is no separate ringer rule.
+const PROXIMITY_RANGE_4: float = 6.0
+const PROXIMITY_RANGE_3: float = 12.0
+const PROXIMITY_RANGE_2: float = 24.0
+const PROXIMITY_RANGE_1: float = 48.0
+
 
 ## shoes: Array of {"owner": "P"|"AI", "dist_in": float,
 ## "ringer": bool} - the settled results of one inning (normally
@@ -166,6 +176,90 @@ static func explain_lines(shoes: Array, res: Dictionary) -> Array:
 		lines.append("CLOSEST ONLY SCORES")
 	if int(res["points_p"]) == 0 and int(res["points_ai"]) == 0:
 		lines.append("NO SCORE THIS ROUND")
+	return lines
+
+
+## Fix Pass 44: the PROXIMITY band one settled shoe earns,
+## by its distance to the stake (the same dist_in the
+## classic scorer reads for point shoes). Band edges are
+## inclusive: exactly 6 in pays 4, exactly 48 pays 1.
+static func proximity_points(dist_in: float) -> int:
+	if dist_in <= PROXIMITY_RANGE_4:
+		return 4
+	if dist_in <= PROXIMITY_RANGE_3:
+		return 3
+	if dist_in <= PROXIMITY_RANGE_2:
+		return 2
+	if dist_in <= PROXIMITY_RANGE_1:
+		return 1
+	return 0
+
+
+## Fix Pass 44: PROXIMITY scoring for one inning - the
+## second mode beside the classic cancellation above (which
+## is untouched). EVERY shoe scores its band for its own
+## side: no cancellation, no closest contest, both sides
+## score every inning they land anything. Same input and
+## result shape as score_inning, so the game's tabulation
+## reads either mode the same way. "scorer" names the side
+## that scored MORE this inning ("" on a tie) - the game
+## uses it for the next inning's first throw, exactly as it
+## uses the classic scorer.
+static func score_inning_proximity(shoes: Array) -> Dictionary:
+	var points_p: int = 0
+	var points_ai: int = 0
+	var ringers_p: int = 0
+	var ringers_ai: int = 0
+	for raw: Variant in shoes:
+		var s: Dictionary = raw
+		var pts: int = proximity_points(float(s["dist_in"]))
+		if bool(s["ringer"]):
+			if String(s["owner"]) == "P":
+				ringers_p += 1
+			else:
+				ringers_ai += 1
+		if String(s["owner"]) == "P":
+			points_p += pts
+		else:
+			points_ai += pts
+	var scorer: String = ""
+	if points_p > points_ai:
+		scorer = "P"
+	elif points_ai > points_p:
+		scorer = "AI"
+	var summary: String = "NO SCORE"
+	if points_p > 0 or points_ai > 0:
+		summary = "YOU +%d - OPP +%d" % [points_p, points_ai]
+	return {
+		"points_p": points_p,
+		"points_ai": points_ai,
+		"ringers_p": ringers_p,
+		"ringers_ai": ringers_ai,
+		"scorer": scorer,
+		"summary": summary,
+	}
+
+
+## Fix Pass 44: per-shoe lines for the PROXIMITY round
+## breakdown - same owner numbering as shoe_lines, each
+## line carrying the shoe's distance AND its band points,
+## for both sides (every shoe scores, so every shoe's
+## line shows what it earned, 0 included).
+static func proximity_shoe_lines(shoes: Array) -> Array:
+	var lines: Array = []
+	var n_p: int = 0
+	var n_ai: int = 0
+	for raw: Variant in shoes:
+		var s: Dictionary = raw
+		var who: String
+		if String(s["owner"]) == "P":
+			n_p += 1
+			who = "YOU %d" % n_p
+		else:
+			n_ai += 1
+			who = "OPP %d" % n_ai
+		var d: float = float(s["dist_in"])
+		lines.append("%s: %.1f IN = %d PTS" % [who, d, proximity_points(d)])
 	return lines
 
 

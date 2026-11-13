@@ -474,6 +474,7 @@ var _wait_time: float = 0.0
 # insert carries the final breakdown). The AI never leaves
 # the pitching end.
 var mode: String = "PRACTICE"
+var scoring_mode: String = "CLASSIC" # Fix Pass 44: "CLASSIC" (NHPA cancellation) or "PROXIMITY"
 var phase: String = ""
 var inning: int = 0
 var score_you: int = 0
@@ -489,7 +490,7 @@ var ai_flight: Dictionary = {} # Shoe -> flight tracking dict (AI throws)
 var _plume_flown: Dictionary = {} # Shoe -> bool: this flight's one plume is spent (Fix Pass 32)
 var ai_throw_pending: bool = false # an AI swing is animating
 var ai_wait_clear: float = 0.0
-var _btn_prev: Dictionary = {"A": false, "B": false}
+var _btn_prev: Dictionary = {"A": false, "B": false, "X": false}
 
 # Fix Pass 20: the insert cam - a live closeup of the pit
 # (a SubViewport sharing this world) plus the round's score
@@ -872,6 +873,13 @@ func _load_settings() -> void:
 		if parsed.has("time_of_day"):
 			var t: String = String(parsed["time_of_day"])
 			time_of_day = time_setting_or_default(t)
+		# Fix Pass 44: the scoring mode rides in the same
+		# file. A missing or unknown value is CLASSIC (the
+		# field's declaration), so an old settings file
+		# keeps the classic game.
+		if parsed.has("scoring_mode"):
+			scoring_mode = scoring_mode_or_default(
+				String(parsed["scoring_mode"]))
 
 
 func _save_settings() -> void:
@@ -879,7 +887,8 @@ func _save_settings() -> void:
 	if f == null:
 		return
 	f.store_string(JSON.stringify({
-		"default_grip": default_grip, "time_of_day": time_of_day}))
+		"default_grip": default_grip, "time_of_day": time_of_day,
+		"scoring_mode": scoring_mode}))
 
 
 ## The default changes exactly one way: a grip cycle lands on
@@ -891,6 +900,55 @@ func _set_default_grip(idx: int) -> void:
 	default_grip = idx
 	_save_settings()
 	_refresh_controls_label()
+
+
+# --- Fix Pass 44: the scoring mode (CLASSIC / PROXIMITY) ---
+
+## A stored setting's reading: PROXIMITY passes through;
+## anything else (CLASSIC, a missing key, a corrupt value)
+## is CLASSIC, the first-run default. Static so the logic
+## suite guards the mapping without a scene.
+static func scoring_mode_or_default(name: String) -> String:
+	return "PROXIMITY" if name == "PROXIMITY" else "CLASSIC"
+
+
+## The PROXIMITY match rule, as a pure decision the logic
+## suite can pin: the race to 21 is resolved at inning end -
+## a side at or past 21 wins ONLY if the totals differ;
+## both sides across in the same inning with equal totals
+## plays another inning.
+static func proximity_match_over(you: int, opp: int) -> bool:
+	return (you >= WIN_SCORE or opp >= WIN_SCORE) and you != opp
+
+
+## The PROXIMITY first-throw rule: the side that scored
+## more in an inning throws first the next; a tied inning
+## keeps the previous order. (The classic game instead
+## follows its scorer, and alternates on a scoreless
+## inning.)
+static func proximity_next_first(points_p: int, points_ai: int,
+		current_first: String) -> String:
+	if points_p > points_ai:
+		return "P"
+	if points_ai > points_p:
+		return "AI"
+	return current_first
+
+
+## Set the scoring mode: persist beside the other settings
+## and re-name it on the board in the same moment. The
+## player's control is the X toggle in practice (see
+## _poll_buttons); the suites set it here directly.
+func set_scoring_mode(m: String) -> void:
+	if m != "CLASSIC" and m != "PROXIMITY":
+		return
+	scoring_mode = m
+	_save_settings()
+	_update_board()
+
+
+func _toggle_scoring_mode() -> void:
+	set_scoring_mode("PROXIMITY" if scoring_mode == "CLASSIC" else "CLASSIC")
 
 
 # --- Stage B (the light): the time of day ---
@@ -1149,7 +1207,7 @@ func debug_force_bird_crossing() -> void:
 ## command the game accepts, in the block's established style.
 func _controls_text() -> String:
 	var pos: Dictionary = ThrowMath.grip_position(default_grip)
-	return "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSQUEEZE FROM YOUR SPOT: SHOE COMES TO YOUR HAND\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nA / X WHILE HOLDING A SHOE: CHANGE GRIP\nDEFAULT GRIP: %s - SET BY CYCLING A HELD SHOE\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON (EMPTY HAND): start game / next round / play again\nB BUTTON: back to practice (in a game)\nTIME: %s - B/Y IN PRACTICE: CHANGE TIME\nRECENTER: menu long-press - seated/standing ok" % [String(pos["name"]), time_of_day]
+	return "CONTROLS\nGRAB: squeeze a glinting part of the shoe\ntoe = FLIP hold - side = TURN hold\nSQUEEZE FROM YOUR SPOT: SHOE COMES TO YOUR HAND\nSLIDE: Grip + trigger: slide grip along shoe\nlet go of trigger to lock the new grip\nA / X WHILE HOLDING A SHOE: CHANGE GRIP\nDEFAULT GRIP: %s - SET BY CYCLING A HELD SHOE\nTHROW: swing and open the hand\nDROP: open hand while still\nLeft stick: move\nRight stick: turn\n30 FT LINE: up the court - learning distance\nA BUTTON (EMPTY HAND): start game / next round / play again\nX BUTTON (EMPTY HAND) IN PRACTICE: CHANGE SCORING MODE\nB BUTTON: back to practice (in a game)\nTIME: %s - B/Y IN PRACTICE: CHANGE TIME\nRECENTER: menu long-press - seated/standing ok" % [String(pos["name"]), time_of_day]
 
 
 ## Fix Pass 39: the controls list stands in TWO columns on
@@ -3782,6 +3840,10 @@ func _update_board() -> void:
 		]
 		if last_ringer:
 			lines.append("RINGER!")
+	# Fix Pass 44: the status block names the active
+	# scoring mode in every state, so the board never
+	# leaves the player guessing which game he is in.
+	lines.append("SCORING: %s" % scoring_mode)
 	status_label.text = "\n".join(PackedStringArray(lines))
 	# Fix Pass 39: at round end the breakdown takes the
 	# status block's place on this board.
@@ -3903,6 +3965,11 @@ func _stick_value(hand: String) -> Vector2:
 ## B is never the cycle. The A/X channel is the single
 ## ax_button action both controllers share (A on the right
 ## controller, X on the left), read here as "A".
+## Fix Pass 44: one exception carved out of that merged
+## read - in PRACTICE, an X press (the left controller's
+## ax button) made ALONE while no shoe is held toggles the
+## scoring mode instead of acting as the game A. While a
+## shoe is held, X keeps its grip-cycle job above.
 func _hand_button_down(hand: String, btn: String) -> bool:
 	if test_button_hand.has(hand):
 		var per: Dictionary = test_button_hand[hand]
@@ -3924,11 +3991,28 @@ func _button_down(btn: String) -> bool:
 func _poll_buttons() -> void:
 	var ax_now: bool = _button_down("A")
 	var b_now: bool = _button_down("B")
+	# Fix Pass 44: X is the LEFT controller's ax button; it
+	# gets its own channel read so the scoring toggle can
+	# tell an X press from an A press (the merged read above
+	# still drives the game A and the grip cycle, exactly as
+	# before).
+	var x_now: bool = _hand_button_down("L", "A")
+	var a_now: bool = _hand_button_down("R", "A")
 	var ax_edge: bool = ax_now and not bool(_btn_prev["A"])
 	var b_edge: bool = b_now and not bool(_btn_prev["B"])
+	var x_edge: bool = x_now and not bool(_btn_prev["X"])
 	_btn_prev["A"] = ax_now
 	_btn_prev["B"] = b_now
-	if ax_edge:
+	_btn_prev["X"] = x_now
+	# Fix Pass 44: X ALONE in practice, while NOT holding a
+	# shoe, toggles the scoring mode (CLASSIC <-> PROXIMITY).
+	# The not-holding guard is the whole rule: while a shoe
+	# is held the same press is spent on the grip cycle (the
+	# ax branch below), and with A also down the press is
+	# the game A, not a toggle.
+	if x_edge and not a_now and mode == "PRACTICE" and state != "HELD":
+		_toggle_scoring_mode()
+	elif ax_edge:
 		if state == "HELD":
 			_cycle_grip()
 		elif mode == "PRACTICE" and state == "STAND":
@@ -5444,12 +5528,22 @@ func _begin_tabulate() -> void:
 
 
 func _score_inning() -> void:
-	var res: Dictionary = Scoring.score_inning(inning_results)
+	# Fix Pass 44: the active mode picks the scorer; the
+	# classic path is the old call, unchanged.
+	var res: Dictionary = Scoring.score_inning_proximity(inning_results) \
+		if scoring_mode == "PROXIMITY" else Scoring.score_inning(inning_results)
 	score_you += int(res["points_p"])
 	score_opp += int(res["points_ai"])
 	last_scorer = String(res["scorer"])
 	last_inning_text = String(res["summary"])
-	var over: bool = score_you >= WIN_SCORE or score_opp >= WIN_SCORE
+	# Fix Pass 44: CLASSIC ends the match the inning a side
+	# reaches 21 (only one side can score, so no tie is
+	# possible). PROXIMITY resolves the same race at inning
+	# end, but both sides score - a side across 21 wins only
+	# if the totals differ; level totals play another inning.
+	var over: bool = proximity_match_over(score_you, score_opp) \
+		if scoring_mode == "PROXIMITY" \
+		else score_you >= WIN_SCORE or score_opp >= WIN_SCORE
 	if over:
 		winner_text = "YOU WIN!" if score_you > score_opp else "OPP WINS"
 	# Fix Pass 20: the billboard's breakdown is built HERE, from
@@ -5475,14 +5569,26 @@ func _build_round_lines(res: Dictionary, over: bool) -> Array:
 		lines.append("FINAL - %s" % winner_text)
 	else:
 		lines.append("ROUND %d" % inning)
-	lines.append_array(Scoring.shoe_lines(inning_results))
-	lines.append_array(Scoring.explain_lines(inning_results, res))
-	if int(res["points_p"]) > 0:
-		lines.append("ROUND: YOU +%d" % int(res["points_p"]))
-	elif int(res["points_ai"]) > 0:
-		lines.append("ROUND: OPP +%d" % int(res["points_ai"]))
+	if scoring_mode == "PROXIMITY":
+		# Fix Pass 44: the proximity breakdown names the
+		# mode on its own face (the status block carrying
+		# the mode line is hidden while the breakdown is
+		# up), then one line per shoe with its distance
+		# AND its band points - both sides, every shoe -
+		# and a round line that carries both totals.
+		lines.append("SCORING: PROXIMITY")
+		lines.append_array(Scoring.proximity_shoe_lines(inning_results))
+		lines.append("ROUND: YOU +%d - OPP +%d"
+			% [int(res["points_p"]), int(res["points_ai"])])
 	else:
-		lines.append("ROUND: NO SCORE")
+		lines.append_array(Scoring.shoe_lines(inning_results))
+		lines.append_array(Scoring.explain_lines(inning_results, res))
+		if int(res["points_p"]) > 0:
+			lines.append("ROUND: YOU +%d" % int(res["points_p"]))
+		elif int(res["points_ai"]) > 0:
+			lines.append("ROUND: OPP +%d" % int(res["points_ai"]))
+		else:
+			lines.append("ROUND: NO SCORE")
 	lines.append("MATCH: YOU %d - %d OPP" % [score_you, score_opp])
 	lines.append("A - PLAY AGAIN" if over else "A - NEXT ROUND")
 	return lines
@@ -5513,6 +5619,11 @@ func _finish_inning_cycle() -> void:
 	inning += 1
 	if last_scorer != "":
 		inning_first = last_scorer
+	elif scoring_mode == "PROXIMITY":
+		# Fix Pass 44: a tied proximity inning (last_scorer
+		# "" means the points were level, not scoreless)
+		# keeps the previous first-throw order.
+		pass
 	else:
 		inning_first = "AI" if inning_first == "P" else "P"
 	_gather_to_rail(40)
